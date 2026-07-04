@@ -61,10 +61,10 @@ public static class ScoreCalculator {
         Clamp01(
             Normalize(clientSample.NearbyPlayers + (serverPulse?.RegionPlayerCount ?? 0), 1.0f, 10.0f) * 0.50f
                 + regionPressure * 0.35f
-                + (mode == NetworkSenseMode.Staging ? 0.15f : 0.0f));
+                + (mode == NetworkSenseMode.Town ? 0.15f : 0.0f));
 
     bool lowImpactRecommended =
-        mode == NetworkSenseMode.Auto
+        mode == NetworkSenseMode.Solo
             && !clientSample.DangerNearby
             && clientSample.NearbyPlayers <= 1
             && regionPressure < 0.60f

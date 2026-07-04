@@ -14,7 +14,10 @@ public static class PluginConfig {
   public static ConfigEntry<float> BuildScanRadiusMeters { get; private set; }
   public static ConfigEntry<float> BenchmarkDurationSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
+  public static ConfigEntry<float> HudOpacity { get; private set; }
+  public static ConfigEntry<float> HudMaxWidth { get; private set; }
   public static ConfigEntry<int> HudMarginPixels { get; private set; }
+  public static ConfigEntry<string> HudPreset { get; private set; }
   public static ConfigEntry<KeyboardShortcut> ToggleHudShortcut { get; private set; }
   public static ConfigEntry<KeyboardShortcut> CycleHudDetailShortcut { get; private set; }
   public static ConfigEntry<KeyboardShortcut> CycleModeShortcut { get; private set; }
@@ -42,6 +45,20 @@ public static class PluginConfig {
             1.0f,
             "Scale factor for the IMGUI HUD.");
 
+    HudOpacity =
+        config.Bind(
+            "HUD",
+            "hudOpacity",
+            0.72f,
+            "Opacity for the compact HUD background.");
+
+    HudMaxWidth =
+        config.Bind(
+            "HUD",
+            "hudMaxWidth",
+            1120.0f,
+            "Maximum compact HUD width in pixels before scale is applied.");
+
     HudMarginPixels =
         config.Bind(
             "HUD",
@@ -49,33 +66,40 @@ public static class PluginConfig {
             16,
             "Screen margin in pixels for the HUD.");
 
+    HudPreset =
+        config.Bind(
+            "HUD",
+            "hudPreset",
+            "Compact",
+            "Compact HUD layout preset: Minimal, Compact, or Diagnostic.");
+
     ToggleHudShortcut =
         config.Bind(
             "HUD",
             "toggleHudShortcut",
-            new KeyboardShortcut(KeyCode.F7),
-            "Toggle the network HUD.");
+            new KeyboardShortcut(KeyCode.None),
+            "Optional shortcut that toggles the network HUD. Leave None to use console commands only.");
 
     CycleHudDetailShortcut =
         config.Bind(
             "HUD",
             "cycleHudDetailShortcut",
-            new KeyboardShortcut(KeyCode.F7, KeyCode.LeftShift),
-            "Cycle the HUD detail level.");
+            new KeyboardShortcut(KeyCode.None),
+            "Optional shortcut that cycles the HUD detail level. Leave None to use console commands only.");
 
     CycleModeShortcut =
         config.Bind(
             "Modes",
             "cycleModeShortcut",
-            new KeyboardShortcut(KeyCode.F6),
-            "Cycle Auto -> Low Impact -> Combat -> Staging.");
+            new KeyboardShortcut(KeyCode.None),
+            "Optional shortcut that cycles Solo -> Combat -> Group Combat -> Town. Leave None to use console commands only.");
 
     ToggleBenchmarkShortcut =
         config.Bind(
             "Benchmark",
             "toggleBenchmarkShortcut",
-            new KeyboardShortcut(KeyCode.F8),
-            "Start or stop the local benchmark capture.");
+            new KeyboardShortcut(KeyCode.None),
+            "Optional shortcut that starts or stops the local benchmark capture. Leave None to use console commands only.");
 
     LiveSampleIntervalSeconds =
         config.Bind(

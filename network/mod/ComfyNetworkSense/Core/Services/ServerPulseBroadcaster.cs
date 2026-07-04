@@ -26,7 +26,9 @@ public sealed class ServerPulseBroadcaster {
 
     float now = Time.unscaledTime;
 
-    if (now - _lastPulseTime < PluginConfig.ServerPulseIntervalSeconds.Value) {
+    float intervalSeconds = Mathf.Max(0.25f, PluginConfig.ServerPulseIntervalSeconds.Value);
+
+    if (now - _lastPulseTime < intervalSeconds) {
       return;
     }
 
@@ -105,7 +107,11 @@ public sealed class ServerPulseBroadcaster {
     };
   }
 
-  static PeerCounterState GetOrCreatePeerCounter(long uid) {
+  PeerCounterState GetOrCreatePeerCounter(long uid) {
+    if (_peerCounters.TryGetValue(uid, out PeerCounterState counterState)) {
+      return counterState;
+    }
+
     return new() {
         Uid = uid
     };

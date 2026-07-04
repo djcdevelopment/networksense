@@ -68,7 +68,7 @@ public sealed class BenchmarkRunner {
         SessionId = sessionId,
         PlayerId = latestSample?.PlayerId ?? string.Empty,
         RegionId = latestSample?.RegionId ?? string.Empty,
-        Mode = latestSample?.Mode ?? NetworkSenseMode.Auto.ToString(),
+        Mode = latestSample?.Mode ?? NetworkSenseMode.Solo.ToString(),
         SampleSource = "client_benchmark",
         BenchmarkType = "safe_state_frame_probe",
         DurationMs = _elapsedSeconds * 1000.0f,

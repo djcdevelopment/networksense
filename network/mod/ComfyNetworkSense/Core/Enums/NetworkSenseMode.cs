@@ -1,8 +1,8 @@
 namespace ComfyNetworkSense;
 
 public enum NetworkSenseMode {
-  Auto = 0,
-  LowImpact = 1,
-  Combat = 2,
-  Staging = 3
+  Solo = 0,
+  Combat = 1,
+  GroupCombat = 2,
+  Town = 3
 }

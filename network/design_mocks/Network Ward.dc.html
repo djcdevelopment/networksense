@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Averia+Serif+Libre:ital,wght@0,300;0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  @keyframes nwPulse{0%,100%{opacity:.35;transform:scale(.9)}50%{opacity:1;transform:scale(1.05)}}
+  @keyframes nwShim{0%{background-position:-160px 0}100%{background-position:220px 0}}
+  @keyframes nwFog{0%{transform:translateX(-2.5%)}100%{transform:translateX(2.5%)}}
+  @keyframes nwEmber{0%,100%{opacity:.5}50%{opacity:.9}}
+  body{margin:0;background:#07090a}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#3b2c1e;border:2px solid #17110c;border-radius:6px}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+
+<div style="position:fixed;inset:0;overflow:hidden;font-family:'Averia Serif Libre',Georgia,serif;background:radial-gradient(120% 90% at 50% -10%,#1b2620 0%,#10161500 55%),linear-gradient(180deg,#0c1210 0%,#080c0b 45%,#06090a 100%)">
+
+  <!-- drifting fog -->
+  <div style="position:absolute;inset:-4% 0 30%;background:radial-gradient(60% 40% at 30% 40%,rgba(150,168,150,.05),transparent 70%),radial-gradient(50% 40% at 75% 55%,rgba(150,168,150,.045),transparent 70%);animation:nwFog 26s ease-in-out infinite alternate;pointer-events:none"></div>
+
+  <!-- pine silhouette ridge -->
+  <div style="position:absolute;left:0;right:0;bottom:0;height:220px;display:flex;align-items:flex-end;gap:0;pointer-events:none;opacity:.9">
+    <div style="flex:1;height:120px;background:#05080700;clip-path:polygon(0 100%,8% 40%,16% 100%,24% 20%,33% 100%,42% 55%,52% 100%,60% 30%,70% 100%,80% 48%,90% 100%,100% 25%,100% 100%);background-color:#04070699;box-shadow:inset 0 40px 60px #04070644"></div>
+  </div>
+  <div style="position:absolute;left:0;right:0;bottom:0;height:170px;pointer-events:none;background-color:#03050566;clip-path:polygon(0 100%,6% 55%,13% 100%,21% 35%,30% 100%,38% 62%,47% 100%,55% 42%,64% 100%,73% 58%,82% 100%,91% 38%,100% 100%)"></div>
+
+  <!-- campfire ember glow -->
+  <div style="position:absolute;left:22%;bottom:38px;width:260px;height:150px;background:radial-gradient(closest-side,rgba(217,164,65,.22),rgba(191,90,52,.08) 55%,transparent);filter:blur(4px);animation:nwEmber 3.5s ease-in-out infinite;pointer-events:none"></div>
+
+  <!-- console strip (opened from command) -->
+  <div style="position:absolute;top:16px;left:20px;font:400 12px/1.5 ui-monospace,Menlo,monospace;color:rgba(196,188,172,.5);letter-spacing:.02em;pointer-events:none">
+    <span style="color:rgba(139,161,92,.75)">&gt;</span> ward.open&nbsp;&nbsp;<span style="color:rgba(217,164,65,.7)">▸</span> Network Ward summoned
+  </div>
+
+  <!-- minimap ring (faux HUD) -->
+  <div style="position:absolute;top:18px;right:22px;width:92px;height:92px;border-radius:50%;border:2px solid #4b4038;background:radial-gradient(closest-side,#14201a,#0a100d);box-shadow:inset 0 0 22px #04060577,0 3px 10px #0008;opacity:{{ hudOpacity }};transition:opacity .3s;pointer-events:none">
+    <div style="position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 0 6px rgba(107,92,77,.25)"></div>
+    <div style="position:absolute;left:50%;top:50%;width:7px;height:7px;margin:-3.5px;border-radius:50%;background:#d9a441;box-shadow:0 0 6px #d9a441"></div>
+    <div style="position:absolute;left:62%;top:40%;width:5px;height:5px;border-radius:50%;background:#8ba15c"></div>
+  </div>
+
+  <!-- faux Valheim status bars (bottom-left HUD) -->
+  <div style="position:absolute;left:22px;bottom:22px;display:flex;flex-direction:column;gap:7px;opacity:{{ hudOpacity }};transition:opacity .3s;pointer-events:none">
+    <div style="display:flex;align-items:center;gap:8px"><span style="font:400 10px ui-monospace,monospace;color:#9c9587;width:46px">health</span><div style="width:150px;height:8px;border:1px solid #4b4038;background:#14100c;border-radius:2px;overflow:hidden"><div style="width:78%;height:100%;background:linear-gradient(90deg,#7a2320,#b5443a)"></div></div></div>
+    <div style="display:flex;align-items:center;gap:8px"><span style="font:400 10px ui-monospace,monospace;color:#9c9587;width:46px">stamina</span><div style="width:150px;height:8px;border:1px solid #4b4038;background:#14100c;border-radius:2px;overflow:hidden"><div style="width:64%;height:100%;background:linear-gradient(90deg,#b58a2a,#e0c04f)"></div></div></div>
+  </div>
+
+  <!-- ============ NETWORK WARD PANEL ============ -->
+  <div ref="{{ panelRef }}" style="position:absolute;top:0;left:0;width:456px;max-height:86vh;display:flex;flex-direction:column;border-radius:4px;background:linear-gradient(180deg,#2c2016 0%,#211812 60%,#1b130d 100%);border:1px solid #4b4038;box-shadow:0 24px 60px -12px #000c,0 0 0 1px #0006,inset 0 1px 0 rgba(216,198,160,.08),inset 0 0 60px rgba(0,0,0,.35);overflow:hidden">
+
+    <!-- carved rune texture edge -->
+    <div style="position:absolute;top:0;bottom:0;left:0;width:3px;background:linear-gradient(180deg,#d9a44133,#8ba15c22,#bf5a3422);pointer-events:none"></div>
+
+    <!-- HEADER / drag handle -->
+    <div onPointerDown="{{ startDrag }}" style="position:relative;display:flex;align-items:center;gap:12px;padding:12px 14px 11px;cursor:grab;background:linear-gradient(180deg,#3a2c1e,#2a1e14);border-bottom:1px solid #4b4038;touch-action:none;user-select:none">
+      <!-- rivets -->
+      <div style="position:absolute;left:7px;top:7px;width:5px;height:5px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#8a7a63,#2a2018)"></div>
+      <div style="position:absolute;right:7px;top:7px;width:5px;height:5px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#8a7a63,#2a2018)"></div>
+      <div style="width:26px;height:26px;flex:none;display:flex;align-items:center;justify-content:center;border:1px solid #6a5c4d;border-radius:3px;background:linear-gradient(180deg,#241a12,#160f0a);color:#d9a441;font-size:15px;box-shadow:inset 0 0 8px #0007">ᛦ</div>
+      <div style="flex:1;min-width:0">
+        <div style="font:700 16px/1 'Averia Serif Libre',serif;letter-spacing:.14em;text-transform:uppercase;color:#e6dcc4">Network Ward</div>
+        <div style="margin-top:3px;font:400 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.06em;color:#9c9587">a scout ledger for your world</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid #4b4038;border-radius:3px;background:#1b130d">
+        <span style="width:6px;height:6px;border-radius:50%;background:#8ba15c;box-shadow:0 0 6px #8ba15c88"></span>
+        <span style="font:600 10px/1 ui-monospace,monospace;letter-spacing:.08em;color:#c3bcac">{{ roleLabel }}</span>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div style="display:flex;gap:0;padding:0 8px;background:#1c140d;border-bottom:1px solid #3b2c1e">
+      <button onClick="{{ goWard }}" style="{{ tabWardStyle }}">Ward</button>
+      <button onClick="{{ goSignals }}" style="{{ tabSignalsStyle }}">Signals</button>
+      <button onClick="{{ goRaven }}" style="{{ tabRavenStyle }}">Raven</button>
+    </div>
+
+    <!-- TOOLBAR (safe local actions) -->
+    <div style="display:flex;flex-wrap:wrap;gap:5px;padding:9px 12px;background:linear-gradient(180deg,#241a12,#1e150e);border-bottom:1px solid #3b2c1e">
+      <button onClick="{{ toggleHud }}" style="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:6px 8px" style-hover="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:6px 8px">HUD · {{ hudLabel }}</button>
+      <button onClick="{{ cycleDetail }}" style="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:6px 8px" style-hover="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:6px 8px">Detail · {{ detailLabel }}</button>
+      <button onClick="{{ startBench }}" style="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:6px 8px" style-hover="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:6px 8px">Benchmark{{ benchLabel }}</button>
+      <button onClick="{{ markEvent }}" style="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:6px 8px" style-hover="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:6px 8px">Mark event</button>
+      <button onClick="{{ exportSession }}" style="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:6px 8px" style-hover="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:6px 8px">Export</button>
+      <button onClick="{{ checkMcp }}" style="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:6px 8px" style-hover="appearance:none;cursor:pointer;font:600 9.5px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:6px 8px">Check MCP</button>
+    </div>
+
+    <!-- BODY (scrolls) -->
+    <div style="flex:1;overflow-y:auto;padding:12px 12px 4px">
+
+      <!-- ========== WARD TAB ========== -->
+      <sc-if value="{{ isWard }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <!-- Mode & Policy (new approach — leads the summary) -->
+          <sc-if value="{{ isSummary }}">
+          <div style="padding:12px 13px;border:1px solid rgba(217,164,65,.24);border-radius:3px;background:linear-gradient(180deg,rgba(217,164,65,.09),rgba(30,21,14,.20));margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:8px;margin:0 0 10px"><span style="color:#8ba15c;font-size:12px">ᚦ</span><span style="font:700 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.15em;text-transform:uppercase;color:#d9a441">Mode &amp; Policy</span></div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:9px">
+              <sc-for list="{{ modes }}" as="m" hint-placeholder-count="4">
+                <button onClick="{{ m.fn }}" style="{{ m.style }}">{{ m.name }}</button>
+              </sc-for>
+            </div>
+            <p style="font:400 12.5px/1.5 'Averia Serif Libre',serif;color:#c8c0ac;margin:0"><span style="color:#d9a441;font-weight:700">{{ modeName }} — </span>{{ modeDesc }}</p>
+          </div>
+          </sc-if>
+
+          <!-- Range & Reception — signal bars (detail view) -->
+          <sc-if value="{{ showRows }}">
+          <div style="padding:12px 13px;border:1px solid rgba(216,198,160,.10);border-radius:3px;background:linear-gradient(180deg,rgba(59,44,30,.30),rgba(30,21,14,.20));margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;margin:0 0 3px"><span style="color:#8ba15c;font-size:12px">ᛜ</span><span style="font:700 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.15em;text-transform:uppercase;color:#d9a441">Range &amp; Reception</span></div>
+            <p style="font:400 10.5px/1.4 'Averia Serif Libre',serif;color:#8f887a;margin:0 0 4px">Reception bars for tuning proximity and traffic.</p>
+            <sc-for list="{{ bars }}" as="m" hint-placeholder-count="5">
+              <div style="display:flex;align-items:flex-end;gap:12px;padding:7px 0;border-bottom:1px solid rgba(216,198,160,.08)">
+                <div style="flex:1;min-width:0">
+                  <div style="font:400 12px/1.3 'Averia Serif Libre',serif;color:#cfc7b2">{{ m.label }}</div>
+                  <div style="font:400 10px/1.2 'Averia Serif Libre',serif;color:#8f887a;margin-top:2px">{{ m.tag }}</div>
+                </div>
+                <div style="display:flex;align-items:flex-end;gap:3px;height:20px">
+                  <sc-for list="{{ m.cells }}" as="b" hint-placeholder-count="5">
+                    <span style="{{ b.style }}"></span>
+                  </sc-for>
+                </div>
+                <span style="width:80px;text-align:right;font:600 11px/1.3 ui-monospace,monospace;color:#dccca8">{{ m.value }}</span>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ isSummary }}">
+            <p style="font:400 17px/1.5 'Averia Serif Libre',serif;color:#ecdfc5;margin:2px 2px 14px;text-wrap:pretty">{{ heroLine }}</p>
+          </sc-if>
+
+          <!-- World Pulse -->
+          <div style="padding:12px 13px;border:1px solid rgba(216,198,160,.10);border-radius:3px;background:linear-gradient(180deg,rgba(59,44,30,.30),rgba(30,21,14,.20));margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;margin:0 0 9px"><span style="color:#8ba15c;font-size:12px">ᚱ</span><span style="font:700 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.15em;text-transform:uppercase;color:#d9a441">World Pulse</span></div>
+            <sc-if value="{{ isSummary }}"><p style="font:400 13px/1.55 'Averia Serif Libre',serif;color:#c8c0ac;margin:0">{{ wpSummary }}</p></sc-if>
+            <sc-if value="{{ showRows }}">
+              <sc-for list="{{ wpRows }}" as="r" hint-placeholder-count="4">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(216,198,160,.08)">
+                  <span style="font:400 12px/1.4 'Averia Serif Libre',serif;color:#9c9587;letter-spacing:.02em">{{ r.label }}</span>
+                  <span style="display:flex;align-items:baseline;gap:7px"><span style="font:400 10px ui-monospace,monospace;color:#8ba15c">{{ r.trend }}</span><span style="font:600 12px/1.4 ui-monospace,monospace;color:#dccca8">{{ r.val }}</span></span>
+                </div>
+              </sc-for>
+            </sc-if>
+          </div>
+
+          <!-- Player Sense -->
+          <div style="padding:12px 13px;border:1px solid rgba(216,198,160,.10);border-radius:3px;background:linear-gradient(180deg,rgba(59,44,30,.30),rgba(30,21,14,.20));margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;margin:0 0 9px"><span style="color:#8ba15c;font-size:12px">ᚨ</span><span style="font:700 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.15em;text-transform:uppercase;color:#d9a441">Player Sense</span></div>
+            <sc-if value="{{ isSummary }}"><p style="font:400 13px/1.55 'Averia Serif Libre',serif;color:#c8c0ac;margin:0">{{ psSummary }}</p></sc-if>
+            <sc-if value="{{ showRows }}">
+              <sc-for list="{{ psRows }}" as="r" hint-placeholder-count="5">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(216,198,160,.08)">
+                  <span style="font:400 12px/1.4 'Averia Serif Libre',serif;color:#9c9587;letter-spacing:.02em">{{ r.label }}</span>
+                  <span style="display:flex;align-items:baseline;gap:7px"><span style="font:400 10px ui-monospace,monospace;color:#8ba15c">{{ r.trend }}</span><span style="font:600 12px/1.4 ui-monospace,monospace;color:#dccca8">{{ r.val }}</span></span>
+                </div>
+              </sc-for>
+            </sc-if>
+          </div>
+
+          <!-- Area Pressure -->
+          <div style="padding:12px 13px;border:1px solid rgba(216,198,160,.10);border-radius:3px;background:linear-gradient(180deg,rgba(59,44,30,.30),rgba(30,21,14,.20));margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px;margin:0 0 9px"><span style="color:#8ba15c;font-size:12px">ᛒ</span><span style="font:700 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.15em;text-transform:uppercase;color:#d9a441">Area Pressure</span><span style="margin-left:auto;font:600 9px/1 'Averia Serif Libre',serif;letter-spacing:.08em;text-transform:uppercase;padding:3px 7px;border-radius:2px;background:{{ pressureBg }};color:{{ pressureFg }}">{{ pressureLabel }}</span></div>
+            <sc-if value="{{ isSummary }}"><p style="font:400 13px/1.55 'Averia Serif Libre',serif;color:#c8c0ac;margin:0">{{ apSummary }}</p></sc-if>
+            <sc-if value="{{ showRows }}">
+              <sc-for list="{{ apRows }}" as="r" hint-placeholder-count="5">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid rgba(216,198,160,.08)">
+                  <span style="font:400 12px/1.4 'Averia Serif Libre',serif;color:#9c9587;letter-spacing:.02em">{{ r.label }}</span>
+                  <span style="font:600 12px/1.4 ui-monospace,monospace;color:#dccca8">{{ r.val }}</span>
+                </div>
+              </sc-for>
+            </sc-if>
+          </div>
+
+          <!-- Community Test Log -->
+          <sc-if value="{{ isSummary }}">
+          <div style="padding:12px 13px;border:1px solid rgba(216,198,160,.10);border-radius:3px;background:linear-gradient(180deg,rgba(59,44,30,.24),rgba(30,21,14,.16))">
+            <div style="display:flex;align-items:center;gap:8px;margin:0 0 8px"><span style="color:#8ba15c;font-size:12px">ᛗ</span><span style="font:700 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.15em;text-transform:uppercase;color:#d9a441">Community Test Log</span></div>
+            <sc-for list="{{ events }}" as="e" hint-placeholder-count="5">
+              <div style="display:flex;align-items:baseline;gap:9px;padding:5px 0;border-bottom:1px solid rgba(216,198,160,.06)">
+                <span style="font:400 11px ui-monospace,monospace;color:#7d7463;flex:none">{{ e.t }}</span>
+                <span style="color:#8ba15c;font-size:11px;flex:none;width:12px;text-align:center">{{ e.g }}</span>
+                <span style="flex:1;font:400 12px/1.4 'Averia Serif Libre',serif;color:#cfc7b2">{{ e.label }}</span>
+                <span style="flex:none;font:600 8.5px/1 'Averia Serif Libre',serif;letter-spacing:.06em;text-transform:uppercase;padding:2px 5px;border-radius:2px;background:{{ e.srcBg }};color:{{ e.srcFg }}">{{ e.srcLabel }}</span>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- ========== SIGNALS TAB ========== -->
+      <sc-if value="{{ isSignals }}">
+        <div>
+          <p style="font:400 11.5px/1.5 'Averia Serif Libre',serif;color:#9c9587;margin:0 2px 12px">Raw telemetry — the ward speaks in numbers here. Field names match the JSONL session record.</p>
+          <sc-for list="{{ sigGroups }}" as="grp" hint-placeholder-count="4">
+            <div style="margin-bottom:11px">
+              <div style="font:700 10px/1 'Averia Serif Libre',serif;letter-spacing:.16em;text-transform:uppercase;color:#bf7a3e;margin:0 0 6px;padding-bottom:5px;border-bottom:1px solid #3b2c1e">{{ grp.title }}</div>
+              <sc-for list="{{ grp.rows }}" as="r" hint-placeholder-count="4">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:4px 0;border-bottom:1px solid rgba(216,198,160,.06)">
+                  <span style="font:400 11px/1.4 ui-monospace,monospace;color:#8f887a;letter-spacing:.01em">{{ r.k }}</span>
+                  <span style="font:600 11.5px/1.4 ui-monospace,monospace;color:#dccca8">{{ r.v }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <!-- ========== RAVEN TAB ========== -->
+      <sc-if value="{{ isRaven }}">
+        <div>
+          <!-- MCP status -->
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid rgba(216,198,160,.10);border-radius:3px;background:linear-gradient(180deg,rgba(59,44,30,.30),rgba(30,21,14,.20));margin-bottom:11px">
+            <span style="width:9px;height:9px;border-radius:50%;flex:none;background:{{ mcpDot }};box-shadow:0 0 8px {{ mcpDot }};animation:{{ mcpAnim }}"></span>
+            <div style="flex:1">
+              <div style="font:700 11px/1.2 'Averia Serif Libre',serif;letter-spacing:.08em;text-transform:uppercase;color:#e6dcc4">Raven Tower · {{ mcpLabel }}</div>
+              <div style="font:400 10.5px/1.4 'Averia Serif Libre',serif;color:#9c9587;margin-top:2px">Replies are <span style="color:#bf7a3e">local-model advice</span>, not game or server truth.</div>
+            </div>
+          </div>
+
+          <!-- async status -->
+          <sc-if value="{{ ravenBusyOrDone }}">
+            <div style="display:flex;align-items:center;gap:9px;padding:8px 12px;border:1px solid {{ ravenStatusBorder }};border-radius:3px;background:#1c140d;margin-bottom:11px">
+              <span style="font-size:13px">{{ ravenStatusIcon }}</span>
+              <span style="font:400 12px/1.3 'Averia Serif Libre',serif;color:{{ ravenStatusColor }};{{ ravenShimmer }}">{{ ravenStatusText }}</span>
+            </div>
+          </sc-if>
+
+          <!-- raven output card (parchment) -->
+          <sc-if value="{{ hasRavenOut }}">
+            <div style="position:relative;padding:13px 14px 12px;border-radius:3px;background:linear-gradient(180deg,#e7dabb,#dccda6);box-shadow:0 4px 14px #0006,inset 0 0 0 1px #b8a074;margin-bottom:12px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+                <span style="font:700 9px/1 'Averia Serif Libre',serif;letter-spacing:.12em;text-transform:uppercase;color:#7a5a2c;padding:2px 6px;border:1px solid #b8935a;border-radius:2px">{{ ravenOutKind }}</span>
+                <span style="font:400 10px ui-monospace,monospace;color:#8a6f45">{{ ravenOutTime }} · local model</span>
+              </div>
+              <p style="font:400 13.5px/1.55 'Averia Serif Libre',serif;color:#3a2c17;margin:0;text-wrap:pretty">{{ ravenOutText }}</p>
+            </div>
+          </sc-if>
+          <sc-if value="{{ noRavenOut }}">
+            <div style="padding:14px;border:1px dashed #4b4038;border-radius:3px;text-align:center;margin-bottom:12px">
+              <p style="font:400 12.5px/1.5 'Averia Serif Libre',serif;color:#9c9587;margin:0">No recap yet. Ask the raven to read your session.</p>
+            </div>
+          </sc-if>
+
+          <!-- raven actions -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px">
+            <button onClick="{{ askRecap }}" style="appearance:none;cursor:pointer;font:600 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.04em;color:#1b130d;background:linear-gradient(180deg,#e0b354,#c9982f);border:1px solid #8a6a24;border-radius:3px;padding:9px 8px" style-hover="appearance:none;cursor:pointer;font:600 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.04em;color:#1b130d;background:linear-gradient(180deg,#ecc069,#d9a441);border:1px solid #8a6a24;border-radius:3px;padding:9px 8px">Ask for recap</button>
+            <button onClick="{{ askTest }}" style="appearance:none;cursor:pointer;font:600 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.04em;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:9px 8px" style-hover="appearance:none;cursor:pointer;font:600 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.04em;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:9px 8px">Suggest next test</button>
+            <button onClick="{{ askConfig }}" style="appearance:none;cursor:pointer;font:600 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.04em;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:9px 8px" style-hover="appearance:none;cursor:pointer;font:600 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.04em;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:9px 8px">Suggest config</button>
+            <button onClick="{{ exportSession }}" style="appearance:none;cursor:pointer;font:600 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.04em;color:#c3bcac;background:linear-gradient(180deg,#31251a,#241a12);border:1px solid #4b4038;border-radius:3px;padding:9px 8px" style-hover="appearance:none;cursor:pointer;font:600 10.5px/1 'Averia Serif Libre',serif;letter-spacing:.04em;color:#ecc069;background:linear-gradient(180deg,#3b2c1e,#2f2318);border:1px solid #6a5c4d;border-radius:3px;padding:9px 8px">Export session</button>
+          </div>
+
+          <!-- raven log -->
+          <div style="padding:11px 13px;border:1px solid rgba(216,198,160,.10);border-radius:3px;background:linear-gradient(180deg,rgba(59,44,30,.24),rgba(30,21,14,.16))">
+            <div style="font:700 10px/1 'Averia Serif Libre',serif;letter-spacing:.15em;text-transform:uppercase;color:#d9a441;margin:0 0 8px">Raven &amp; Experiment Log</div>
+            <sc-for list="{{ ravenLog }}" as="e" hint-placeholder-count="3">
+              <div style="display:flex;align-items:baseline;gap:9px;padding:5px 0;border-bottom:1px solid rgba(216,198,160,.06)">
+                <span style="font:400 11px ui-monospace,monospace;color:#7d7463;flex:none">{{ e.t }}</span>
+                <span style="flex:1;font:400 12px/1.4 'Averia Serif Libre',serif;color:#cfc7b2">{{ e.label }}</span>
+                <span style="flex:none;font:600 8.5px/1 'Averia Serif Libre',serif;letter-spacing:.06em;text-transform:uppercase;padding:2px 5px;border-radius:2px;background:{{ e.srcBg }};color:{{ e.srcFg }}">{{ e.srcLabel }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+
+    <!-- FOOTER -->
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 13px;background:linear-gradient(180deg,#211812,#180f0a);border-top:1px solid #3b2c1e">
+      <span style="font:400 10px/1 ui-monospace,monospace;color:#7d7463">session</span>
+      <span style="font:600 10px/1 ui-monospace,monospace;color:#c3bcac">{{ sessionId }}</span>
+      <span style="margin-left:auto;font:600 9px/1 'Averia Serif Libre',serif;letter-spacing:.08em;text-transform:uppercase;padding:3px 7px;border:1px solid #4b4038;border-radius:2px;color:#d9a441">{{ modeName }}</span>
+      <span style="display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:{{ mcpDot }}"></span><span style="font:400 9.5px/1 ui-monospace,monospace;color:#9c9587">mcp</span></span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:900,&quot;height&quot;:720}}">
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    this.panelRef = React.createRef();
+    this.pos = { x: 0, y: 0 };
+    this.state = {
+      tab: 'ward',
+      detail: 0,            // 0 summary, 1 diagnostic, 2 deep
+      hud: true,
+      mode: 'Auto',
+      mcp: 'online',        // online | offline | checking
+      raven: 'idle',        // idle | sending | returned | notower
+      ravenOut: null,       // {kind, text, time}
+      bench: { status:'idle', pct:0, result:'14.6 ms p95 · stable' },
+      exportStatus: null,
+      viewAge: 2,
+      sessionId: 'sess-2f9a7c',
+      t: {
+        fps:59, frameMs:16.1, frameP95:18.6, cpuBound:0.37,
+        rtt:47, jitter:6, bIn:7100, bOut:12800, pIn:26, pOut:33,
+        players:2, entities:44, build:318, danger:false,
+        region:'Meadows (3,-2)', peerDist:52
+      },
+      trend: { fps:'–', frame:'–', rtt:'–', ent:'–' },
+      events: [
+        { t:'19:42', g:'ᚨ', label:'Benchmark run — 14.6 ms p95, stable', src:'raven' },
+        { t:'19:38', g:'ᛗ', label:'Combat started — 2 Greydwarfs near base', src:'game' },
+        { t:'19:31', g:'ᛒ', label:'Eirik entered your base area', src:'game' },
+        { t:'19:29', g:'ᚠ', label:'Friend joined — Eirik', src:'game' },
+        { t:'19:15', g:'ᚱ', label:'Session started — hosting Meadows', src:'game' }
+      ]
+    };
+  }
+
+  componentDidMount(){
+    try { const s = localStorage.getItem('networkward.pos'); if (s) this.pos = JSON.parse(s); } catch(e){}
+    if (!this.pos.x && !this.pos.y){
+      this.pos = { x: Math.max(20, window.innerWidth - 456 - 40), y: 60 };
+    }
+    if (this.panelRef.current) this.panelRef.current.style.transform = `translate(${this.pos.x}px,${this.pos.y}px)`;
+    this.timer = setInterval(() => this.tick(), 1000);
+  }
+  componentWillUnmount(){ clearInterval(this.timer); }
+
+  rnd(base, spread, lo, hi){ let v = base + (Math.random()-0.5)*spread; if(lo!=null) v=Math.max(lo,v); if(hi!=null) v=Math.min(hi,v); return v; }
+  tr(nv, ov, eps){ if (nv > ov+eps) return '▲'; if (nv < ov-eps) return '▼'; return '–'; }
+
+  tick(){
+    this.setState(st => {
+      const o = st.t;
+      const t = {
+        fps: Math.round(this.rnd(o.fps, 3, 48, 62)),
+        frameMs: +this.rnd(o.frameMs, 1.2, 14.5, 21).toFixed(1),
+        frameP95: +this.rnd(o.frameP95, 0.8, 17, 24).toFixed(1),
+        cpuBound: +this.rnd(o.cpuBound, 0.06, 0.28, 0.55).toFixed(2),
+        rtt: Math.round(this.rnd(o.rtt, 8, 34, 78)),
+        jitter: Math.round(this.rnd(o.jitter, 3, 2, 16)),
+        bIn: Math.round(this.rnd(o.bIn, 1600, 4200, 11000)),
+        bOut: Math.round(this.rnd(o.bOut, 2200, 8000, 18000)),
+        pIn: Math.round(this.rnd(o.pIn, 6, 18, 40)),
+        pOut: Math.round(this.rnd(o.pOut, 6, 22, 46)),
+        players: o.players,
+        entities: Math.round(this.rnd(o.entities, 5, 30, 60)),
+        build: o.build,
+        danger: o.danger,
+        region: o.region,
+        peerDist: Math.round(this.rnd(o.peerDist, 14, 22, 130))
+      };
+      const trend = {
+        fps: this.tr(t.fps, o.fps, 1),
+        frame: this.tr(t.frameMs, o.frameMs, 0.4),
+        rtt: this.tr(t.rtt, o.rtt, 3),
+        ent: this.tr(t.entities, o.entities, 2)
+      };
+      let bench = st.bench;
+      if (bench.status === 'running'){
+        const pct = bench.pct + 34;
+        if (pct >= 100){
+          bench = { status:'done', pct:100, result:`${t.frameP95.toFixed(1)} ms p95 · ${t.cpuBound<0.45?'stable':'cpu-limited'}` };
+        } else { bench = { ...bench, pct }; }
+      }
+      return { t, trend, viewAge: st.viewAge + 1, bench };
+    });
+  }
+
+  startDrag = (e) => {
+    e.preventDefault();
+    const el = this.panelRef.current;
+    const sx = e.clientX, sy = e.clientY, ox = this.pos.x, oy = this.pos.y;
+    const move = (ev) => { this.pos = { x: ox+ev.clientX-sx, y: oy+ev.clientY-sy }; el.style.transform = `translate(${this.pos.x}px,${this.pos.y}px)`; };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); try { localStorage.setItem('networkward.pos', JSON.stringify(this.pos)); } catch(e){} };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  };
+
+  now(){ const d = new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+  log(label, src){ this.setState(st => ({ events: [{ t:this.now(), g:'✦', label, src }, ...st.events].slice(0,14) })); }
+
+  toggleHud = () => this.setState(st => ({ hud: !st.hud }));
+  cycleDetail = () => this.setState(st => ({ detail: (st.detail+1)%3 }));
+  goWard = () => this.setState({ tab:'ward' });
+  goSignals = () => this.setState({ tab:'signals' });
+  goRaven = () => this.setState({ tab:'raven' });
+
+  setMode = (m) => { this.setState({ mode:m }); this.log('Mode set to '+m, 'you'); };
+
+  startBench = () => {
+    if (this.state.bench.status === 'running') return;
+    this.setState({ bench:{ status:'running', pct:8, result:'' } });
+    this.log('Benchmark started — staging capture', 'you');
+    // completion + logging handled in tick + a follow-up
+    this.benchWatch = setInterval(() => {
+      if (this.state.bench.status === 'done'){
+        clearInterval(this.benchWatch);
+        this.log('Benchmark run — '+this.state.bench.result, 'raven');
+      }
+    }, 300);
+  };
+
+  markEvent = () => this.log('Manual marker recorded', 'you');
+
+  exportSession = () => {
+    const f = `comfy/sessions/${this.state.sessionId}.jsonl`;
+    this.setState({ exportStatus:f });
+    this.log('Session exported → '+f, 'you');
+  };
+
+  checkMcp = () => {
+    this.setState({ mcp:'checking' });
+    clearTimeout(this._mcpT);
+    this._mcpT = setTimeout(() => {
+      this.setState(st => {
+        // flip so both states are reachable for demonstration
+        const next = st._lastMcpFlip === 'offline' ? 'online' : (st.mcp === 'checking' && Math.random() < 0.25 ? 'offline' : 'online');
+        return { mcp: next, _lastMcpFlip: next };
+      });
+    }, 900);
+  };
+
+  raven(kind){
+    const labels = { recap:'Recap', test:'Next test', config:'Config' };
+    if (this.state.mcp !== 'online'){
+      this.setState({ raven:'notower' });
+      this.log('Raven request failed — no tower', 'you');
+      return;
+    }
+    this.setState({ raven:'sending' });
+    clearTimeout(this._rT);
+    this._rT = setTimeout(() => {
+      const text = this.ravenText(kind);
+      const time = this.now();
+      this.setState({ raven:'returned', ravenOut:{ kind:labels[kind], text, time } });
+      this.log((kind==='recap'?'Recap':kind==='test'?'Next test':'Config')+' — '+text, 'raven');
+    }, 1700);
+  }
+  askRecap = () => this.raven('recap');
+  askTest = () => this.raven('test');
+  askConfig = () => this.raven('config');
+
+  ravenText(kind){
+    const t = this.state.t;
+    if (kind === 'recap'){
+      const opts = [
+        `The world held calm. Frame time stayed near ${t.frameMs} ms with one peer bound. Nothing stirred at your base.`,
+        `Steady session. Ping to Eirik hovered around ${t.rtt} ms; no stutter recorded since the last combat marker.`,
+        `Quiet stretch on the Meadows. ${t.entities} entities tracked, frames smooth. Good baseline before a harder test.`
+      ];
+      return opts[Math.floor(Math.random()*opts.length)];
+    }
+    if (kind === 'test'){
+      const opts = [
+        'A dense base test would be useful next — gather build pieces above 600 and watch p95 climb.',
+        'Try a two-peer raid scenario. Combat under load is the gap in this session record.',
+        'Run a benchmark right after Eirik enters your area, so the join cost is captured cleanly.'
+      ];
+      return opts[Math.floor(Math.random()*opts.length)];
+    }
+    return [
+      'Likely fine on Auto. If frames dip in your base, Low Impact will ease network detail first.',
+      'Consider Staging mode before your next benchmark — it captures more samples for the ledger.',
+      'Ping is healthy; no config change needed yet. Revisit if jitter passes 12 ms with more peers.'
+    ][Math.floor(Math.random()*3)];
+  }
+
+  fmtBytes(v){ return (v/1024).toFixed(1)+' KB'; }
+
+  wardRows(deep){
+    const t = this.state.t, tr = this.state.trend;
+    const wp = [
+      { label:'Server pulse', val:'steady', trend:'' },
+      { label:'Your role', val:'Host', trend:'' },
+      { label:'Connection', val:'Hosting · 1 peer', trend:'' },
+      { label:'View age', val:this.state.viewAge+' s', trend:'' }
+    ];
+    if (deep){ wp.push({ label:'owner_fit', val:'host-owned', trend:'' }, { label:'server_pulse_state', val:'steady', trend:'' }, { label:'peers', val:String(t.players-1), trend:'' }); }
+    const ps = [
+      { label:'FPS', val:String(t.fps), trend:tr.fps },
+      { label:'Frame time', val:t.frameMs+' ms', trend:tr.frame },
+      { label:'Frame p95', val:t.frameP95+' ms', trend:'' },
+      { label:'Ping', val:t.rtt+' ms', trend:tr.rtt },
+      { label:'Jitter', val:t.jitter+' ms', trend:'' }
+    ];
+    if (deep){ ps.push({ label:'cpu_bound_estimate', val:Math.round(t.cpuBound*100)+'%', trend:'' }, { label:'bytes in/out', val:this.fmtBytes(t.bIn)+' / '+this.fmtBytes(t.bOut)+' /s', trend:'' }, { label:'packets in/out', val:t.pIn+' / '+t.pOut+' /s', trend:'' }); }
+    const ap = [
+      { label:'Nearby players', val:String(t.players) },
+      { label:'Entities', val:String(t.entities) },
+      { label:'Build pieces', val:String(t.build) },
+      { label:'Danger nearby', val:t.danger?'Yes':'None' },
+      { label:'Region', val:t.region }
+    ];
+    if (deep){ ap.push({ label:'region_id', val:'meadows_3_-2' }, { label:'pressure_label', val:this.pressure().label.toLowerCase() }); }
+    return { wp, ps, ap };
+  }
+
+  // cell-reception style bars: level 1-5 -> 5 ascending cells
+  meter(level, color){
+    const heights = [7,10,13,16,19];
+    return heights.map((h,i) => ({
+      style: `width:5px;height:${h}px;border-radius:1px;align-self:flex-end;background:${i < level ? color : 'rgba(216,198,160,.13)'}`
+    }));
+  }
+  qColor(level){ return level >= 4 ? '#8ba15c' : level === 3 ? '#d9a441' : '#bf5a34'; }
+
+  reception(){
+    const t = this.state.t;
+    // Peer proximity — closer friend = more bars
+    const proxLvl = Math.max(1, Math.min(5, 5 - Math.floor((t.peerDist - 14) / 24)));
+    const proxTag = t.peerDist < 40 ? 'close · shared area' : t.peerDist < 80 ? 'nearby' : 'far · out of sight';
+    // Link strength — lower rtt/jitter = stronger
+    const linkLvl = t.rtt < 40 ? 5 : t.rtt < 52 ? 4 : t.rtt < 66 ? 3 : t.rtt < 74 ? 2 : 1;
+    const linkTag = linkLvl >= 4 ? 'strong · steady' : linkLvl === 3 ? 'fair' : 'weak · watch jitter';
+    // Data received / sent — volume, amber informational, rust when saturating
+    const inLvl = Math.max(1, Math.min(5, Math.ceil((t.bIn - 4200) / 1360) + 1));
+    const outLvl = Math.max(1, Math.min(5, Math.ceil((t.bOut - 8000) / 2000) + 1));
+    const volColor = (lvl) => lvl >= 5 ? '#bf5a34' : '#d9a441';
+    // Area density — calm green, busier gold
+    const densLvl = Math.max(1, Math.min(5, Math.round((t.entities - 28) / 7)));
+    const densColor = t.danger ? '#bf5a34' : densLvl >= 4 ? '#d9a441' : '#8ba15c';
+    return [
+      { label:'Proximity to allies', tag:proxTag, value:t.peerDist+' m', cells:this.meter(proxLvl, this.qColor(proxLvl)) },
+      { label:'Link strength', tag:linkTag, value:t.rtt+' ms · '+t.jitter+' jit', cells:this.meter(linkLvl, this.qColor(linkLvl)) },
+      { label:'Data received', tag:'packets in '+t.pIn+'/s', value:this.fmtBytes(t.bIn)+'/s', cells:this.meter(inLvl, volColor(inLvl)) },
+      { label:'Data sent', tag:'packets out '+t.pOut+'/s', value:this.fmtBytes(t.bOut)+'/s', cells:this.meter(outLvl, volColor(outLvl)) },
+      { label:'Area density', tag:densLvl >= 4 ? 'busy zone' : 'light', value:t.entities+' ent', cells:this.meter(densLvl, densColor) }
+    ];
+  }
+
+  pressure(){
+    const t = this.state.t;
+    if (t.danger) return { label:'Danger', bg:'rgba(191,90,52,.20)', fg:'#e0855f' };
+    if (t.entities > 52 || t.players > 3) return { label:'Elevated', bg:'rgba(217,164,65,.18)', fg:'#e0b354' };
+    return { label:'Calm', bg:'rgba(139,161,92,.16)', fg:'#a8bf7c' };
+  }
+
+  modeDescs(){
+    return {
+      'Auto':'Tunes itself — eases network detail when frames dip.',
+      'Low Impact':'Minimal overlay work. Best on weaker machines or huge bases.',
+      'Combat':'Prioritises responsiveness and clean hit registration.',
+      'Staging':'Verbose capture for benchmarks and test runs.'
+    };
+  }
+
+  tabStyle(name){
+    const active = this.state.tab === name;
+    const base = "appearance:none;cursor:pointer;background:none;border:none;padding:11px 15px 9px;font:700 12px/1 'Averia Serif Libre',serif;letter-spacing:.1em;text-transform:uppercase;";
+    return base + (active
+      ? "color:#ecc069;border-bottom:2px solid #d9a441;margin-bottom:-1px;"
+      : "color:#8f887a;border-bottom:2px solid transparent;");
+  }
+
+  renderVals(){
+    const st = this.state, t = st.t;
+    const deep = st.detail === 2;
+    const rows = this.wardRows(deep);
+    const pr = this.pressure();
+    const descs = this.modeDescs();
+
+    const modes = ['Auto','Low Impact','Combat','Staging'].map(name => {
+      const active = st.mode === name;
+      return {
+        name,
+        fn: () => this.setMode(name),
+        style: active
+          ? "appearance:none;cursor:pointer;font:600 10px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#1b130d;background:linear-gradient(180deg,#e0b354,#c9982f);border:1px solid #8a6a24;border-radius:3px;padding:6px 9px"
+          : "appearance:none;cursor:pointer;font:600 10px/1 'Averia Serif Libre',serif;letter-spacing:.05em;text-transform:uppercase;color:#c3bcac;background:linear-gradient(180deg,#2f2318,#241a12);border:1px solid #4b4038;border-radius:3px;padding:6px 9px"
+      };
+    });
+
+    const srcMap = {
+      game: { srcLabel:'world', srcBg:'rgba(156,149,135,.15)', srcFg:'#b3ab99' },
+      raven:{ srcLabel:'local model', srcBg:'rgba(217,164,65,.16)', srcFg:'#e0b354' },
+      you:  { srcLabel:'you', srcBg:'rgba(139,161,92,.16)', srcFg:'#a8bf7c' }
+    };
+    const decorate = (e) => ({ ...e, ...(srcMap[e.src]||srcMap.game) });
+    const events = st.events.slice(0,8).map(decorate);
+    const ravenLog = st.events.filter(e => e.src==='raven' || e.g==='✦').slice(0,6).map(decorate);
+
+    // signals
+    const sig = [
+      { title:'Frame', rows:[
+        { k:'fps', v:String(t.fps) },
+        { k:'frame_time_ms', v:t.frameMs.toFixed(1) },
+        { k:'frame_time_p95_ms', v:t.frameP95.toFixed(1) },
+        { k:'cpu_bound_estimate', v:t.cpuBound.toFixed(2) }
+      ]},
+      { title:'Network', rows:[
+        { k:'rtt_ms', v:String(t.rtt) },
+        { k:'jitter_ms', v:String(t.jitter) },
+        { k:'bytes_in_per_sec', v:String(t.bIn) },
+        { k:'bytes_out_per_sec', v:String(t.bOut) },
+        { k:'packets_in_per_sec', v:String(t.pIn) },
+        { k:'packets_out_per_sec', v:String(t.pOut) }
+      ]},
+      { title:'Area', rows:[
+        { k:'nearby_players', v:String(t.players) },
+        { k:'nearby_entities', v:String(t.entities) },
+        { k:'nearby_build_pieces', v:String(t.build) },
+        { k:'danger_nearby', v:t.danger?'true':'false' },
+        { k:'region_id', v:'meadows_3_-2' }
+      ]},
+      { title:'Session', rows:[
+        { k:'mode', v:st.mode.toLowerCase().replace(' ','_') },
+        { k:'server_pulse_state', v:'steady' },
+        { k:'owner_fit', v:'host-owned' },
+        { k:'connection_label', v:'hosting_1_peer' },
+        { k:'pressure_label', v:pr.label.toLowerCase() },
+        { k:'benchmark_result', v: st.bench.result || 'none' },
+        { k:'latest_session_id', v:st.sessionId }
+      ]}
+    ];
+
+    // raven status strip
+    const rv = st.raven;
+    const ravenStatusMap = {
+      sending:  { text:'Sending raven…', icon:'🕊', color:'#e0b354', border:'#8a6a24', shimmer:'background:linear-gradient(90deg,#e0b354,#fff4d8,#e0b354);background-size:200px 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:nwShim 1.2s linear infinite' },
+      returned: { text:'Raven returned with word.', icon:'🕊', color:'#a8bf7c', border:'#4b6b34', shimmer:'' },
+      notower:  { text:'No raven tower found — MCP is offline.', icon:'⚠', color:'#e0855f', border:'#7a3a26', shimmer:'' }
+    };
+    const rs = ravenStatusMap[rv] || {};
+
+    const mcpMap = {
+      online:  { label:'online',  dot:'#8ba15c', anim:'none' },
+      offline: { label:'offline', dot:'#bf5a34', anim:'none' },
+      checking:{ label:'listening…', dot:'#d9a441', anim:'nwPulse 1s ease-in-out infinite' }
+    };
+    const mcp = mcpMap[st.mcp];
+
+    // hero + summaries
+    const calmWord = t.danger ? 'restless' : 'calm';
+    const heroLine = `The world is ${calmWord}. Your frame time is steady near ${t.frameMs.toFixed(0)} ms.`;
+    const wpSummary = 'Server pulse is steady. You are hosting, and one friend shares your world.';
+    const psSummary = `Frames are smooth at ~${t.frameMs.toFixed(0)} ms. No stutter recorded in the last minute.`;
+    const apSummary = t.danger ? 'Something stirs near your base — stay ready.' : 'The world is quiet near your base. No danger stirring.';
+
+    const benchLabel = st.bench.status==='running' ? ' · '+st.bench.pct+'%' : (st.bench.status==='done' ? ' ✓' : '');
+
+    return {
+      panelRef: this.panelRef,
+      startDrag: this.startDrag,
+      roleLabel: 'HOST',
+      hudOpacity: st.hud ? 0.85 : 0.12,
+      hudLabel: st.hud ? 'on' : 'off',
+      detailLabel: ['Summary','Diagnostic','Deep'][st.detail],
+      benchLabel,
+      sessionId: st.sessionId,
+
+      // tabs
+      isWard: st.tab==='ward', isSignals: st.tab==='signals', isRaven: st.tab==='raven',
+      goWard:this.goWard, goSignals:this.goSignals, goRaven:this.goRaven,
+      tabWardStyle:this.tabStyle('ward'), tabSignalsStyle:this.tabStyle('signals'), tabRavenStyle:this.tabStyle('raven'),
+
+      // toolbar
+      toggleHud:this.toggleHud, cycleDetail:this.cycleDetail, startBench:this.startBench,
+      markEvent:this.markEvent, exportSession:this.exportSession, checkMcp:this.checkMcp,
+
+      // ward detail flags
+      isSummary: st.detail===0, showRows: st.detail!==0,
+      heroLine, wpSummary, psSummary, apSummary,
+      wpRows: rows.wp, psRows: rows.ps, apRows: rows.ap,
+      bars: this.reception(),
+      pressureLabel: pr.label, pressureBg: pr.bg, pressureFg: pr.fg,
+
+      // mode
+      modes, modeName: st.mode, modeDesc: descs[st.mode],
+
+      // events
+      events, ravenLog,
+
+      // signals
+      sigGroups: sig,
+
+      // raven
+      mcpLabel: mcp.label, mcpDot: mcp.dot, mcpAnim: mcp.anim,
+      askRecap:this.askRecap, askTest:this.askTest, askConfig:this.askConfig,
+      ravenBusyOrDone: rv!=='idle',
+      ravenStatusText: rs.text, ravenStatusIcon: rs.icon, ravenStatusColor: rs.color,
+      ravenStatusBorder: rs.border, ravenShimmer: rs.shimmer,
+      hasRavenOut: !!st.ravenOut,
+      noRavenOut: !st.ravenOut,
+      ravenOutKind: st.ravenOut ? st.ravenOut.kind : '',
+      ravenOutText: st.ravenOut ? st.ravenOut.text : '',
+      ravenOutTime: st.ravenOut ? st.ravenOut.time : ''
+    };
+  }
+}
+</script>
+</body>
+</html>
