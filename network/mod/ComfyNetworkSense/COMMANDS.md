@@ -12,11 +12,23 @@ In-game Valheim console commands:
 - `network_sense_mode`: cycle mode.
 - `network_sense_mode solo|combat|group|town`: set mode.
 - `network_sense_benchmark`: start or cancel benchmark.
+- `network_sense_tp x z [label]`: teleport the local player to a baseline coordinate and record a marker.
+- `network_sense_tp x y z [label]`: teleport with an explicit Y coordinate and record a marker.
+- `network_sense_route_run [teleport-route.tsv]`: run a tab- or comma-delimited teleport route from `BepInEx/config/comfy-network-sense`.
+- `network_sense_rehearsal [teleport-route.tsv] [profile]`: reload config, check MCP, mark the rehearsal, run the route, and export the session.
 - `network_sense_reload_config`: reload BepInEx config.
 - `network_sense_export_session`: write a compact dev session export JSON.
 - `network_sense_mcp_status`: check whether the local Comfy MCP gateway is reachable.
 - `network_sense_mcp_note <text>`: record a timestamped dev note in the event log.
 - `network_sense_mcp_mark <label>`: record a timestamped test marker in the event log.
+
+Automation config keys under `[Automation]`:
+
+- `autoRehearsalEnabled`: when `true`, run a private-lab route rehearsal after the local player is available.
+- `autoRehearsalRouteFile`: route file under `BepInEx/config/comfy-network-sense`, default `teleport-route.tsv`.
+- `autoRehearsalProfile`: resource profile label recorded in markers.
+- `autoRehearsalDelaySeconds`: delay after player availability before the route starts.
+- `autoRehearsalRunOncePerSession`: prevents repeated runs in the same client session.
 
 Shortcuts are unbound by default to avoid collisions with other local Valheim mods.
 

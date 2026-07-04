@@ -37,6 +37,7 @@ public sealed class TelemetryCoordinator : IDisposable {
   ScoreSnapshot _latestScores;
   ZRoutedRpc _registeredRoutedRpc;
   string _latestExportPath = string.Empty;
+  BenchmarkResult _latestBenchmarkResult;
 
   public void Update(float deltaTime) {
     RegisterServerPulseRpc();
@@ -46,6 +47,7 @@ public sealed class TelemetryCoordinator : IDisposable {
     _clientTelemetrySampler.RecordFrame(deltaTime);
 
     if (_benchmarkRunner.Update(deltaTime, _latestClientSample, _sessionId) is BenchmarkResult benchmarkResult) {
+      _latestBenchmarkResult = benchmarkResult;
       _logWriter.Write("benchmark-results.jsonl", benchmarkResult.ToDictionary());
       WriteEvent("benchmark_end", $"Benchmark complete. Tier: {benchmarkResult.RecommendedHeadroomTier}");
       MessageHud.instance?.ShowMessage(
@@ -55,7 +57,10 @@ public sealed class TelemetryCoordinator : IDisposable {
 
     float sampleIntervalSeconds = Mathf.Max(0.1f, PluginConfig.LiveSampleIntervalSeconds.Value);
 
-    if (Time.unscaledTime - _lastClientSampleAt >= sampleIntervalSeconds) {
+    // A dedicated server has no local player; the client sampler would otherwise fill
+    // telemetry-client.jsonl with meaningless solo/no-player rows. Skip it there and let
+    // ServerPulseBroadcaster be the server's clean data source.
+    if (Time.unscaledTime - _lastClientSampleAt >= sampleIntervalSeconds && !IsDedicatedServer()) {
       _lastClientSampleAt = Time.unscaledTime;
       _latestClientSample = _clientTelemetrySampler.Capture(_sessionId, _mode, _latestServerPulse?.OwnerId);
       _latestScores = ScoreCalculator.Calculate(_latestClientSample, _latestServerPulse, _mode);
@@ -68,6 +73,10 @@ public sealed class TelemetryCoordinator : IDisposable {
     }
 
     _serverPulseBroadcaster.Update(_sessionId, _mode, _logWriter);
+  }
+
+  static bool IsDedicatedServer() {
+    return ZNet.instance != null && ZNet.instance.IsServer() && ZNet.instance.IsDedicated();
   }
 
   public void DrawHud() {
@@ -174,6 +183,38 @@ public sealed class TelemetryCoordinator : IDisposable {
 
   public void ClosePanel() {
     _panel.Close();
+  }
+
+  // Matrix check-in support: the swarm runner drives one benchmark per gateway cell and needs
+  // to start a run, observe when it finishes, and read the result it produced. It reuses the
+  // same BenchmarkRunner the panel/route flow uses rather than duplicating the frame-probe logic.
+  public bool BenchmarkRunning => _benchmarkRunner.IsRunning;
+
+  public ClientTelemetrySample LatestClientSample => _latestClientSample;
+
+  public bool StartBenchmark() {
+    if (_benchmarkRunner.IsRunning) {
+      return false;
+    }
+
+    _latestBenchmarkResult = null;
+    _benchmarkRunner.Toggle();
+    WriteEvent("benchmark_start", "NetworkSense benchmark started (matrix check-in).");
+    return true;
+  }
+
+  public void CancelBenchmark() {
+    if (_benchmarkRunner.IsRunning) {
+      _benchmarkRunner.Toggle();
+      WriteEvent("benchmark_cancel", "NetworkSense benchmark cancelled (matrix check-in).");
+    }
+  }
+
+  // Null until the most recently started run completes. StartBenchmark clears it first.
+  public BenchmarkResult ConsumeLatestBenchmarkResult() {
+    BenchmarkResult result = _latestBenchmarkResult;
+    _latestBenchmarkResult = null;
+    return result;
   }
 
   public NetworkSenseSnapshot GetSnapshot() {

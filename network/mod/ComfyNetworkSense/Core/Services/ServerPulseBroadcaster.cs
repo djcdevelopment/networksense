@@ -34,6 +34,11 @@ public sealed class ServerPulseBroadcaster {
 
     _lastPulseTime = now;
 
+    int peerCount = 0;
+    float aggregateBytesSentPerSec = 0.0f;
+    float aggregateMessagesSentPerSec = 0.0f;
+    int aggregateObservers = 0;
+
     foreach (ZNetPeer peer in ZNet.instance.GetPeers()) {
       if (peer?.m_rpc == null) {
         continue;
@@ -47,7 +52,57 @@ public sealed class ServerPulseBroadcaster {
       pulse.WriteTo(package);
 
       ZRoutedRpc.instance?.InvokeRoutedRPC(peer.m_uid, ServerPulseRpc, [package]);
+
+      peerCount++;
+      aggregateBytesSentPerSec += pulse.BytesSentPerSec;
+      aggregateMessagesSentPerSec += pulse.MessagesSentPerSec;
+      aggregateObservers += pulse.RegionObserverCount;
     }
+
+    // Always-on server heartbeat: one row per interval regardless of peer count, so the
+    // headless server is a self-sufficient recorder. With 0 peers it is the at-rest
+    // baseline; with N peers it is the aggregate "how much does the server push at N
+    // players" number (server-side bytes/sec + messages/sec), plus world ZDO size.
+    ServerPulseSnapshot heartbeat =
+        CaptureServerHeartbeat(sessionId, mode, peerCount, aggregateBytesSentPerSec, aggregateMessagesSentPerSec, aggregateObservers);
+    writer?.Write("telemetry-server.jsonl", heartbeat.ToDictionary());
+  }
+
+  ServerPulseSnapshot CaptureServerHeartbeat(
+      string sessionId,
+      NetworkSenseMode mode,
+      int peerCount,
+      float aggregateBytesSentPerSec,
+      float aggregateMessagesSentPerSec,
+      int aggregateObservers) {
+    int worldZdoCount = ZDOMan.instance != null ? ZDOMan.instance.NrOfObjects() : 0;
+    int connectedPlayers = ZNet.instance != null ? ZNet.instance.GetNrOfPlayers() : peerCount;
+
+    return new() {
+        TimestampUtc = DateTime.UtcNow.ToString("o"),
+        SessionId = sessionId,
+        SampleId = Guid.NewGuid().ToString("N"),
+        PlayerId = "server",
+        PlayerName = string.Empty,
+        RegionId = "server",
+        ClusterId = "server",
+        Mode = mode.ToString(),
+        OwnerId = string.Empty,
+        OwnerReason = "server_aggregate",
+        SampleSource = "server_heartbeat",
+        BuildVersion = ComfyNetworkSense.PluginVersion,
+        RegionObserverCount = aggregateObservers,
+        RegionPlayerCount = connectedPlayers,
+        RegionEntityCount = worldZdoCount,
+        RegionBuildCount = 0,
+        RegionPressureScore = 0.0f,
+        HeartbeatGapMs = 0.0f,
+        MessagesSentPerSec = aggregateMessagesSentPerSec,
+        BytesSentPerSec = aggregateBytesSentPerSec,
+        OwnerConfidence = 0.0f,
+        AuthorityStabilitySec = 0.0f,
+        OwnerCandidateCount = peerCount
+    };
   }
 
   ServerPulseSnapshot CapturePulse(ZNetPeer peer, string sessionId, NetworkSenseMode mode, float now) {
