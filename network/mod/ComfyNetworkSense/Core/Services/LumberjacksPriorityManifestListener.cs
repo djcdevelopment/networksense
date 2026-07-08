@@ -227,42 +227,46 @@ public sealed class LumberjacksPriorityManifestListener : IDisposable {
     UdpClient client = null;
     try {
       client = new UdpClient();
+      // Default OS receive buffer is far too small for a few-hundred-packet burst
+      // arriving almost instantly over loopback; without headroom the OS silently
+      // drops the overflow before this loop ever gets a chance to drain it.
+      client.Client.ReceiveBufferSize = 4 * 1024 * 1024;
       byte[] handshake = new byte[UdpTokenBytes + UdpHeaderBytes];
       Array.Copy(BitConverter.GetBytes(udpToken), handshake, UdpTokenBytes);
       await client.SendAsync(handshake, handshake.Length, host, port).ConfigureAwait(false);
       _udpClient = client;
 
-      while (!token.IsCancellationRequested) {
-        Task<UdpReceiveResult> receiveTask = client.ReceiveAsync();
-        Task finished = await Task.WhenAny(receiveTask, Task.Delay(500, token)).ConfigureAwait(false);
-        if (finished != receiveTask) {
-          continue;
-        }
+      using (token.Register(() => client.Close())) {
+        while (!token.IsCancellationRequested) {
+          UdpReceiveResult result;
+          try {
+            // A single directly-awaited receive per iteration -- no parallel/abandoned
+            // pending receive on timeout, which could otherwise silently drop whichever
+            // packet the orphaned call ends up completing with. Shutdown is delivered by
+            // closing the socket (above), which surfaces as ObjectDisposedException here.
+            result = await client.ReceiveAsync().ConfigureAwait(false);
+          } catch (ObjectDisposedException) {
+            break;
+          } catch (SocketException) {
+            continue;
+          }
 
-        UdpReceiveResult result;
-        try {
-          result = await receiveTask.ConfigureAwait(false);
-        } catch (ObjectDisposedException) {
-          break;
-        } catch (SocketException) {
-          continue;
-        }
+          byte[] data = result.Buffer;
+          if (data.Length < UdpTokenBytes + UdpHeaderBytes) {
+            continue;
+          }
 
-        byte[] data = result.Buffer;
-        if (data.Length < UdpTokenBytes + UdpHeaderBytes) {
-          continue;
-        }
+          ulong headerValue = 0;
+          for (int i = 0; i < UdpHeaderBytes; i++) {
+            headerValue = (headerValue << 8) | data[UdpTokenBytes + i];
+          }
+          int typeId = (int) ((headerValue >> 38) & 0x3F);
+          if (typeId != PriorityManifestObjectTypeId) {
+            continue;
+          }
 
-        ulong headerValue = 0;
-        for (int i = 0; i < UdpHeaderBytes; i++) {
-          headerValue = (headerValue << 8) | data[UdpTokenBytes + i];
+          Interlocked.Increment(ref _datagramObjectsReceived);
         }
-        int typeId = (int) ((headerValue >> 38) & 0x3F);
-        if (typeId != PriorityManifestObjectTypeId) {
-          continue;
-        }
-
-        Interlocked.Increment(ref _datagramObjectsReceived);
       }
     } catch (OperationCanceledException) {
       // Expected during listener shutdown.
