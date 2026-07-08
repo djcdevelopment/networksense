@@ -26,6 +26,7 @@ public sealed class TelemetryCoordinator : IDisposable {
   readonly List<NetworkSenseEventRow> _recentEvents = [];
   readonly string _exportRoot = Path.Combine(Paths.ConfigPath, "comfy-network-sense", "exports");
 
+  LumberjacksPriorityMirrorRunner _priorityMirrorRunner;
   bool _hudVisible = PluginConfig.ShowHudOnStart.Value;
   HudDetailLevel _hudDetailLevel = HudDetailLevel.Summary;
   NetworkSenseMode _mode = NetworkSenseMode.Solo;
@@ -380,6 +381,7 @@ public sealed class TelemetryCoordinator : IDisposable {
         ["session_id"] = _sessionId
     };
     _logWriter.Write("priority-load.jsonl", row);
+    _priorityMirrorRunner?.ObservePriorityRow(row);
 
     string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
     if (string.Equals(eventName, "object", StringComparison.OrdinalIgnoreCase)) {
@@ -388,6 +390,22 @@ public sealed class TelemetryCoordinator : IDisposable {
 
     string status = values.TryGetValue("status", out object statusValue) ? Convert.ToString(statusValue) : "unknown";
     WriteEvent("lumberjacks_priority", $"Lumberjacks priority {eventName}: {status}");
+  }
+
+  public void SetLumberjacksPriorityMirror(LumberjacksPriorityMirrorRunner runner) {
+    _priorityMirrorRunner = runner;
+  }
+
+  public void RecordLumberjacksPriorityMirror(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("priority-mirror.jsonl", row);
+
+    string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
+    string status = values.TryGetValue("running", out object runningValue) ? Convert.ToString(runningValue) : "unknown";
+    WriteEvent("lumberjacks_priority_mirror", $"Lumberjacks priority mirror {eventName}: {status}");
   }
 
   public void StartRavenRequest(string requestKind) {

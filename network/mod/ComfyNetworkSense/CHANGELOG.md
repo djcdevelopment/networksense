@@ -1,5 +1,11 @@
 ## Changelog
 
+### 0.5.1
+
+- Added `network_sense_lumberjacks_priority_mirror [start|stop|status] [eventlog-url]`, which live-mirrors priority manifest rows to Lumberjacks EventLog.
+- Added `network_sense_lumberjacks_priority_route_mirror [teleport-route.tsv] [radius] [scan-interval] [max-objects] [eventlog-url]`, which wraps the priority route with live per-stop EventLog mirror batches.
+- Live mirror posts UUID-backed EventLog events and keeps Valheim replication untouched.
+
 ### 0.5.0
 
 - Added `network_sense_lumberjacks_priority_probe [start|stop|status] [radius] [scan-interval] [max-objects]`, a local priority/load-order manifest probe for loaded Valheim objects.

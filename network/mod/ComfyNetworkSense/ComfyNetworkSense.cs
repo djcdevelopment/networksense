@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.0";
+  public const string PluginVersion = "0.5.1";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -33,6 +33,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksProjectionRunner _lumberjacksProjectionRunner;
   LumberjacksShadowAuthorityRunner _lumberjacksShadowAuthorityRunner;
   LumberjacksPriorityProbeRunner _lumberjacksPriorityProbeRunner;
+  LumberjacksPriorityMirrorRunner _lumberjacksPriorityMirrorRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
@@ -59,6 +60,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksProjectionRunner = new();
     _lumberjacksShadowAuthorityRunner = new();
     _lumberjacksPriorityProbeRunner = new();
+    _lumberjacksPriorityMirrorRunner = new();
+    _coordinator.SetLumberjacksPriorityMirror(_lumberjacksPriorityMirrorRunner);
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -133,6 +136,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksShadowAuthorityRunner = null;
     _lumberjacksPriorityProbeRunner?.Dispose();
     _lumberjacksPriorityProbeRunner = null;
+    _lumberjacksPriorityMirrorRunner?.Dispose();
+    _lumberjacksPriorityMirrorRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();
@@ -229,6 +234,14 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         "network_sense_lumberjacks_priority_route",
         "run a teleport route with per-stop priority/load-order scans: network_sense_lumberjacks_priority_route [teleport-route.tsv] [radius] [scan-interval] [max-objects]",
         LumberjacksPriorityRouteCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_priority_mirror",
+        "mirror priority/load-order rows to Lumberjacks EventLog: network_sense_lumberjacks_priority_mirror [start|stop|status] [eventlog-url]",
+        LumberjacksPriorityMirrorCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_priority_route_mirror",
+        "run a priority route and live-mirror per-stop batches to Lumberjacks EventLog: network_sense_lumberjacks_priority_route_mirror [teleport-route.tsv] [radius] [scan-interval] [max-objects] [eventlog-url]",
+        LumberjacksPriorityRouteMirrorCommand);
     new Terminal.ConsoleCommand(
         "network_sense_tp",
         "teleport local player for baseline capture: network_sense_tp x z [label] or network_sense_tp x y z [label]",
@@ -519,12 +532,81 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       return false;
     }
 
-    StartCoroutine(RunLumberjacksPriorityRoute(stops, routePath, radiusOverride, intervalOverride, maxObjectsOverride));
+    StartCoroutine(RunLumberjacksPriorityRoute(stops, routePath, radiusOverride, intervalOverride, maxObjectsOverride, null));
     string routeRadiusText = radiusOverride.HasValue
         ? radiusOverride.Value.ToString("0.#", CultureInfo.InvariantCulture) + "m"
         : "config";
     string message =
         $"Lumberjacks priority route started: {stops.Count} stops from {fileName}, radius={routeRadiusText}.";
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+    LogInfo(message);
+    return message;
+  }
+
+  object LumberjacksPriorityMirrorCommand(Terminal.ConsoleEventArgs args) {
+    string action = args.Length >= 2 ? args[1].Trim().ToLowerInvariant() : "start";
+
+    switch (action) {
+      case "start":
+      case "run":
+      case "on": {
+        string eventLogUrl = args.Length >= 3 ? args[2] : PluginConfig.LumberjacksEventLogUrl.Value;
+        string message = _lumberjacksPriorityMirrorRunner.Start(eventLogUrl, _coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "stop":
+      case "off": {
+        string message = _lumberjacksPriorityMirrorRunner.Stop(_coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "status": {
+        string message = _lumberjacksPriorityMirrorRunner.GetStatus();
+        _coordinator.RecordLumberjacksPriorityMirror(_lumberjacksPriorityMirrorRunner.BuildStatusRow("status"));
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      default: {
+        string message = "Usage: network_sense_lumberjacks_priority_mirror [start|stop|status] [eventlog-url]";
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogWarning(message);
+        return false;
+      }
+    }
+  }
+
+  object LumberjacksPriorityRouteMirrorCommand(Terminal.ConsoleEventArgs args) {
+    if (_routeRunning) {
+      string busyMessage = "NetworkSense route is already running.";
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, busyMessage);
+      LogWarning(busyMessage);
+      return false;
+    }
+
+    string fileName = args.Length >= 2 ? args[1] : "teleport-route.tsv";
+    float? radiusOverride = TryParseOptionalPriorityRadius(args, 2, out float radius) ? radius : (float?) null;
+    float? intervalOverride = TryParseOptionalPriorityInterval(args, 3, out float interval) ? interval : (float?) null;
+    int? maxObjectsOverride = TryParseOptionalPriorityMaxObjects(args, 4, out int maxObjects) ? maxObjects : (int?) null;
+    string eventLogUrl = args.Length >= 6 ? args[5] : PluginConfig.LumberjacksEventLogUrl.Value;
+
+    fileName = NormalizeRouteFileName(fileName);
+    string routePath = Path.Combine(Paths.ConfigPath, "comfy-network-sense", fileName);
+    if (!TryLoadRouteStops(routePath, out List<RouteStop> stops, out string error)) {
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, error);
+      LogWarning(error);
+      return false;
+    }
+
+    StartCoroutine(RunLumberjacksPriorityRoute(stops, routePath, radiusOverride, intervalOverride, maxObjectsOverride, eventLogUrl));
+    string message =
+        $"Lumberjacks priority route mirror started: {stops.Count} stops from {fileName}, eventLog={eventLogUrl}.";
     MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
     LogInfo(message);
     return message;
@@ -1125,9 +1207,11 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       string routePath,
       float? radiusOverride,
       float? intervalOverride,
-      int? maxObjectsOverride) {
+      int? maxObjectsOverride,
+      string priorityMirrorEventLogUrl) {
     _routeRunning = true;
     bool aborted = false;
+    bool mirrorStarted = false;
     string activeStopId = string.Empty;
 
     NetworkSensePerfProbe.SetRouteState("priority_route", "", "start");
@@ -1136,6 +1220,12 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     string maxText = maxObjectsOverride.HasValue ? $" maxObjects={maxObjectsOverride.Value}" : string.Empty;
     _coordinator.RecordDevMarker(
         $"lumberjacks_priority_route start stops={stops.Count} file={Path.GetFileName(routePath)}{radiusText}{intervalText}{maxText}");
+    if (!string.IsNullOrWhiteSpace(priorityMirrorEventLogUrl)) {
+      string mirrorMessage = _lumberjacksPriorityMirrorRunner.Start(priorityMirrorEventLogUrl, _coordinator);
+      mirrorStarted = _lumberjacksPriorityMirrorRunner.IsRunning;
+      LogInfo(mirrorMessage);
+      _coordinator.RecordDevMarker($"lumberjacks_priority_route mirror_start {mirrorMessage}");
+    }
 
     try {
       foreach (RouteStop stop in stops) {
@@ -1246,6 +1336,11 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
       NetworkSensePerfProbe.SetRouteState("priority_route", "", aborted ? "abort" : "end");
       _coordinator.RecordDevMarker(aborted ? "lumberjacks_priority_route abort" : "lumberjacks_priority_route end");
+      if (mirrorStarted && _lumberjacksPriorityMirrorRunner.IsRunning) {
+        string mirrorStopMessage = _lumberjacksPriorityMirrorRunner.Stop(_coordinator);
+        LogInfo(mirrorStopMessage);
+        _coordinator.RecordDevMarker($"lumberjacks_priority_route mirror_stop {mirrorStopMessage}");
+      }
 
       NetworkSensePerfProbe.SetRouteState("priority_route", "", "export");
       string exportMessage = _coordinator.ExportSession();

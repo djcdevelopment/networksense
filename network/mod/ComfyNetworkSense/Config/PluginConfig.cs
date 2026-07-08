@@ -63,6 +63,7 @@ public static class PluginConfig {
   public static ConfigEntry<float> LumberjacksPriorityProbeRadiusMeters { get; private set; }
   public static ConfigEntry<float> LumberjacksPriorityProbeIntervalSeconds { get; private set; }
   public static ConfigEntry<int> LumberjacksPriorityProbeMaxObjectsPerSample { get; private set; }
+  public static ConfigEntry<string> LumberjacksEventLogUrl { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -535,6 +536,13 @@ public static class PluginConfig {
             "lumberjacksPriorityProbeMaxObjectsPerSample",
             96,
             "Maximum per-object priority rows emitted per scan. Summary rows still include full scanned counts.");
+
+    LumberjacksEventLogUrl =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksEventLogUrl",
+            "http://127.0.0.1:4002",
+            "Lumberjacks EventLog base URL used by live priority mirror commands.");
 
     WriteTelemetryLogs =
         config.Bind(

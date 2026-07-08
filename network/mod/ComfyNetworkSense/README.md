@@ -194,6 +194,7 @@ network_sense_route_run teleport-route.tsv
 network_sense_rehearsal teleport-route.tsv host_full
 network_sense_lumberjacks_shadow_route teleport-route.tsv movement_only ws://127.0.0.1:4000 region-spawn 20
 network_sense_lumberjacks_priority_route teleport-route.tsv 96 5 96
+network_sense_lumberjacks_priority_route_mirror teleport-route.tsv 256 5 192 http://127.0.0.1:4002
 network_sense_raven
 network_sense_mcp_status
 ```

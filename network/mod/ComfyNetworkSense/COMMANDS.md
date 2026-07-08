@@ -22,6 +22,8 @@ In-game Valheim console commands:
 - `network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary|axis_north|axis_east|axis_south|axis_west] [ws-url] [region-id] [input-hz]`: run the teleport route and collect per-stop Lumberjacks shadow drift rows. Use `20` for `input-hz` to match Lumberjacks' simulation tick.
 - `network_sense_lumberjacks_priority_probe [start|stop|status] [radius] [scan-interval] [max-objects]`: classify loaded local Valheim objects into a Lumberjacks-ready priority manifest and write `priority-load.jsonl`.
 - `network_sense_lumberjacks_priority_route [teleport-route.tsv] [radius] [scan-interval] [max-objects]`: teleport through the route and collect per-stop priority/load-order manifest rows.
+- `network_sense_lumberjacks_priority_mirror [start|stop|status] [eventlog-url]`: live-mirror priority manifest rows to Lumberjacks EventLog as sample events plus per-sample object batches.
+- `network_sense_lumberjacks_priority_route_mirror [teleport-route.tsv] [radius] [scan-interval] [max-objects] [eventlog-url]`: run the priority route and live-mirror the same per-stop batches to Lumberjacks EventLog.
 - `network_sense_reload_config`: reload BepInEx config.
 - `network_sense_export_session`: write a compact dev session export JSON.
 - `network_sense_mcp_status`: check whether the local Comfy MCP gateway is reachable.
