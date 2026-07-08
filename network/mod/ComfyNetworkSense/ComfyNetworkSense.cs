@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.1";
+  public const string PluginVersion = "0.5.3";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -34,6 +34,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksShadowAuthorityRunner _lumberjacksShadowAuthorityRunner;
   LumberjacksPriorityProbeRunner _lumberjacksPriorityProbeRunner;
   LumberjacksPriorityMirrorRunner _lumberjacksPriorityMirrorRunner;
+  LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
@@ -62,6 +63,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityProbeRunner = new();
     _lumberjacksPriorityMirrorRunner = new();
     _coordinator.SetLumberjacksPriorityMirror(_lumberjacksPriorityMirrorRunner);
+    _lumberjacksPriorityManifestListener = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -138,6 +140,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityProbeRunner = null;
     _lumberjacksPriorityMirrorRunner?.Dispose();
     _lumberjacksPriorityMirrorRunner = null;
+    _lumberjacksPriorityManifestListener?.Dispose();
+    _lumberjacksPriorityManifestListener = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();
@@ -242,6 +246,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         "network_sense_lumberjacks_priority_route_mirror",
         "run a priority route and live-mirror per-stop batches to Lumberjacks EventLog: network_sense_lumberjacks_priority_route_mirror [teleport-route.tsv] [radius] [scan-interval] [max-objects] [eventlog-url]",
         LumberjacksPriorityRouteMirrorCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_priority_manifest_listen",
+        "listen for the reliable Lumberjacks priority_manifest broadcast: network_sense_lumberjacks_priority_manifest_listen [start|stop|status] [ws-url] [region-id]",
+        LumberjacksPriorityManifestListenCommand);
     new Terminal.ConsoleCommand(
         "network_sense_tp",
         "teleport local player for baseline capture: network_sense_tp x z [label] or network_sense_tp x y z [label]",
@@ -383,6 +391,50 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
       default: {
         string message = "Usage: network_sense_lumberjacks_projection [start|stop|status] [ws-url] [region-id]";
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogWarning(message);
+        return false;
+      }
+    }
+  }
+
+  object LumberjacksPriorityManifestListenCommand(Terminal.ConsoleEventArgs args) {
+    string action = args.Length >= 2 ? args[1].Trim().ToLowerInvariant() : "start";
+
+    switch (action) {
+      case "start":
+      case "run":
+      case "on": {
+        string gatewayUrl = args.Length >= 3
+            ? args[2]
+            : PluginConfig.LumberjacksGatewayUrl.Value;
+        string regionId = args.Length >= 4
+            ? args[3]
+            : PluginConfig.LumberjacksRegionId.Value;
+        string message = _lumberjacksPriorityManifestListener.Start(gatewayUrl, regionId, _coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "stop":
+      case "off": {
+        string message = _lumberjacksPriorityManifestListener.Stop(_coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "status": {
+        string message = _lumberjacksPriorityManifestListener.GetStatus();
+        _coordinator.RecordLumberjacksPriorityManifestListen(_lumberjacksPriorityManifestListener.BuildStatusRow("status"));
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      default: {
+        string message = "Usage: network_sense_lumberjacks_priority_manifest_listen [start|stop|status] [ws-url] [region-id]";
         MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
         LogWarning(message);
         return false;
