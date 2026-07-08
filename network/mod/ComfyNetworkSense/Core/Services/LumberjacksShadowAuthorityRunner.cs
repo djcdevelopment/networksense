@@ -54,28 +54,44 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
   bool _valheimStartSet;
   bool _lastValheimSet;
   bool _authorityStartSet;
+  bool _lastAuthorityPositionSet;
 
   ushort _inputSeq = 1;
   float _lastSampleTime;
   float _sampleAccumulator;
   float _logAccumulator;
+  float? _inputHzOverride;
 
   Vector3 _valheimStart;
   Vector3 _lastValheimPosition;
   Vector3 _authorityStart;
   Vector3 _latestAuthorityPosition;
+  Vector3 _lastAuthorityStepDelta;
+  Vector3 _lastValheimStepDelta;
+  Vector3 _lastValheimTotalDelta;
+  Vector3 _lastAuthorityTotalDelta;
+  Vector3 _lastAuthorityScaledDelta;
 
   float _lastValheimSpeedMetersPerSecond;
+  float _lastValheimStepMeters;
+  float _lastValheimTotalMeters;
   float _lastLumberjacksDeltaUnits;
   float _lastAuthorityScaledMeters;
+  float _lastAuthorityToValheimDistanceRatio;
+  float _lastAuthorityUnitsToValheimMetersScale;
   float _lastDriftMeters;
   float _maxDriftMeters;
   float _totalDriftMeters;
   float _lastDirectionErrorDegrees;
+  ushort _lastInputSeqSent;
+  byte _lastInputDirection;
+  byte _lastInputSpeedPercent;
+  byte _lastInputActionFlags;
+  float _lastInputHeadingDegrees;
 
   public bool IsRunning => _cts != null && !_cts.IsCancellationRequested;
 
-  public string Start(string gatewayUrl, string regionId, TelemetryCoordinator coordinator) {
+  public string Start(string gatewayUrl, string regionId, TelemetryCoordinator coordinator, float? inputHzOverride = null) {
     if (IsRunning) {
       return $"Lumberjacks shadow authority already running: {GetStatus()}";
     }
@@ -110,19 +126,37 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
     _valheimStartSet = false;
     _lastValheimSet = false;
     _authorityStartSet = false;
+    _lastAuthorityPositionSet = false;
 
     _inputSeq = 1;
     _lastSampleTime = 0.0f;
     _sampleAccumulator = 0.0f;
     _logAccumulator = 0.0f;
+    _inputHzOverride = inputHzOverride.HasValue
+        ? Mathf.Clamp(inputHzOverride.Value, 1.0f, 60.0f)
+        : (float?) null;
 
+    _lastAuthorityStepDelta = Vector3.zero;
+    _lastValheimStepDelta = Vector3.zero;
+    _lastValheimTotalDelta = Vector3.zero;
+    _lastAuthorityTotalDelta = Vector3.zero;
+    _lastAuthorityScaledDelta = Vector3.zero;
     _lastValheimSpeedMetersPerSecond = 0.0f;
+    _lastValheimStepMeters = 0.0f;
+    _lastValheimTotalMeters = 0.0f;
     _lastLumberjacksDeltaUnits = 0.0f;
     _lastAuthorityScaledMeters = 0.0f;
+    _lastAuthorityToValheimDistanceRatio = 0.0f;
+    _lastAuthorityUnitsToValheimMetersScale = 0.0f;
     _lastDriftMeters = 0.0f;
     _maxDriftMeters = 0.0f;
     _totalDriftMeters = 0.0f;
     _lastDirectionErrorDegrees = 0.0f;
+    _lastInputSeqSent = 0;
+    _lastInputDirection = 255;
+    _lastInputSpeedPercent = 0;
+    _lastInputActionFlags = 0;
+    _lastInputHeadingDegrees = 0.0f;
 
     while (_pendingInputs.TryDequeue(out _)) {
       // Drop stale inputs from a previous run.
@@ -134,7 +168,8 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
     _sendTask = Task.Run(() => RunSendLoop(_cts.Token));
 
     coordinator?.RecordLumberjacksShadow(BuildStatusRow("start"));
-    return $"Lumberjacks shadow authority starting: {_gatewayUrl} region={_regionId}.";
+    string inputHz = _inputHzOverride.HasValue ? $" inputHz={_inputHzOverride.Value:0.##}" : string.Empty;
+    return $"Lumberjacks shadow authority starting: {_gatewayUrl} region={_regionId}{inputHz}.";
   }
 
   public string Stop(TelemetryCoordinator coordinator = null) {
@@ -170,7 +205,7 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
     }
 
     _sampleAccumulator += deltaTime;
-    float inputHz = Mathf.Clamp(PluginConfig.LumberjacksShadowInputHz.Value, 1.0f, 30.0f);
+    float inputHz = Mathf.Clamp(_inputHzOverride ?? PluginConfig.LumberjacksShadowInputHz.Value, 1.0f, 60.0f);
     float sampleInterval = 1.0f / inputHz;
     if (_sampleAccumulator >= sampleInterval) {
       _sampleAccumulator = 0.0f;
@@ -220,12 +255,32 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
           ["inputs_sent"] = _inputsSent,
           ["samples"] = _samples,
           ["drift_samples"] = _driftSamples,
+          ["input_hz"] = Math.Round(_inputHzOverride ?? PluginConfig.LumberjacksShadowInputHz.Value, 4),
+          ["input_hz_source"] = _inputHzOverride.HasValue ? "override" : "config",
+          ["last_input_seq_sent"] = _lastInputSeqSent,
+          ["last_input_direction"] = _lastInputDirection,
+          ["last_input_heading_degrees"] = Math.Round(_lastInputHeadingDegrees, 4),
+          ["last_input_speed_percent"] = _lastInputSpeedPercent,
+          ["last_input_action_flags"] = _lastInputActionFlags,
+          ["input_echo_lag"] = InputEchoLag(_lastInputSeqSent, _lastInputSeqEcho),
           ["last_drift_meters"] = Math.Round(_lastDriftMeters, 4),
           ["max_drift_meters"] = Math.Round(_maxDriftMeters, 4),
           ["average_drift_meters"] = Math.Round(averageDrift, 4),
           ["last_valheim_speed_mps"] = Math.Round(_lastValheimSpeedMetersPerSecond, 4),
+          ["last_valheim_delta_x_m"] = Math.Round(_lastValheimStepDelta.x, 4),
+          ["last_valheim_delta_z_m"] = Math.Round(_lastValheimStepDelta.z, 4),
+          ["last_valheim_delta_meters"] = Math.Round(_lastValheimStepMeters, 4),
+          ["last_valheim_total_x_m"] = Math.Round(_lastValheimTotalDelta.x, 4),
+          ["last_valheim_total_z_m"] = Math.Round(_lastValheimTotalDelta.z, 4),
+          ["last_valheim_total_meters"] = Math.Round(_lastValheimTotalMeters, 4),
+          ["last_authority_delta_x_units"] = Math.Round(_lastAuthorityStepDelta.x, 4),
+          ["last_authority_delta_z_units"] = Math.Round(_lastAuthorityStepDelta.z, 4),
           ["last_lumberjacks_delta_units"] = Math.Round(_lastLumberjacksDeltaUnits, 4),
+          ["last_authority_scaled_x_m"] = Math.Round(_lastAuthorityScaledDelta.x, 4),
+          ["last_authority_scaled_z_m"] = Math.Round(_lastAuthorityScaledDelta.z, 4),
           ["last_authority_scaled_meters"] = Math.Round(_lastAuthorityScaledMeters, 4),
+          ["authority_to_valheim_distance_ratio"] = Math.Round(_lastAuthorityToValheimDistanceRatio, 4),
+          ["authority_units_to_valheim_meters_scale"] = Math.Round(_lastAuthorityUnitsToValheimMetersScale, 6),
           ["last_direction_error_degrees"] = Math.Round(_lastDirectionErrorDegrees, 4),
           ["last_input_seq_echo"] = _lastInputSeqEcho,
           ["last_authority_utc"] = _lastAuthorityUtc == DateTime.MinValue ? string.Empty : _lastAuthorityUtc.ToString("o"),
@@ -283,6 +338,13 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
       _samples++;
       _inputsQueued++;
       _lastValheimSpeedMetersPerSecond = speedMetersPerSecond;
+      _lastValheimStepDelta = delta;
+      _lastValheimStepMeters = horizontalMeters;
+      _lastInputSeqSent = sequence;
+      _lastInputDirection = direction;
+      _lastInputSpeedPercent = speedPercent;
+      _lastInputActionFlags = actionFlags;
+      _lastInputHeadingDegrees = direction == 255 ? 0.0f : direction / 255.0f * 360.0f;
       UpdateDriftLocked(position, delta);
     }
 
@@ -301,13 +363,22 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
     Vector3 authorityScaled = authorityDelta * scale;
 
     float drift = HorizontalDistance(valheimDelta, authorityScaled);
+    float valheimTotal = HorizontalMagnitude(valheimDelta);
+    float authorityTotal = HorizontalMagnitude(authorityDelta);
+    float authorityScaledTotal = HorizontalMagnitude(authorityScaled);
     _lastDriftMeters = drift;
     _maxDriftMeters = Mathf.Max(_maxDriftMeters, drift);
     _totalDriftMeters += drift;
     _driftSamples++;
-    _lastLumberjacksDeltaUnits = HorizontalMagnitude(authorityDelta);
-    _lastAuthorityScaledMeters = HorizontalMagnitude(authorityScaled);
-    _lastDirectionErrorDegrees = DirectionErrorDegrees(latestValheimDelta, authorityDelta);
+    _lastValheimTotalDelta = valheimDelta;
+    _lastValheimTotalMeters = valheimTotal;
+    _lastAuthorityTotalDelta = authorityDelta;
+    _lastAuthorityScaledDelta = authorityScaled;
+    _lastLumberjacksDeltaUnits = authorityTotal;
+    _lastAuthorityScaledMeters = authorityScaledTotal;
+    _lastAuthorityToValheimDistanceRatio = valheimTotal > 0.001f ? authorityScaledTotal / valheimTotal : 0.0f;
+    _lastAuthorityUnitsToValheimMetersScale = scale;
+    _lastDirectionErrorDegrees = DirectionErrorDegrees(latestValheimDelta, _lastAuthorityStepDelta);
   }
 
   async Task RunReceiveLoop(CancellationTokenSource runCts, TelemetryCoordinator coordinator) {
@@ -415,7 +486,9 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
         _authorityStartSet = true;
       }
 
+      _lastAuthorityStepDelta = _lastAuthorityPositionSet ? position - _latestAuthorityPosition : Vector3.zero;
       _latestAuthorityPosition = position;
+      _lastAuthorityPositionSet = true;
       _selfAuthorityUpdates++;
       _lastInputSeqEcho = inputSeqEcho;
       _lastAuthorityUtc = DateTime.UtcNow;
@@ -480,6 +553,16 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
     float maxValheimSpeed = Mathf.Max(0.1f, PluginConfig.LumberjacksShadowMaxValheimSpeedMetersPerSecond.Value);
     float maxAuthoritySpeed = Mathf.Max(0.1f, PluginConfig.LumberjacksShadowLumberjacksMaxUnitsPerSecond.Value);
     return maxValheimSpeed / maxAuthoritySpeed;
+  }
+
+  static int InputEchoLag(ushort lastSent, int lastEcho) {
+    if (lastEcho <= 0 || lastSent == 0) {
+      return 0;
+    }
+
+    int echo = lastEcho & 0xFFFF;
+    int sent = lastSent;
+    return sent >= echo ? sent - echo : sent + 65536 - echo;
   }
 
   static async Task SendText(ClientWebSocket socket, string text, CancellationToken token) {

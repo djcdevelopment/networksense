@@ -374,6 +374,22 @@ public sealed class TelemetryCoordinator : IDisposable {
     WriteEvent("lumberjacks_shadow", $"Lumberjacks shadow {eventName}: {status}");
   }
 
+  public void RecordLumberjacksPriority(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("priority-load.jsonl", row);
+
+    string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
+    if (string.Equals(eventName, "object", StringComparison.OrdinalIgnoreCase)) {
+      return;
+    }
+
+    string status = values.TryGetValue("status", out object statusValue) ? Convert.ToString(statusValue) : "unknown";
+    WriteEvent("lumberjacks_priority", $"Lumberjacks priority {eventName}: {status}");
+  }
+
   public void StartRavenRequest(string requestKind) {
     if (_ravenState.IsBusy) {
       return;

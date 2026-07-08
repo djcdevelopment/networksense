@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.4.8";
+  public const string PluginVersion = "0.5.0";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -32,11 +32,21 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksBridgeProbe _lumberjacksBridgeProbe;
   LumberjacksProjectionRunner _lumberjacksProjectionRunner;
   LumberjacksShadowAuthorityRunner _lumberjacksShadowAuthorityRunner;
+  LumberjacksPriorityProbeRunner _lumberjacksPriorityProbeRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
   bool _autoRehearsalStarted;
   float _autoRehearsalStartAt = -1.0f;
+
+  enum ShadowRouteMovementKind {
+    Stationary,
+    Circle,
+    AxisNorth,
+    AxisEast,
+    AxisSouth,
+    AxisWest
+  }
 
   void Awake() {
     Instance = this;
@@ -48,6 +58,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksBridgeProbe = new();
     _lumberjacksProjectionRunner = new();
     _lumberjacksShadowAuthorityRunner = new();
+    _lumberjacksPriorityProbeRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -95,6 +106,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _lumberjacksShadowAuthorityRunner?.Update(deltaTime, _coordinator);
     }
 
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksPriorityProbeRunner.Update")) {
+      _lumberjacksPriorityProbeRunner?.Update(deltaTime, _coordinator);
+    }
+
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryStartAutoRehearsal")) {
       TryStartAutoRehearsal();
     }
@@ -116,6 +131,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksProjectionRunner = null;
     _lumberjacksShadowAuthorityRunner?.Dispose();
     _lumberjacksShadowAuthorityRunner = null;
+    _lumberjacksPriorityProbeRunner?.Dispose();
+    _lumberjacksPriorityProbeRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();
@@ -198,12 +215,20 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         LumberjacksProjectionCommand);
     new Terminal.ConsoleCommand(
         "network_sense_lumberjacks_shadow",
-        "compare Lumberjacks authoritative movement against local Valheim motion without corrections: network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]",
+        "compare Lumberjacks authoritative movement against local Valheim motion without corrections: network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id] [input-hz]",
         LumberjacksShadowCommand);
     new Terminal.ConsoleCommand(
         "network_sense_lumberjacks_shadow_route",
-        "run a teleport route with per-stop Lumberjacks shadow movement: network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary] [ws-url] [region-id]",
+        "run a teleport route with per-stop Lumberjacks shadow movement: network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary|axis_north|axis_east|axis_south|axis_west] [ws-url] [region-id] [input-hz]",
         LumberjacksShadowRouteCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_priority_probe",
+        "observe loaded Valheim objects and emit a Lumberjacks-ready priority manifest: network_sense_lumberjacks_priority_probe [start|stop|status] [radius] [scan-interval] [max-objects]",
+        LumberjacksPriorityProbeCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_priority_route",
+        "run a teleport route with per-stop priority/load-order scans: network_sense_lumberjacks_priority_route [teleport-route.tsv] [radius] [scan-interval] [max-objects]",
+        LumberjacksPriorityRouteCommand);
     new Terminal.ConsoleCommand(
         "network_sense_tp",
         "teleport local player for baseline capture: network_sense_tp x z [label] or network_sense_tp x y z [label]",
@@ -365,7 +390,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         string regionId = args.Length >= 4
             ? args[3]
             : PluginConfig.LumberjacksRegionId.Value;
-        string message = _lumberjacksShadowAuthorityRunner.Start(gatewayUrl, regionId, _coordinator);
+        float? inputHzOverride = TryParseOptionalInputHz(args, 4, out float inputHz) ? inputHz : (float?) null;
+        string message = _lumberjacksShadowAuthorityRunner.Start(gatewayUrl, regionId, _coordinator, inputHzOverride);
         MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
         LogInfo(message);
         return message;
@@ -388,7 +414,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       }
 
       default: {
-        string message = "Usage: network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]";
+        string message = "Usage: network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id] [input-hz]";
         MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
         LogWarning(message);
         return false;
@@ -412,6 +438,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     string regionId = args.Length >= 5
         ? args[4]
         : PluginConfig.LumberjacksRegionId.Value;
+    float? inputHzOverride = TryParseOptionalInputHz(args, 5, out float inputHz) ? inputHz : (float?) null;
 
     fileName = NormalizeRouteFileName(fileName);
     profile = string.IsNullOrWhiteSpace(profile) ? "movement_only" : profile.Trim();
@@ -422,8 +449,82 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       return false;
     }
 
-    StartCoroutine(RunLumberjacksShadowRoute(stops, routePath, profile, gatewayUrl, regionId));
-    string message = $"Lumberjacks shadow route started: {stops.Count} stops from {fileName}, profile={profile}.";
+    StartCoroutine(RunLumberjacksShadowRoute(stops, routePath, profile, gatewayUrl, regionId, inputHzOverride));
+    string inputHzText = inputHzOverride.HasValue ? $", inputHz={inputHzOverride.Value:0.##}" : string.Empty;
+    string message = $"Lumberjacks shadow route started: {stops.Count} stops from {fileName}, profile={profile}{inputHzText}.";
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+    LogInfo(message);
+    return message;
+  }
+
+  object LumberjacksPriorityProbeCommand(Terminal.ConsoleEventArgs args) {
+    string action = args.Length >= 2 ? args[1].Trim().ToLowerInvariant() : "start";
+
+    switch (action) {
+      case "start":
+      case "run":
+      case "on": {
+        float? radiusOverride = TryParseOptionalPriorityRadius(args, 2, out float radius) ? radius : (float?) null;
+        float? intervalOverride = TryParseOptionalPriorityInterval(args, 3, out float interval) ? interval : (float?) null;
+        int? maxObjectsOverride = TryParseOptionalPriorityMaxObjects(args, 4, out int maxObjects) ? maxObjects : (int?) null;
+        string message = _lumberjacksPriorityProbeRunner.Start(_coordinator, radiusOverride, intervalOverride, maxObjectsOverride);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "stop":
+      case "off": {
+        string message = _lumberjacksPriorityProbeRunner.Stop(_coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "status": {
+        string message = _lumberjacksPriorityProbeRunner.GetStatus();
+        _coordinator.RecordLumberjacksPriority(_lumberjacksPriorityProbeRunner.BuildStatusRow("status"));
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      default: {
+        string message = "Usage: network_sense_lumberjacks_priority_probe [start|stop|status] [radius] [scan-interval] [max-objects]";
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogWarning(message);
+        return false;
+      }
+    }
+  }
+
+  object LumberjacksPriorityRouteCommand(Terminal.ConsoleEventArgs args) {
+    if (_routeRunning) {
+      string busyMessage = "NetworkSense route is already running.";
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, busyMessage);
+      LogWarning(busyMessage);
+      return false;
+    }
+
+    string fileName = args.Length >= 2 ? args[1] : "teleport-route.tsv";
+    float? radiusOverride = TryParseOptionalPriorityRadius(args, 2, out float radius) ? radius : (float?) null;
+    float? intervalOverride = TryParseOptionalPriorityInterval(args, 3, out float interval) ? interval : (float?) null;
+    int? maxObjectsOverride = TryParseOptionalPriorityMaxObjects(args, 4, out int maxObjects) ? maxObjects : (int?) null;
+
+    fileName = NormalizeRouteFileName(fileName);
+    string routePath = Path.Combine(Paths.ConfigPath, "comfy-network-sense", fileName);
+    if (!TryLoadRouteStops(routePath, out List<RouteStop> stops, out string error)) {
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, error);
+      LogWarning(error);
+      return false;
+    }
+
+    StartCoroutine(RunLumberjacksPriorityRoute(stops, routePath, radiusOverride, intervalOverride, maxObjectsOverride));
+    string routeRadiusText = radiusOverride.HasValue
+        ? radiusOverride.Value.ToString("0.#", CultureInfo.InvariantCulture) + "m"
+        : "config";
+    string message =
+        $"Lumberjacks priority route started: {stops.Count} stops from {fileName}, radius={routeRadiusText}.";
     MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
     LogInfo(message);
     return message;
@@ -865,17 +966,18 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       string routePath,
       string profile,
       string gatewayUrl,
-      string regionId) {
+      string regionId,
+      float? inputHzOverride) {
     _routeRunning = true;
     bool aborted = false;
     string activeStopId = string.Empty;
-    bool moveDuringBenchmark =
-        string.Equals(profile, "movement_only", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(profile, "shadow_movement", StringComparison.OrdinalIgnoreCase);
+    ShadowRouteMovementKind movementKind = ResolveShadowRouteMovementKind(profile);
+    bool moveDuringBenchmark = movementKind != ShadowRouteMovementKind.Stationary;
 
     NetworkSensePerfProbe.SetRouteState("shadow_route", "", "start");
+    string inputHzText = inputHzOverride.HasValue ? $" inputHz={inputHzOverride.Value:0.##}" : string.Empty;
     _coordinator.RecordDevMarker(
-        $"lumberjacks_shadow_route {profile} start stops={stops.Count} file={Path.GetFileName(routePath)}");
+        $"lumberjacks_shadow_route {profile} start stops={stops.Count} file={Path.GetFileName(routePath)} movement={movementKind}{inputHzText}");
 
     try {
       foreach (RouteStop stop in stops) {
@@ -922,7 +1024,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
         try {
           _lumberjacksShadowAuthorityRunner.SetRouteContext("shadow_route", stop.Id, "start");
-          string startMessage = _lumberjacksShadowAuthorityRunner.Start(gatewayUrl, regionId, _coordinator);
+          string startMessage = _lumberjacksShadowAuthorityRunner.Start(gatewayUrl, regionId, _coordinator, inputHzOverride);
           shadowStarted = _lumberjacksShadowAuthorityRunner.IsRunning;
           _lumberjacksShadowAuthorityRunner.SetRouteContext("shadow_route", stop.Id, "connect");
           _coordinator.RecordLumberjacksShadow(_lumberjacksShadowAuthorityRunner.BuildStatusRow("route_start"));
@@ -961,7 +1063,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
             if (moveDuringBenchmark) {
               if (TryGetUsableLocalPlayer(out Player currentPlayer)) {
-                StepRouteMovementPattern(currentPlayer, origin, Time.realtimeSinceStartup - benchmarkStartedAt);
+                StepRouteMovementPattern(currentPlayer, origin, Time.realtimeSinceStartup - benchmarkStartedAt, movementKind);
               } else {
                 NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "movement_wait_local_player");
               }
@@ -1018,6 +1120,142 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
   }
 
+  IEnumerator RunLumberjacksPriorityRoute(
+      List<RouteStop> stops,
+      string routePath,
+      float? radiusOverride,
+      float? intervalOverride,
+      int? maxObjectsOverride) {
+    _routeRunning = true;
+    bool aborted = false;
+    string activeStopId = string.Empty;
+
+    NetworkSensePerfProbe.SetRouteState("priority_route", "", "start");
+    string radiusText = radiusOverride.HasValue ? $" radius={radiusOverride.Value:0.#}m" : string.Empty;
+    string intervalText = intervalOverride.HasValue ? $" interval={intervalOverride.Value:0.#}s" : string.Empty;
+    string maxText = maxObjectsOverride.HasValue ? $" maxObjects={maxObjectsOverride.Value}" : string.Empty;
+    _coordinator.RecordDevMarker(
+        $"lumberjacks_priority_route start stops={stops.Count} file={Path.GetFileName(routePath)}{radiusText}{intervalText}{maxText}");
+
+    try {
+      foreach (RouteStop stop in stops) {
+        activeStopId = stop.Id;
+        if (!TryGetUsableLocalPlayer(out Player player)) {
+          NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "abort_missing_player");
+          _coordinator.RecordDevMarker($"lumberjacks_priority_route abort {stop.Id} missing_player");
+          aborted = true;
+          break;
+        }
+
+        NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "resolve_target");
+        Vector3 target;
+        using (NetworkSensePerfProbe.Measure("RunLumberjacksPriorityRoute.ResolveRouteTarget")) {
+          target = ResolveRouteTarget(stop);
+        }
+
+        _coordinator.RecordDevMarker($"{stop.Id} priority_route_start");
+
+        NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "teleport");
+        bool moved;
+        using (NetworkSensePerfProbe.Measure("RunLumberjacksPriorityRoute.TryTeleport")) {
+          moved = TryTeleport(player, target);
+        }
+        _coordinator.RecordDevMarker($"{stop.Id} priority_route_teleport moved={moved} target={FormatVector(target)}");
+
+        if (stop.SettleSeconds > 0.0f) {
+          NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "settle");
+          yield return new WaitForSeconds(stop.SettleSeconds);
+        }
+
+        NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "wait_local_player");
+        yield return WaitForUsableLocalPlayer("priority_route", stop.Id, "wait_local_player", 45.0f);
+        if (!TryGetUsableLocalPlayer(out _)) {
+          NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "abort_local_player_not_ready");
+          _coordinator.RecordDevMarker($"lumberjacks_priority_route abort {stop.Id} local_player_not_ready_after_teleport");
+          aborted = true;
+          break;
+        }
+
+        bool probeStarted = false;
+        bool durationOverridden = false;
+        float previousDuration = PluginConfig.BenchmarkDurationSeconds.Value;
+
+        try {
+          _lumberjacksPriorityProbeRunner.SetRouteContext("priority_route", stop.Id, "start");
+          string startMessage =
+              _lumberjacksPriorityProbeRunner.Start(_coordinator, radiusOverride, intervalOverride, maxObjectsOverride);
+          probeStarted = _lumberjacksPriorityProbeRunner.IsRunning;
+          _lumberjacksPriorityProbeRunner.SetRouteContext("priority_route", stop.Id, "scan_window");
+          _coordinator.RecordLumberjacksPriority(_lumberjacksPriorityProbeRunner.BuildStatusRow("route_start"));
+          LogInfo(startMessage);
+          _coordinator.RecordDevMarker($"{stop.Id} priority_probe_start {startMessage}");
+
+          float benchmarkSeconds = Mathf.Max(1.0f, stop.BenchmarkSeconds);
+          PluginConfig.BenchmarkDurationSeconds.Value = benchmarkSeconds;
+          durationOverridden = true;
+
+          NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "benchmark_start");
+          if (!_coordinator.BenchmarkRunning) {
+            _coordinator.StartBenchmark();
+          }
+
+          float benchmarkStartedAt = Time.realtimeSinceStartup;
+          float maxWaitSeconds = benchmarkSeconds + 15.0f;
+          NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "scan_window");
+          while (_coordinator.BenchmarkRunning && Time.realtimeSinceStartup - benchmarkStartedAt < maxWaitSeconds) {
+            _lumberjacksPriorityProbeRunner.SetRouteContext("priority_route", stop.Id, "scan_window");
+            yield return null;
+          }
+
+          if (_coordinator.BenchmarkRunning) {
+            NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "benchmark_timeout_cancel");
+            _coordinator.CancelBenchmark();
+            _coordinator.RecordDevMarker($"{stop.Id} priority_route_benchmark_cancelled_after_timeout");
+          }
+
+          _coordinator.ConsumeLatestBenchmarkResult();
+        } finally {
+          if (durationOverridden) {
+            PluginConfig.BenchmarkDurationSeconds.Value = previousDuration;
+          }
+
+          if (probeStarted && _lumberjacksPriorityProbeRunner.IsRunning) {
+            NetworkSensePerfProbe.SetRouteState("priority_route", stop.Id, "priority_stop");
+            _lumberjacksPriorityProbeRunner.SetRouteContext("priority_route", stop.Id, aborted ? "route_abort" : "route_stop");
+            _coordinator.RecordLumberjacksPriority(_lumberjacksPriorityProbeRunner.BuildStatusRow(aborted ? "route_abort" : "route_stop"));
+            string stopMessage = _lumberjacksPriorityProbeRunner.Stop(_coordinator);
+            LogInfo(stopMessage);
+            _coordinator.RecordDevMarker($"{stop.Id} priority_probe_end {stopMessage}");
+          }
+        }
+
+        if (aborted) {
+          break;
+        }
+
+        _coordinator.RecordDevMarker($"{stop.Id} priority_route_end");
+        yield return new WaitForSeconds(0.5f);
+      }
+    } finally {
+      if (_lumberjacksPriorityProbeRunner.IsRunning) {
+        _lumberjacksPriorityProbeRunner.SetRouteContext("priority_route", activeStopId, "route_abort");
+        _coordinator.RecordLumberjacksPriority(_lumberjacksPriorityProbeRunner.BuildStatusRow("route_abort"));
+        string stopMessage = _lumberjacksPriorityProbeRunner.Stop(_coordinator);
+        LogInfo(stopMessage);
+      }
+
+      NetworkSensePerfProbe.SetRouteState("priority_route", "", aborted ? "abort" : "end");
+      _coordinator.RecordDevMarker(aborted ? "lumberjacks_priority_route abort" : "lumberjacks_priority_route end");
+
+      NetworkSensePerfProbe.SetRouteState("priority_route", "", "export");
+      string exportMessage = _coordinator.ExportSession();
+      LogInfo(exportMessage);
+
+      NetworkSensePerfProbe.SetRouteState("idle");
+      _routeRunning = false;
+    }
+  }
+
   static IEnumerator WaitForUsableLocalPlayer(string routeState, string stopId, string phase, float timeoutSeconds) {
     float startedAt = Time.realtimeSinceStartup;
     float stableSeconds = 0.0f;
@@ -1063,13 +1301,15 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     return new Vector3(stop.X, y, stop.Z);
   }
 
-  static void StepRouteMovementPattern(Player player, Vector3 origin, float elapsedSeconds) {
+  static void StepRouteMovementPattern(
+      Player player,
+      Vector3 origin,
+      float elapsedSeconds,
+      ShadowRouteMovementKind movementKind) {
     using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.StepRouteMovementPattern");
 
     try {
-      const float radius = 4.0f;
-      float angle = elapsedSeconds * 1.5f;
-      Vector3 offset = new(Mathf.Cos(angle) * radius, 0.0f, Mathf.Sin(angle) * radius);
+      Vector3 offset = ResolveRouteMovementOffset(elapsedSeconds, movementKind);
       Vector3 next = origin + offset;
       if (TryResolveGroundHeight(next.x, next.z, out float ground)) {
         next.y = ground + 1.0f;
@@ -1082,8 +1322,136 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
   }
 
+  static Vector3 ResolveRouteMovementOffset(float elapsedSeconds, ShadowRouteMovementKind movementKind) {
+    switch (movementKind) {
+      case ShadowRouteMovementKind.AxisNorth:
+        return new Vector3(0.0f, 0.0f, TriangleWave(elapsedSeconds, radius: 8.0f, speedMetersPerSecond: 4.0f));
+      case ShadowRouteMovementKind.AxisEast:
+        return new Vector3(TriangleWave(elapsedSeconds, radius: 8.0f, speedMetersPerSecond: 4.0f), 0.0f, 0.0f);
+      case ShadowRouteMovementKind.AxisSouth:
+        return new Vector3(0.0f, 0.0f, -TriangleWave(elapsedSeconds, radius: 8.0f, speedMetersPerSecond: 4.0f));
+      case ShadowRouteMovementKind.AxisWest:
+        return new Vector3(-TriangleWave(elapsedSeconds, radius: 8.0f, speedMetersPerSecond: 4.0f), 0.0f, 0.0f);
+      case ShadowRouteMovementKind.Circle:
+      default:
+        const float radius = 4.0f;
+        float angle = elapsedSeconds * 1.5f;
+        return new Vector3(Mathf.Cos(angle) * radius, 0.0f, Mathf.Sin(angle) * radius);
+    }
+  }
+
+  static float TriangleWave(float elapsedSeconds, float radius, float speedMetersPerSecond) {
+    float speed = Mathf.Max(0.1f, speedMetersPerSecond);
+    float segmentSeconds = Mathf.Max(0.1f, radius / speed);
+    float periodSeconds = segmentSeconds * 4.0f;
+    float phase = elapsedSeconds % periodSeconds;
+
+    if (phase < segmentSeconds) {
+      return phase * speed;
+    }
+
+    if (phase < segmentSeconds * 3.0f) {
+      return radius - (phase - segmentSeconds) * speed;
+    }
+
+    return -radius + (phase - segmentSeconds * 3.0f) * speed;
+  }
+
+  static ShadowRouteMovementKind ResolveShadowRouteMovementKind(string profile) {
+    string normalized = (profile ?? string.Empty).Trim().ToLowerInvariant();
+    switch (normalized) {
+      case "stationary":
+      case "static":
+      case "idle":
+        return ShadowRouteMovementKind.Stationary;
+      case "axis_north":
+      case "north":
+      case "cardinal_north":
+      case "line_north":
+        return ShadowRouteMovementKind.AxisNorth;
+      case "axis_east":
+      case "east":
+      case "cardinal_east":
+      case "line_east":
+        return ShadowRouteMovementKind.AxisEast;
+      case "axis_south":
+      case "south":
+      case "cardinal_south":
+      case "line_south":
+        return ShadowRouteMovementKind.AxisSouth;
+      case "axis_west":
+      case "west":
+      case "cardinal_west":
+      case "line_west":
+        return ShadowRouteMovementKind.AxisWest;
+      case "movement_only":
+      case "shadow_movement":
+      case "circle":
+      case "circle_movement":
+        return ShadowRouteMovementKind.Circle;
+      default:
+        return ShadowRouteMovementKind.Stationary;
+    }
+  }
+
   static bool TryParseRouteFloat(string value, out float result) {
     return float.TryParse((value ?? string.Empty).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+  }
+
+  static bool TryParseOptionalInputHz(Terminal.ConsoleEventArgs args, int index, out float inputHz) {
+    inputHz = 0.0f;
+    if (args == null || args.Length <= index) {
+      return false;
+    }
+
+    if (!float.TryParse(args[index], NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed)) {
+      return false;
+    }
+
+    inputHz = Mathf.Clamp(parsed, 1.0f, 60.0f);
+    return true;
+  }
+
+  static bool TryParseOptionalPriorityRadius(Terminal.ConsoleEventArgs args, int index, out float radius) {
+    radius = 0.0f;
+    if (args == null || args.Length <= index) {
+      return false;
+    }
+
+    if (!float.TryParse(args[index], NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed)) {
+      return false;
+    }
+
+    radius = Mathf.Clamp(parsed, 8.0f, 256.0f);
+    return true;
+  }
+
+  static bool TryParseOptionalPriorityInterval(Terminal.ConsoleEventArgs args, int index, out float intervalSeconds) {
+    intervalSeconds = 0.0f;
+    if (args == null || args.Length <= index) {
+      return false;
+    }
+
+    if (!float.TryParse(args[index], NumberStyles.Float, CultureInfo.InvariantCulture, out float parsed)) {
+      return false;
+    }
+
+    intervalSeconds = Mathf.Clamp(parsed, 0.5f, 30.0f);
+    return true;
+  }
+
+  static bool TryParseOptionalPriorityMaxObjects(Terminal.ConsoleEventArgs args, int index, out int maxObjects) {
+    maxObjects = 0;
+    if (args == null || args.Length <= index) {
+      return false;
+    }
+
+    if (!int.TryParse(args[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)) {
+      return false;
+    }
+
+    maxObjects = Mathf.Clamp(parsed, 1, 512);
+    return true;
   }
 
   static void FlushMainThreadMessages() {

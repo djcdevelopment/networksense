@@ -60,6 +60,9 @@ public static class PluginConfig {
   public static ConfigEntry<float> LumberjacksShadowMaxValheimSpeedMetersPerSecond { get; private set; }
   public static ConfigEntry<float> LumberjacksShadowLumberjacksMaxUnitsPerSecond { get; private set; }
   public static ConfigEntry<float> LumberjacksShadowMinMoveMetersPerSecond { get; private set; }
+  public static ConfigEntry<float> LumberjacksPriorityProbeRadiusMeters { get; private set; }
+  public static ConfigEntry<float> LumberjacksPriorityProbeIntervalSeconds { get; private set; }
+  public static ConfigEntry<int> LumberjacksPriorityProbeMaxObjectsPerSample { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -481,7 +484,7 @@ public static class PluginConfig {
         config.Bind(
             "Lumberjacks",
             "lumberjacksShadowInputHz",
-            10.0f,
+            20.0f,
             "How often network_sense_lumberjacks_shadow samples Valheim local-player motion and sends derived player_input.");
 
     LumberjacksShadowLogIntervalSeconds =
@@ -511,6 +514,27 @@ public static class PluginConfig {
             "lumberjacksShadowMinMoveMetersPerSecond",
             0.03f,
             "Minimum sampled Valheim horizontal speed in meters per second before shadow authority sends moving input instead of idle.");
+
+    LumberjacksPriorityProbeRadiusMeters =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksPriorityProbeRadiusMeters",
+            96.0f,
+            "Radius used by network_sense_lumberjacks_priority_probe and priority_route when classifying loaded local Valheim objects.");
+
+    LumberjacksPriorityProbeIntervalSeconds =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksPriorityProbeIntervalSeconds",
+            5.0f,
+            "Seconds between priority/load-order scans while network_sense_lumberjacks_priority_probe is running.");
+
+    LumberjacksPriorityProbeMaxObjectsPerSample =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksPriorityProbeMaxObjectsPerSample",
+            96,
+            "Maximum per-object priority rows emitted per scan. Summary rows still include full scanned counts.");
 
     WriteTelemetryLogs =
         config.Bind(

@@ -18,8 +18,10 @@ In-game Valheim console commands:
 - `network_sense_rehearsal [teleport-route.tsv] [profile]`: reload config, check MCP, mark the rehearsal, run the route, and export the session.
 - `network_sense_lumberjacks_probe [ws-url] [region-id] [input-count]`: prove the live Valheim plugin can speak the Lumberjacks Gateway side-channel protocol.
 - `network_sense_lumberjacks_projection [start|stop|status] [ws-url] [region-id]`: render local-only proxy markers from Lumberjacks world rows.
-- `network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]`: compare Lumberjacks authoritative self updates against Valheim local-player movement without applying corrections.
-- `network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary] [ws-url] [region-id]`: run the teleport route and collect per-stop Lumberjacks shadow drift rows.
+- `network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id] [input-hz]`: compare Lumberjacks authoritative self updates against Valheim local-player movement without applying corrections.
+- `network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary|axis_north|axis_east|axis_south|axis_west] [ws-url] [region-id] [input-hz]`: run the teleport route and collect per-stop Lumberjacks shadow drift rows. Use `20` for `input-hz` to match Lumberjacks' simulation tick.
+- `network_sense_lumberjacks_priority_probe [start|stop|status] [radius] [scan-interval] [max-objects]`: classify loaded local Valheim objects into a Lumberjacks-ready priority manifest and write `priority-load.jsonl`.
+- `network_sense_lumberjacks_priority_route [teleport-route.tsv] [radius] [scan-interval] [max-objects]`: teleport through the route and collect per-stop priority/load-order manifest rows.
 - `network_sense_reload_config`: reload BepInEx config.
 - `network_sense_export_session`: write a compact dev session export JSON.
 - `network_sense_mcp_status`: check whether the local Comfy MCP gateway is reachable.
@@ -43,6 +45,12 @@ Portal fix config keys under `[PortalFix]`:
 Spawner fix config keys under `[SpawnerFix]`:
 
 - `spawnerConnectionCacheEnabled`: when `true`, replaces Valheim's spawner connection pass with a cached hash lookup.
+
+Priority probe config keys under `[Lumberjacks]`:
+
+- `lumberjacksPriorityProbeRadiusMeters`: scan radius, default `96`.
+- `lumberjacksPriorityProbeIntervalSeconds`: seconds between scans, default `5`.
+- `lumberjacksPriorityProbeMaxObjectsPerSample`: maximum per-object rows per sample, default `96`; summary rows still include full scanned counts.
 
 Shortcuts are unbound by default to avoid collisions with other local Valheim mods.
 

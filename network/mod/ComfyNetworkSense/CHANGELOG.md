@@ -1,5 +1,19 @@
 ## Changelog
 
+### 0.5.0
+
+- Added `network_sense_lumberjacks_priority_probe [start|stop|status] [radius] [scan-interval] [max-objects]`, a local priority/load-order manifest probe for loaded Valheim objects.
+- Added `network_sense_lumberjacks_priority_route [teleport-route.tsv] [radius] [scan-interval] [max-objects]`, which reuses the Era16 teleport route and writes per-stop priority rows to `priority-load.jsonl`.
+- Added `[Lumberjacks]` config defaults for priority probe radius, scan interval, and max per-object rows per sample.
+- The priority probe is observation-only: it classifies loaded local pieces into player-critical, portal, structural, interactive, storage/crafting, support, and far decorative tiers without writing ZDOs or replacing vanilla replication.
+
+### 0.4.9
+
+- Added optional shadow input-rate overrides to `network_sense_lumberjacks_shadow` and `network_sense_lumberjacks_shadow_route`, so route runs can match Lumberjacks' 20 Hz simulation tick with a final `20` argument.
+- Added `axis_north`, `axis_east`, `axis_south`, and `axis_west` shadow-route movement profiles for direction/scale diagnostics.
+- Expanded `lumberjacks-shadow.jsonl` rows with input heading, speed percent, input echo lag, Valheim delta/total vectors, authority delta/scaled vectors, and authority-to-Valheim distance ratio.
+- Changed the fresh-config default `lumberjacksShadowInputHz` from 10 Hz to 20 Hz.
+
 ### 0.4.8
 
 - Hardened `network_sense_lumberjacks_shadow_route` across Valheim teleport/load transitions by waiting for a stable local player and cleaning up the shadow sidecar on route abort.

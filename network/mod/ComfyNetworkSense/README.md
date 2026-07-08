@@ -42,6 +42,9 @@ gameplay policy.
   cell-by-cell from a gateway (teleport, load-time, benchmark, report).
 - Host/server-only cached portal and spawner connection loops for massive-save
   hitch isolation.
+- Lumberjacks priority/load-order probe: classifies loaded local Valheim objects
+  into priority tiers and writes a Lumberjacks-ready manifest without changing
+  ZDOs or vanilla replication.
 
 ## Architecture Overview
 
@@ -189,7 +192,8 @@ network_sense_benchmark
 network_sense_tp 3250 2250 extreme
 network_sense_route_run teleport-route.tsv
 network_sense_rehearsal teleport-route.tsv host_full
-network_sense_lumberjacks_shadow_route teleport-route.tsv movement_only ws://127.0.0.1:4000 region-spawn
+network_sense_lumberjacks_shadow_route teleport-route.tsv movement_only ws://127.0.0.1:4000 region-spawn 20
+network_sense_lumberjacks_priority_route teleport-route.tsv 96 5 96
 network_sense_raven
 network_sense_mcp_status
 ```
@@ -230,8 +234,8 @@ network_sense_route_run [teleport-route.tsv]
 network_sense_rehearsal [teleport-route.tsv] [profile]
 network_sense_lumberjacks_probe [ws-url] [region-id] [input-count]
 network_sense_lumberjacks_projection [start|stop|status] [ws-url] [region-id]
-network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]
-network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary] [ws-url] [region-id]
+network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id] [input-hz]
+network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary|axis_north|axis_east|axis_south|axis_west] [ws-url] [region-id] [input-hz]
 network_sense_status
 network_sense_panel debug|signals|raven
 network_sense_debug
