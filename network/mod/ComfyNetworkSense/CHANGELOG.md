@@ -1,5 +1,52 @@
 ## Changelog
 
+### 0.4.8
+
+- Hardened `network_sense_lumberjacks_shadow_route` across Valheim teleport/load transitions by waiting for a stable local player and cleaning up the shadow sidecar on route abort.
+- Added `[PortalFix] portalConnectionCacheEnabled`, a host/server-only cached portal connection loop based on the local ComfyMods `BetterServerPortals` approach, to avoid full-scan portal matching stalls on massive saves.
+- Added `[SpawnerFix] spawnerConnectionCacheEnabled`, a cached spawner connection pass based on the local ComfyMods `Atlas` O(n) approach for large spawned-ZDO worlds.
+
+### 0.4.7
+
+- Added `network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary] [ws-url] [region-id]`, which reuses the existing teleport route file and records one Lumberjacks shadow authority window per route stop.
+- Route shadow rows are tagged with `run_label`, `route_stop_id`, and `route_phase` so FieldLab packets can build per-density drift summaries.
+
+### 0.4.6
+
+- Added `network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]`, a shadow movement authority probe.
+- The shadow probe samples local Valheim player movement, converts observed motion into Lumberjacks `player_input`, receives authoritative self `entity_update` rows, and logs drift metrics to `lumberjacks-shadow.jsonl`.
+- The probe is measurement-only: it does not apply Valheim transform corrections, does not add `ZNetView`, and does not write ZDOs.
+
+### 0.4.5
+
+- Added `network_sense_lumberjacks_projection [start|stop|status] [ws-url] [region-id]`, a local-only visual projection spike for the Lumberjacks Gateway bridge.
+- Projection keeps a JSON WebSocket open, joins a Lumberjacks region, optionally sends lightweight `player_input`, parses `world_snapshot` / `entity_update`, and renders proxy markers as plain Unity primitives anchored in front of the local Valheim player.
+- Projection markers deliberately do not use `ZNetView`, do not write ZDOs, and are cleared on stop/shutdown. Status rows are written to `lumberjacks-projection.jsonl`.
+
+### 0.4.4
+
+- Added `network_sense_lumberjacks_probe [ws-url] [region-id] [input-count]`, a narrow feasibility probe that connects from the live Valheim plugin process to the Lumberjacks Gateway, joins a region, sends JSON `player_input` messages, and writes `lumberjacks-bridge-probes.jsonl`.
+- Added `[Lumberjacks]` config defaults for the Gateway URL, probe region, and input count. This proves side-channel protocol reachability only; it does not replace Valheim ZDO replication, physics authority, or Steam/PlayFab sockets.
+
+### 0.4.3
+
+- Disabled recurring `ZDOMan.NrOfObjects()` polling by default on server heartbeat rows. On Era16-scale saves this showed up as heartbeat gaps and likely recurring main-thread stalls.
+- Added `serverHeartbeatWorldZdoCountEnabled` / `serverHeartbeatWorldZdoCountIntervalSeconds` so world ZDO counts are explicit opt-in and cached when needed.
+- Disabled severe-hitch world ZDO counting by default via `worldZdoCountOnSevereHitchEnabled` so the perf probe does not amplify the hitch it is measuring.
+
+### 0.4.2
+
+- Added a low-overhead perf probe for the Era16 hitch investigation. It writes `perf-hitches.jsonl`, `perf-sections.jsonl`, `perf-engine-log.jsonl`, and manual `perf-markers.jsonl` rows under `BepInEx/config/comfy-network-sense`.
+- Added configurable hitch thresholds, section warning thresholds, engine log sampling, and a scene-scan isolation switch in the BepInEx config.
+- Tagged teleport route and matrix check-in phases so hitch rows identify whether the client was resolving ground, teleporting, settling, benchmarking, waiting, exporting, or reporting.
+- Added telemetry-writer counters and `network_sense_perf_status` / `network_sense_perf_mark <label>` console commands for live run sanity checks.
+
+### 0.4.1
+
+- Moved JSONL appends off the Unity main thread so telemetry writes cannot stall dense-world load or benchmark frames.
+- Replaced per-sample global `FindObjectsByType` entity/build scans with throttled local physics-radius scans, reducing main-thread pressure during teleport rehearsals and connected server pulses.
+- Avoided per-frame snapshot allocation while a teleport route waits for benchmark completion.
+
 ### 0.4.0
 
 - Added a matrix check-in poller for swarm clients: when enabled it continuously checks out benchmark cells from a gateway (`POST /valheim/matrix/checkout`), teleports the local player to each cell, measures load-time, runs a NetworkSense benchmark for the cell's `benchmark_seconds` honoring its `event_profile`, and reports the result (`POST /valheim/matrix/report`). Backs off `matrixPollIntervalSeconds` on idle/done/errors and loops.

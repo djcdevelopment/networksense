@@ -89,21 +89,33 @@ public sealed class MatrixCheckinRunner {
   IEnumerator ExecuteCell(MatrixCell cell) {
     ComfyNetworkSense.LogInfo(
         $"Matrix cell assigned: {cell.CellId} profile={cell.EventProfile} target=({cell.X:0.##},{cell.Z:0.##}) seconds={cell.BenchmarkSeconds:0.##}.");
+    NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "start");
     _coordinator.RecordDevMarker($"matrix_cell start {cell.CellId} profile={cell.EventProfile}");
 
     Player player = Player.m_localPlayer;
     if (player == null) {
+      NetworkSensePerfProbe.SetRouteState("idle");
       ComfyNetworkSense.LogWarning($"Matrix cell {cell.CellId} aborted before teleport: no local player.");
       yield break;
     }
 
     // The cell's x/z already include the observer offset — teleport straight there.
-    Vector3 target = ResolveTarget(cell);
-    bool moved = TryTeleport(player, target);
+    NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "resolve_target");
+    Vector3 target;
+    using (NetworkSensePerfProbe.Measure("MatrixCheckinRunner.ResolveTarget")) {
+      target = ResolveTarget(cell);
+    }
+
+    NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "teleport");
+    bool moved;
+    using (NetworkSensePerfProbe.Measure("MatrixCheckinRunner.TryTeleport")) {
+      moved = TryTeleport(player, target);
+    }
     _coordinator.RecordDevMarker($"matrix_cell teleport {cell.CellId} moved={moved} target={FormatVector(target)}");
 
     // Measure load-time: from teleport until the destination zone reports loaded (a pragmatic
     // proxy for "first authoritative update at the destination"). Capped so we never hang here.
+    NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "zone_load_wait");
     float loadTimeMs = -1.0f;
     Vector2i zone = ZoneSystem.instance != null ? ZoneSystem.GetZone(target) : default;
     float loadStart = Time.realtimeSinceStartup;
@@ -122,6 +134,7 @@ public sealed class MatrixCheckinRunner {
     }
 
     // Settle briefly so the client stabilizes before we start measuring the benchmark window.
+    NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "settle");
     yield return new WaitForSeconds(1.0f);
 
     // Honor the event profile. movement_only walks the player in a small pattern during the
@@ -140,12 +153,14 @@ public sealed class MatrixCheckinRunner {
 
     BenchmarkResult benchmarkResult = null;
     try {
+      NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "benchmark_start");
       _coordinator.StartBenchmark();
 
       float benchStart = Time.realtimeSinceStartup;
       Vector3 origin = ((Component) player).transform.position;
       float maxWaitSeconds = benchmarkSeconds + 15.0f;
 
+      NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "benchmark_window");
       while (_coordinator.BenchmarkRunning && Time.realtimeSinceStartup - benchStart < maxWaitSeconds) {
         if (moveDuringBenchmark) {
           StepMovementPattern(player, origin, Time.realtimeSinceStartup - benchStart);
@@ -154,6 +169,7 @@ public sealed class MatrixCheckinRunner {
       }
 
       if (_coordinator.BenchmarkRunning) {
+        NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "benchmark_timeout_cancel");
         _coordinator.CancelBenchmark();
         _coordinator.RecordDevMarker($"matrix_cell {cell.CellId} benchmark_cancelled_after_timeout");
       }
@@ -163,9 +179,13 @@ public sealed class MatrixCheckinRunner {
       PluginConfig.BenchmarkDurationSeconds.Value = previousDuration;
     }
 
-    Dictionary<string, object> metrics = BuildMetrics(cell, loadTimeMs, moveDuringBenchmark, benchmarkResult);
+    Dictionary<string, object> metrics;
+    using (NetworkSensePerfProbe.Measure("MatrixCheckinRunner.BuildMetrics")) {
+      metrics = BuildMetrics(cell, loadTimeMs, moveDuringBenchmark, benchmarkResult);
+    }
 
     ReportResponse report = null;
+    NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "report");
     yield return RunHttp(
         () => Report(ResolveGatewayUrl(), ResolveClientId(), cell.CellId, metrics),
         result => report = result);
@@ -176,7 +196,9 @@ public sealed class MatrixCheckinRunner {
       ComfyNetworkSense.LogInfo($"Matrix cell reported: {cell.CellId} (load={loadTimeMs:0}ms).");
     }
 
+    NetworkSensePerfProbe.SetRouteState("matrix", cell.CellId, "end");
     _coordinator.RecordDevMarker($"matrix_cell end {cell.CellId}");
+    NetworkSensePerfProbe.SetRouteState("idle");
   }
 
   Dictionary<string, object> BuildMetrics(
@@ -217,6 +239,8 @@ public sealed class MatrixCheckinRunner {
 
   // Walk the player in a small square pattern around the teleport origin during movement_only cells.
   static void StepMovementPattern(Player player, Vector3 origin, float elapsedSeconds) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("MatrixCheckinRunner.StepMovementPattern");
+
     try {
       const float radius = 4.0f;
       float angle = elapsedSeconds * 1.5f;
@@ -253,6 +277,8 @@ public sealed class MatrixCheckinRunner {
   }
 
   static bool TryResolveGroundHeight(float x, float z, out float height) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("MatrixCheckinRunner.TryResolveGroundHeight");
+
     height = 0.0f;
     try {
       if (ZoneSystem.instance == null) {
@@ -266,6 +292,8 @@ public sealed class MatrixCheckinRunner {
   }
 
   static bool TryTeleport(Player player, Vector3 target) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("MatrixCheckinRunner.TryTeleportInternal");
+
     try {
       System.Reflection.MethodInfo method = null;
       foreach (System.Reflection.MethodInfo candidate in player.GetType().GetMethods(

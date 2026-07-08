@@ -10,9 +10,24 @@ public static class PluginConfig {
   public static ConfigEntry<bool> WriteTelemetryLogs { get; private set; }
   public static ConfigEntry<float> LiveSampleIntervalSeconds { get; private set; }
   public static ConfigEntry<float> ServerPulseIntervalSeconds { get; private set; }
+  public static ConfigEntry<bool> ServerHeartbeatWorldZdoCountEnabled { get; private set; }
+  public static ConfigEntry<float> ServerHeartbeatWorldZdoCountIntervalSeconds { get; private set; }
   public static ConfigEntry<float> NearbyRadiusMeters { get; private set; }
   public static ConfigEntry<float> BuildScanRadiusMeters { get; private set; }
+  public static ConfigEntry<bool> SceneScanEnabled { get; private set; }
+  public static ConfigEntry<float> SceneScanIntervalSeconds { get; private set; }
   public static ConfigEntry<float> BenchmarkDurationSeconds { get; private set; }
+  public static ConfigEntry<bool> PerfProbeEnabled { get; private set; }
+  public static ConfigEntry<float> PerfHitchThresholdMs { get; private set; }
+  public static ConfigEntry<float> PerfSevereHitchThresholdMs { get; private set; }
+  public static ConfigEntry<float> PerfSectionWarnThresholdMs { get; private set; }
+  public static ConfigEntry<bool> PerfEngineLogProbeEnabled { get; private set; }
+  public static ConfigEntry<bool> PerfWorldZdoCountOnSevereHitchEnabled { get; private set; }
+  public static ConfigEntry<float> PerfSampleIntervalSeconds { get; private set; }
+  public static ConfigEntry<bool> PortalConnectionCacheEnabled { get; private set; }
+  public static ConfigEntry<float> PortalConnectionCacheIntervalSeconds { get; private set; }
+  public static ConfigEntry<float> PortalConnectionCacheLogIntervalSeconds { get; private set; }
+  public static ConfigEntry<bool> SpawnerConnectionCacheEnabled { get; private set; }
   public static ConfigEntry<bool> AutoRehearsalEnabled { get; private set; }
   public static ConfigEntry<string> AutoRehearsalRouteFile { get; private set; }
   public static ConfigEntry<string> AutoRehearsalProfile { get; private set; }
@@ -31,6 +46,20 @@ public static class PluginConfig {
   public static ConfigEntry<string> MatrixGatewayUrl { get; private set; }
   public static ConfigEntry<float> MatrixPollIntervalSeconds { get; private set; }
   public static ConfigEntry<string> MatrixClientId { get; private set; }
+  public static ConfigEntry<string> LumberjacksGatewayUrl { get; private set; }
+  public static ConfigEntry<string> LumberjacksRegionId { get; private set; }
+  public static ConfigEntry<int> LumberjacksProbeInputCount { get; private set; }
+  public static ConfigEntry<float> LumberjacksProjectionInputHz { get; private set; }
+  public static ConfigEntry<float> LumberjacksProjectionScale { get; private set; }
+  public static ConfigEntry<float> LumberjacksProjectionAnchorMeters { get; private set; }
+  public static ConfigEntry<int> LumberjacksProjectionMaxEntities { get; private set; }
+  public static ConfigEntry<bool> LumberjacksProjectionDriveInputs { get; private set; }
+  public static ConfigEntry<bool> LumberjacksProjectionLabelsEnabled { get; private set; }
+  public static ConfigEntry<float> LumberjacksShadowInputHz { get; private set; }
+  public static ConfigEntry<float> LumberjacksShadowLogIntervalSeconds { get; private set; }
+  public static ConfigEntry<float> LumberjacksShadowMaxValheimSpeedMetersPerSecond { get; private set; }
+  public static ConfigEntry<float> LumberjacksShadowLumberjacksMaxUnitsPerSecond { get; private set; }
+  public static ConfigEntry<float> LumberjacksShadowMinMoveMetersPerSecond { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -133,6 +162,20 @@ public static class PluginConfig {
             3.0f,
             "How often the server broadcasts a pulse snapshot.");
 
+    ServerHeartbeatWorldZdoCountEnabled =
+        config.Bind(
+            "Sampling",
+            "serverHeartbeatWorldZdoCountEnabled",
+            false,
+            "Include ZDOMan.NrOfObjects() in server heartbeat rows. This can be very expensive on massive saves; keep disabled for hitch isolation.");
+
+    ServerHeartbeatWorldZdoCountIntervalSeconds =
+        config.Bind(
+            "Sampling",
+            "serverHeartbeatWorldZdoCountIntervalSeconds",
+            300.0f,
+            "Minimum seconds between world ZDO count refreshes when serverHeartbeatWorldZdoCountEnabled is true.");
+
     NearbyRadiusMeters =
         config.Bind(
             "Sampling",
@@ -147,12 +190,103 @@ public static class PluginConfig {
             64.0f,
             "Radius used for nearby build piece counts.");
 
+    SceneScanEnabled =
+        config.Bind(
+            "Sampling",
+            "sceneScanEnabled",
+            true,
+            "Capture nearby entity/build-piece counts. Disable for perf isolation runs.");
+
+    SceneScanIntervalSeconds =
+        config.Bind(
+            "Sampling",
+            "sceneScanIntervalSeconds",
+            2.0f,
+            "Minimum seconds between local scene scans for nearby entity/build-piece counts.");
+
     BenchmarkDurationSeconds =
         config.Bind(
             "Benchmark",
             "benchmarkDurationSeconds",
             15.0f,
             "How long a benchmark run lasts before auto-completing.");
+
+    PerfProbeEnabled =
+        config.Bind(
+            "Perf",
+            "perfProbeEnabled",
+            true,
+            "Write perf-hitches.jsonl, perf-sections.jsonl, and perf-engine-log.jsonl for main-thread hitch investigation.");
+
+    PerfHitchThresholdMs =
+        config.Bind(
+            "Perf",
+            "hitchThresholdMs",
+            250.0f,
+            "Frame duration threshold for writing perf-hitches.jsonl.");
+
+    PerfSevereHitchThresholdMs =
+        config.Bind(
+            "Perf",
+            "severeHitchThresholdMs",
+            2000.0f,
+            "Frame duration threshold for tagging a hitch as severe.");
+
+    PerfSectionWarnThresholdMs =
+        config.Bind(
+            "Perf",
+            "sectionWarnThresholdMs",
+            25.0f,
+            "Section duration threshold for writing perf-sections.jsonl.");
+
+    PerfEngineLogProbeEnabled =
+        config.Bind(
+            "Perf",
+            "engineLogProbeEnabled",
+            true,
+            "Count Unity/BepInEx log messages using Application.logMessageReceivedThreaded.");
+
+    PerfWorldZdoCountOnSevereHitchEnabled =
+        config.Bind(
+            "Perf",
+            "worldZdoCountOnSevereHitchEnabled",
+            false,
+            "Call ZDOMan.NrOfObjects() when writing severe hitch rows. This can amplify hitches on massive saves; keep disabled unless explicitly testing world-count cost.");
+
+    PerfSampleIntervalSeconds =
+        config.Bind(
+            "Perf",
+            "perfSampleIntervalSeconds",
+            1.0f,
+            "Minimum seconds between perf-engine-log.jsonl aggregate rows.");
+
+    PortalConnectionCacheEnabled =
+        config.Bind(
+            "PortalFix",
+            "portalConnectionCacheEnabled",
+            true,
+            "Replace Valheim's server portal connection scan with a cached tag lookup. Intended for massive portal-count lab worlds.");
+
+    PortalConnectionCacheIntervalSeconds =
+        config.Bind(
+            "PortalFix",
+            "portalConnectionCacheIntervalSeconds",
+            5.0f,
+            "Seconds between cached server portal connection passes.");
+
+    PortalConnectionCacheLogIntervalSeconds =
+        config.Bind(
+            "PortalFix",
+            "portalConnectionCacheLogIntervalSeconds",
+            60.0f,
+            "Minimum seconds between cached portal-loop summary log rows. Set to 0 to disable summary logging.");
+
+    SpawnerConnectionCacheEnabled =
+        config.Bind(
+            "SpawnerFix",
+            "spawnerConnectionCacheEnabled",
+            true,
+            "Replace Valheim's spawner connection pass with an O(n) cached hash lookup. Intended for massive spawned-ZDO lab worlds.");
 
     AutoRehearsalEnabled =
         config.Bind(
@@ -279,6 +413,104 @@ public static class PluginConfig {
             "matrixClientId",
             "",
             "Client id reported to the matrix gateway. Leave blank to use the machine hostname.");
+
+    LumberjacksGatewayUrl =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksGatewayUrl",
+            "ws://127.0.0.1:4000",
+            "Lumberjacks Gateway WebSocket URL used by network_sense_lumberjacks_probe. Overridden by COMFY_LUMBERJACKS_GATEWAY_URL.");
+
+    LumberjacksRegionId =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksRegionId",
+            "region-spawn",
+            "Lumberjacks region id used by network_sense_lumberjacks_probe unless supplied on the console command.");
+
+    LumberjacksProbeInputCount =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksProbeInputCount",
+            12,
+            "Number of JSON player_input messages sent by network_sense_lumberjacks_probe after joining a Lumberjacks region.");
+
+    LumberjacksProjectionInputHz =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksProjectionInputHz",
+            6.0f,
+            "How often network_sense_lumberjacks_projection sends JSON player_input while driveInputs is enabled.");
+
+    LumberjacksProjectionScale =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksProjectionScale",
+            1.0f,
+            "Scale from Lumberjacks region coordinates into local Valheim proxy marker offsets.");
+
+    LumberjacksProjectionAnchorMeters =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksProjectionAnchorMeters",
+            8.0f,
+            "Meters in front of the local Valheim player where Lumberjacks proxy projection is anchored.");
+
+    LumberjacksProjectionMaxEntities =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksProjectionMaxEntities",
+            64,
+            "Maximum number of local-only Lumberjacks proxy markers to keep in the Valheim scene.");
+
+    LumberjacksProjectionDriveInputs =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksProjectionDriveInputs",
+            true,
+            "When true, network_sense_lumberjacks_projection sends lightweight player_input so entity_update rows continue flowing.");
+
+    LumberjacksProjectionLabelsEnabled =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksProjectionLabelsEnabled",
+            true,
+            "Show small TextMesh labels above local-only Lumberjacks proxy markers.");
+
+    LumberjacksShadowInputHz =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksShadowInputHz",
+            10.0f,
+            "How often network_sense_lumberjacks_shadow samples Valheim local-player motion and sends derived player_input.");
+
+    LumberjacksShadowLogIntervalSeconds =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksShadowLogIntervalSeconds",
+            2.0f,
+            "How often network_sense_lumberjacks_shadow writes rolling drift sample rows.");
+
+    LumberjacksShadowMaxValheimSpeedMetersPerSecond =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksShadowMaxValheimSpeedMetersPerSecond",
+            8.0f,
+            "Valheim horizontal speed mapped to 100 percent Lumberjacks player_input for shadow authority comparison.");
+
+    LumberjacksShadowLumberjacksMaxUnitsPerSecond =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksShadowLumberjacksMaxUnitsPerSecond",
+            200.0f,
+            "Lumberjacks authoritative units per second at 100 percent input, used only to scale drift metrics back to Valheim meters.");
+
+    LumberjacksShadowMinMoveMetersPerSecond =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksShadowMinMoveMetersPerSecond",
+            0.03f,
+            "Minimum sampled Valheim horizontal speed in meters per second before shadow authority sends moving input instead of idle.");
 
     WriteTelemetryLogs =
         config.Bind(

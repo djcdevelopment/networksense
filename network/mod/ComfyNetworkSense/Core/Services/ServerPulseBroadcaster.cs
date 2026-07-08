@@ -10,16 +10,24 @@ using UnityEngine;
 public sealed class ServerPulseBroadcaster {
   public const string ServerPulseRpc = "ComfyNetworkSense_ServerPulse";
 
+  const int MaxOverlapColliders = 4096;
+
   static readonly AccessTools.FieldRef<ZRpc, int> _sentDataRef = AccessTools.FieldRefAccess<ZRpc, int>("m_sentData");
   static readonly AccessTools.FieldRef<ZRpc, int> _sentPackagesRef =
       AccessTools.FieldRefAccess<ZRpc, int>("m_sentPackages");
+  static readonly Collider[] _overlapColliders = new Collider[MaxOverlapColliders];
+  static readonly HashSet<int> _seenComponentIds = [];
 
   readonly Dictionary<long, PeerCounterState> _peerCounters = [];
   readonly Dictionary<string, OwnerState> _ownerStates = [];
 
   float _lastPulseTime;
+  float _lastWorldZdoCountTime = -9999.0f;
+  int _cachedWorldZdoCount;
 
   public void Update(string sessionId, NetworkSenseMode mode, TelemetryLogWriter writer) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ServerPulseBroadcaster.Update");
+
     if (!ZNet.instance || !ZNet.instance.IsServer()) {
       return;
     }
@@ -75,7 +83,9 @@ public sealed class ServerPulseBroadcaster {
       float aggregateBytesSentPerSec,
       float aggregateMessagesSentPerSec,
       int aggregateObservers) {
-    int worldZdoCount = ZDOMan.instance != null ? ZDOMan.instance.NrOfObjects() : 0;
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ServerPulseBroadcaster.CaptureServerHeartbeat");
+
+    int worldZdoCount = GetWorldZdoCount();
     int connectedPlayers = ZNet.instance != null ? ZNet.instance.GetNrOfPlayers() : peerCount;
 
     return new() {
@@ -105,7 +115,27 @@ public sealed class ServerPulseBroadcaster {
     };
   }
 
+  int GetWorldZdoCount() {
+    if (!PluginConfig.ServerHeartbeatWorldZdoCountEnabled.Value || ZDOMan.instance == null) {
+      return 0;
+    }
+
+    float intervalSeconds = Mathf.Max(1.0f, PluginConfig.ServerHeartbeatWorldZdoCountIntervalSeconds.Value);
+    if (Time.unscaledTime - _lastWorldZdoCountTime < intervalSeconds) {
+      return _cachedWorldZdoCount;
+    }
+
+    _lastWorldZdoCountTime = Time.unscaledTime;
+    using (NetworkSensePerfProbe.Measure("ServerPulseBroadcaster.WorldZdoCount")) {
+      _cachedWorldZdoCount = ZDOMan.instance.NrOfObjects();
+    }
+
+    return _cachedWorldZdoCount;
+  }
+
   ServerPulseSnapshot CapturePulse(ZNetPeer peer, string sessionId, NetworkSenseMode mode, float now) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ServerPulseBroadcaster.CapturePulse");
+
     Vector3 refPosition = peer.m_refPos;
     Vector2i zone = ZoneSystem.instance ? ZoneSystem.GetZone(refPosition) : default;
     string regionId = $"{zone.x}:{zone.y}";
@@ -232,34 +262,39 @@ public sealed class ServerPulseBroadcaster {
   }
 
   static int CountCharactersNear(Vector3 position, float radius) {
-    int count = 0;
-
-    foreach (Character character in UnityEngine.Object.FindObjectsByType<Character>(FindObjectsSortMode.None)) {
-      if (!character) {
-        continue;
-      }
-
-      if (Vector3.Distance(position, character.transform.position) <= radius) {
-        count++;
-      }
-    }
-
-    return count;
+    return CountNearbyComponents<Character>(position, radius);
   }
 
   static int CountPiecesNear(Vector3 position, float radius) {
+    return CountNearbyComponents<Piece>(position, radius);
+  }
+
+  static int CountNearbyComponents<T>(Vector3 position, float radius) where T : Component {
+    _seenComponentIds.Clear();
+
+    int colliderCount = Physics.OverlapSphereNonAlloc(position, radius, _overlapColliders);
     int count = 0;
 
-    foreach (Piece piece in UnityEngine.Object.FindObjectsByType<Piece>(FindObjectsSortMode.None)) {
-      if (!piece) {
+    for (int index = 0; index < colliderCount; index++) {
+      Collider collider = _overlapColliders[index];
+      _overlapColliders[index] = null;
+
+      if (!collider) {
         continue;
       }
 
-      if (Vector3.Distance(position, piece.transform.position) <= radius) {
+      T component = collider.GetComponentInParent<T>();
+      if (!component) {
+        continue;
+      }
+
+      int instanceId = component.GetInstanceID();
+      if (_seenComponentIds.Add(instanceId)) {
         count++;
       }
     }
 
+    _seenComponentIds.Clear();
     return count;
   }
 

@@ -16,6 +16,10 @@ In-game Valheim console commands:
 - `network_sense_tp x y z [label]`: teleport with an explicit Y coordinate and record a marker.
 - `network_sense_route_run [teleport-route.tsv]`: run a tab- or comma-delimited teleport route from `BepInEx/config/comfy-network-sense`.
 - `network_sense_rehearsal [teleport-route.tsv] [profile]`: reload config, check MCP, mark the rehearsal, run the route, and export the session.
+- `network_sense_lumberjacks_probe [ws-url] [region-id] [input-count]`: prove the live Valheim plugin can speak the Lumberjacks Gateway side-channel protocol.
+- `network_sense_lumberjacks_projection [start|stop|status] [ws-url] [region-id]`: render local-only proxy markers from Lumberjacks world rows.
+- `network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]`: compare Lumberjacks authoritative self updates against Valheim local-player movement without applying corrections.
+- `network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary] [ws-url] [region-id]`: run the teleport route and collect per-stop Lumberjacks shadow drift rows.
 - `network_sense_reload_config`: reload BepInEx config.
 - `network_sense_export_session`: write a compact dev session export JSON.
 - `network_sense_mcp_status`: check whether the local Comfy MCP gateway is reachable.
@@ -29,6 +33,16 @@ Automation config keys under `[Automation]`:
 - `autoRehearsalProfile`: resource profile label recorded in markers.
 - `autoRehearsalDelaySeconds`: delay after player availability before the route starts.
 - `autoRehearsalRunOncePerSession`: prevents repeated runs in the same client session.
+
+Portal fix config keys under `[PortalFix]`:
+
+- `portalConnectionCacheEnabled`: when `true`, a host/server replaces Valheim's portal connection scan with a cached tag lookup.
+- `portalConnectionCacheIntervalSeconds`: seconds between cached portal passes, default `5`.
+- `portalConnectionCacheLogIntervalSeconds`: seconds between portal-cache summary log rows, default `60`.
+
+Spawner fix config keys under `[SpawnerFix]`:
+
+- `spawnerConnectionCacheEnabled`: when `true`, replaces Valheim's spawner connection pass with a cached hash lookup.
 
 Shortcuts are unbound by default to avoid collisions with other local Valheim mods.
 

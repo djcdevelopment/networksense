@@ -40,6 +40,8 @@ gameplay policy.
   containers collect connected-multiplayer telemetry instead of menu-idle zeros.
 - Matrix check-in poller for swarm clients: continuously collects benchmark data
   cell-by-cell from a gateway (teleport, load-time, benchmark, report).
+- Host/server-only cached portal and spawner connection loops for massive-save
+  hitch isolation.
 
 ## Architecture Overview
 
@@ -55,6 +57,10 @@ Important areas:
 - `Core/Services/TelemetryCoordinator.cs`: central runtime orchestration.
 - `Core/Services/ClientTelemetrySampler.cs`: local player/client sampling.
 - `Core/Services/ServerPulseBroadcaster.cs`: server pulse RPC capture/broadcast.
+- `Core/Services/PortalConnectionCache.cs`: optional cached replacement for the
+  host/server portal connection scan.
+- `Core/Services/SpawnerConnectionCache.cs`: optional cached replacement for
+  the host/server spawner connection pass.
 - `Core/Scoring/ScoreCalculator.cs`: derived score labels and recommendations.
 - `Core/Services/HudRenderer.cs`: compact HUD rendering.
 - `Core/Services/NetworkSensePanel.cs`: debug drawer UI.
@@ -183,6 +189,7 @@ network_sense_benchmark
 network_sense_tp 3250 2250 extreme
 network_sense_route_run teleport-route.tsv
 network_sense_rehearsal teleport-route.tsv host_full
+network_sense_lumberjacks_shadow_route teleport-route.tsv movement_only ws://127.0.0.1:4000 region-spawn
 network_sense_raven
 network_sense_mcp_status
 ```
@@ -221,6 +228,10 @@ network_sense_tp x z [label]
 network_sense_tp x y z [label]
 network_sense_route_run [teleport-route.tsv]
 network_sense_rehearsal [teleport-route.tsv] [profile]
+network_sense_lumberjacks_probe [ws-url] [region-id] [input-count]
+network_sense_lumberjacks_projection [start|stop|status] [ws-url] [region-id]
+network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]
+network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary] [ws-url] [region-id]
 network_sense_status
 network_sense_panel debug|signals|raven
 network_sense_debug

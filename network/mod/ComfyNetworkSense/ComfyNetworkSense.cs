@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.4.0";
+  public const string PluginVersion = "0.4.8";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -29,6 +29,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   static readonly ConcurrentQueue<string> _mainThreadMessages = new();
   TelemetryCoordinator _coordinator;
   MatrixCheckinRunner _matrixCheckinRunner;
+  LumberjacksBridgeProbe _lumberjacksBridgeProbe;
+  LumberjacksProjectionRunner _lumberjacksProjectionRunner;
+  LumberjacksShadowAuthorityRunner _lumberjacksShadowAuthorityRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
@@ -42,6 +45,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     PluginConfig.Bind(Config);
 
     _coordinator = new();
+    _lumberjacksBridgeProbe = new();
+    _lumberjacksProjectionRunner = new();
+    _lumberjacksShadowAuthorityRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -65,14 +71,33 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       return;
     }
 
-    FlushMainThreadMessages();
+    float deltaTime = Time.unscaledDeltaTime;
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.Update");
+    NetworkSensePerfProbe.Active?.UpdateFrame(deltaTime);
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.FlushMainThreadMessages")) {
+      FlushMainThreadMessages();
+    }
 
     if (_coordinator != null && _coordinator.IsPanelOpen && Input.GetKeyDown(KeyCode.Escape)) {
       _coordinator.ClosePanel();
     }
 
-    _coordinator?.Update(Time.unscaledDeltaTime);
-    TryStartAutoRehearsal();
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TelemetryCoordinator.Update")) {
+      _coordinator?.Update(deltaTime);
+    }
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksProjectionRunner.Update")) {
+      _lumberjacksProjectionRunner?.Update(deltaTime);
+    }
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksShadowAuthorityRunner.Update")) {
+      _lumberjacksShadowAuthorityRunner?.Update(deltaTime, _coordinator);
+    }
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryStartAutoRehearsal")) {
+      TryStartAutoRehearsal();
+    }
   }
 
   void OnGUI() {
@@ -86,6 +111,11 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   void OnDestroy() {
     _matrixCheckinRunner?.Stop();
     _matrixCheckinRunner = null;
+    _lumberjacksBridgeProbe = null;
+    _lumberjacksProjectionRunner?.Dispose();
+    _lumberjacksProjectionRunner = null;
+    _lumberjacksShadowAuthorityRunner?.Dispose();
+    _lumberjacksShadowAuthorityRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();
@@ -119,6 +149,14 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         "show ComfyNetworkSense HUD/detail/mode/benchmark status",
         _ => RunCommand(_coordinator.GetStatus));
     new Terminal.ConsoleCommand(
+        "network_sense_perf_status",
+        "show ComfyNetworkSense perf probe and telemetry writer status",
+        _ => RunCommand(_coordinator.GetPerfStatus));
+    new Terminal.ConsoleCommand(
+        "network_sense_perf_mark",
+        "record a ComfyNetworkSense perf marker: network_sense_perf_mark <label>",
+        PerfMarkerCommand);
+    new Terminal.ConsoleCommand(
         "network_sense_panel",
         "toggle the ComfyNetworkSense debug panel: network_sense_panel [debug|signals|raven]",
         PanelCommand);
@@ -150,6 +188,22 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         "network_sense_mcp_mark",
         "record a NetworkSense test marker: network_sense_mcp_mark <label>",
         RecordMarkerCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_probe",
+        "probe Lumberjacks Gateway from Valheim: network_sense_lumberjacks_probe [ws-url] [region-id] [input-count]",
+        LumberjacksProbeCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_projection",
+        "project Lumberjacks entity updates as local-only Valheim markers: network_sense_lumberjacks_projection [start|stop|status] [ws-url] [region-id]",
+        LumberjacksProjectionCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_shadow",
+        "compare Lumberjacks authoritative movement against local Valheim motion without corrections: network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]",
+        LumberjacksShadowCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_shadow_route",
+        "run a teleport route with per-stop Lumberjacks shadow movement: network_sense_lumberjacks_shadow_route [teleport-route.tsv] [movement_only|stationary] [ws-url] [region-id]",
+        LumberjacksShadowRouteCommand);
     new Terminal.ConsoleCommand(
         "network_sense_tp",
         "teleport local player for baseline capture: network_sense_tp x z [label] or network_sense_tp x y z [label]",
@@ -234,6 +288,147 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     return "NetworkSense MCP status check started.";
   }
 
+  object LumberjacksProbeCommand(Terminal.ConsoleEventArgs args) {
+    string gatewayUrl = args.Length >= 2
+        ? args[1]
+        : PluginConfig.LumberjacksGatewayUrl.Value;
+    string regionId = args.Length >= 3
+        ? args[2]
+        : PluginConfig.LumberjacksRegionId.Value;
+    int inputCount = PluginConfig.LumberjacksProbeInputCount.Value;
+
+    if (args.Length >= 4 && int.TryParse(args[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)) {
+      inputCount = parsed;
+    }
+
+    string message = _lumberjacksBridgeProbe.Start(gatewayUrl, regionId, inputCount, _coordinator);
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+    LogInfo(message);
+    return message;
+  }
+
+  object LumberjacksProjectionCommand(Terminal.ConsoleEventArgs args) {
+    string action = args.Length >= 2 ? args[1].Trim().ToLowerInvariant() : "start";
+
+    switch (action) {
+      case "start":
+      case "run":
+      case "on": {
+        string gatewayUrl = args.Length >= 3
+            ? args[2]
+            : PluginConfig.LumberjacksGatewayUrl.Value;
+        string regionId = args.Length >= 4
+            ? args[3]
+            : PluginConfig.LumberjacksRegionId.Value;
+        bool driveInputs = PluginConfig.LumberjacksProjectionDriveInputs.Value;
+        string message = _lumberjacksProjectionRunner.Start(gatewayUrl, regionId, driveInputs, _coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "stop":
+      case "off": {
+        string message = _lumberjacksProjectionRunner.Stop(_coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "status": {
+        string message = _lumberjacksProjectionRunner.GetStatus();
+        _coordinator.RecordLumberjacksProjection(_lumberjacksProjectionRunner.BuildStatusRow("status"));
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      default: {
+        string message = "Usage: network_sense_lumberjacks_projection [start|stop|status] [ws-url] [region-id]";
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogWarning(message);
+        return false;
+      }
+    }
+  }
+
+  object LumberjacksShadowCommand(Terminal.ConsoleEventArgs args) {
+    string action = args.Length >= 2 ? args[1].Trim().ToLowerInvariant() : "start";
+
+    switch (action) {
+      case "start":
+      case "run":
+      case "on": {
+        string gatewayUrl = args.Length >= 3
+            ? args[2]
+            : PluginConfig.LumberjacksGatewayUrl.Value;
+        string regionId = args.Length >= 4
+            ? args[3]
+            : PluginConfig.LumberjacksRegionId.Value;
+        string message = _lumberjacksShadowAuthorityRunner.Start(gatewayUrl, regionId, _coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "stop":
+      case "off": {
+        string message = _lumberjacksShadowAuthorityRunner.Stop(_coordinator);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "status": {
+        string message = _lumberjacksShadowAuthorityRunner.GetStatus();
+        _coordinator.RecordLumberjacksShadow(_lumberjacksShadowAuthorityRunner.BuildStatusRow("status"));
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      default: {
+        string message = "Usage: network_sense_lumberjacks_shadow [start|stop|status] [ws-url] [region-id]";
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogWarning(message);
+        return false;
+      }
+    }
+  }
+
+  object LumberjacksShadowRouteCommand(Terminal.ConsoleEventArgs args) {
+    if (_routeRunning) {
+      string busyMessage = "NetworkSense route is already running.";
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, busyMessage);
+      LogWarning(busyMessage);
+      return false;
+    }
+
+    string fileName = args.Length >= 2 ? args[1] : "teleport-route.tsv";
+    string profile = args.Length >= 3 ? args[2] : "movement_only";
+    string gatewayUrl = args.Length >= 4
+        ? args[3]
+        : PluginConfig.LumberjacksGatewayUrl.Value;
+    string regionId = args.Length >= 5
+        ? args[4]
+        : PluginConfig.LumberjacksRegionId.Value;
+
+    fileName = NormalizeRouteFileName(fileName);
+    profile = string.IsNullOrWhiteSpace(profile) ? "movement_only" : profile.Trim();
+    string routePath = Path.Combine(Paths.ConfigPath, "comfy-network-sense", fileName);
+    if (!TryLoadRouteStops(routePath, out List<RouteStop> stops, out string error)) {
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, error);
+      LogWarning(error);
+      return false;
+    }
+
+    StartCoroutine(RunLumberjacksShadowRoute(stops, routePath, profile, gatewayUrl, regionId));
+    string message = $"Lumberjacks shadow route started: {stops.Count} stops from {fileName}, profile={profile}.";
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+    LogInfo(message);
+    return message;
+  }
+
   object RecordNoteCommand(Terminal.ConsoleEventArgs args) {
     string note = JoinArgs(args, startIndex: 1);
 
@@ -256,6 +451,23 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     return RunCommand(() => _coordinator.RecordDevMarker(label));
+  }
+
+  object PerfMarkerCommand(Terminal.ConsoleEventArgs args) {
+    string label = JoinArgs(args, startIndex: 1);
+
+    if (string.IsNullOrWhiteSpace(label)) {
+      string message = "Usage: network_sense_perf_mark <label>";
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+      return false;
+    }
+
+    NetworkSensePerfProbe.Active?.Mark(label);
+    string marker = $"perf_mark {label}";
+    _coordinator.RecordDevMarker(marker);
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, $"NetworkSense perf marker recorded: {label}");
+    LogInfo(marker);
+    return marker;
   }
 
   object TeleportCommand(Terminal.ConsoleEventArgs args) {
@@ -452,6 +664,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   }
 
   static bool TryResolveGroundHeight(float x, float z, out float height) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryResolveGroundHeight");
+
     height = 0.0f;
     try {
       if (ZoneSystem.instance == null) {
@@ -466,6 +680,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   }
 
   static bool TryTeleport(Player player, Vector3 target) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryTeleport");
+
     try {
       MethodInfo method = null;
       foreach (MethodInfo candidate in player.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)) {
@@ -567,44 +783,63 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       bool autoRehearsal = false) {
     _routeRunning = true;
     bool aborted = false;
+    NetworkSensePerfProbe.SetRouteState("route", "", "start");
     _coordinator.RecordDevMarker($"route_run start stops={stops.Count} file={Path.GetFileName(routePath)}");
 
     foreach (RouteStop stop in stops) {
       Player player = Player.m_localPlayer;
       if (player == null) {
+        NetworkSensePerfProbe.SetRouteState("route", stop.Id, "abort_missing_player");
         _coordinator.RecordDevMarker($"route_run abort {stop.Id} missing_player");
         aborted = true;
         break;
       }
 
-      Vector3 target = ResolveRouteTarget(stop);
+      NetworkSensePerfProbe.SetRouteState("route", stop.Id, "resolve_target");
+      Vector3 target;
+      using (NetworkSensePerfProbe.Measure("RunTeleportRoute.ResolveRouteTarget")) {
+        target = ResolveRouteTarget(stop);
+      }
+
       _coordinator.RecordDevMarker($"{stop.Id} start");
-      bool moved = TryTeleport(player, target);
+
+      NetworkSensePerfProbe.SetRouteState("route", stop.Id, "teleport");
+      bool moved;
+      using (NetworkSensePerfProbe.Measure("RunTeleportRoute.TryTeleport")) {
+        moved = TryTeleport(player, target);
+      }
       _coordinator.RecordDevMarker($"{stop.Id} teleport moved={moved} target={FormatVector(target)}");
 
       if (stop.SettleSeconds > 0.0f) {
+        NetworkSensePerfProbe.SetRouteState("route", stop.Id, "settle");
         yield return new WaitForSeconds(stop.SettleSeconds);
       }
 
-      if (!_coordinator.GetSnapshot().BenchmarkRunning) {
+      NetworkSensePerfProbe.SetRouteState("route", stop.Id, "benchmark_start");
+      if (!_coordinator.BenchmarkRunning) {
         _coordinator.ToggleBenchmark();
       }
 
+      NetworkSensePerfProbe.SetRouteState("route", stop.Id, "benchmark_window");
       yield return new WaitForSeconds(stop.BenchmarkSeconds);
 
       float waitStarted = Time.time;
-      while (_coordinator.GetSnapshot().BenchmarkRunning && Time.time - waitStarted < 10.0f) {
+      NetworkSensePerfProbe.SetRouteState("route", stop.Id, "benchmark_wait");
+      while (_coordinator.BenchmarkRunning && Time.time - waitStarted < 10.0f) {
         yield return null;
       }
 
-      if (_coordinator.GetSnapshot().BenchmarkRunning) {
+      if (_coordinator.BenchmarkRunning) {
+        NetworkSensePerfProbe.SetRouteState("route", stop.Id, "benchmark_timeout_cancel");
         _coordinator.ToggleBenchmark();
         _coordinator.RecordDevMarker($"{stop.Id} benchmark_cancelled_after_timeout");
       }
 
+      NetworkSensePerfProbe.SetRouteState("route", stop.Id, "stop_end");
       _coordinator.RecordDevMarker($"{stop.Id} end");
     }
 
+    NetworkSensePerfProbe.SetRouteState("route", "", aborted ? "abort" : "end");
     _coordinator.RecordDevMarker(aborted ? "route_run abort" : "route_run end");
 
     if (!string.IsNullOrWhiteSpace(rehearsalProfile)) {
@@ -616,20 +851,235 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     if (exportOnComplete) {
+      NetworkSensePerfProbe.SetRouteState("route", "", "export");
       string exportMessage = _coordinator.ExportSession();
       LogInfo(exportMessage);
     }
 
+    NetworkSensePerfProbe.SetRouteState("idle");
     _routeRunning = false;
   }
 
+  IEnumerator RunLumberjacksShadowRoute(
+      List<RouteStop> stops,
+      string routePath,
+      string profile,
+      string gatewayUrl,
+      string regionId) {
+    _routeRunning = true;
+    bool aborted = false;
+    string activeStopId = string.Empty;
+    bool moveDuringBenchmark =
+        string.Equals(profile, "movement_only", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(profile, "shadow_movement", StringComparison.OrdinalIgnoreCase);
+
+    NetworkSensePerfProbe.SetRouteState("shadow_route", "", "start");
+    _coordinator.RecordDevMarker(
+        $"lumberjacks_shadow_route {profile} start stops={stops.Count} file={Path.GetFileName(routePath)}");
+
+    try {
+      foreach (RouteStop stop in stops) {
+        activeStopId = stop.Id;
+        if (!TryGetUsableLocalPlayer(out Player player)) {
+          NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "abort_missing_player");
+          _coordinator.RecordDevMarker($"lumberjacks_shadow_route abort {stop.Id} missing_player");
+          aborted = true;
+          break;
+        }
+
+        NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "resolve_target");
+        Vector3 target;
+        using (NetworkSensePerfProbe.Measure("RunLumberjacksShadowRoute.ResolveRouteTarget")) {
+          target = ResolveRouteTarget(stop);
+        }
+
+        _coordinator.RecordDevMarker($"{stop.Id} shadow_route_start");
+
+        NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "teleport");
+        bool moved;
+        using (NetworkSensePerfProbe.Measure("RunLumberjacksShadowRoute.TryTeleport")) {
+          moved = TryTeleport(player, target);
+        }
+        _coordinator.RecordDevMarker($"{stop.Id} shadow_route_teleport moved={moved} target={FormatVector(target)}");
+
+        if (stop.SettleSeconds > 0.0f) {
+          NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "settle");
+          yield return new WaitForSeconds(stop.SettleSeconds);
+        }
+
+        NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "wait_local_player");
+        yield return WaitForUsableLocalPlayer("shadow_route", stop.Id, "wait_local_player", 45.0f);
+        if (!TryGetUsableLocalPlayer(out player)) {
+          NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "abort_local_player_not_ready");
+          _coordinator.RecordDevMarker($"lumberjacks_shadow_route abort {stop.Id} local_player_not_ready_after_teleport");
+          aborted = true;
+          break;
+        }
+
+        bool shadowStarted = false;
+        bool durationOverridden = false;
+        float previousDuration = PluginConfig.BenchmarkDurationSeconds.Value;
+
+        try {
+          _lumberjacksShadowAuthorityRunner.SetRouteContext("shadow_route", stop.Id, "start");
+          string startMessage = _lumberjacksShadowAuthorityRunner.Start(gatewayUrl, regionId, _coordinator);
+          shadowStarted = _lumberjacksShadowAuthorityRunner.IsRunning;
+          _lumberjacksShadowAuthorityRunner.SetRouteContext("shadow_route", stop.Id, "connect");
+          _coordinator.RecordLumberjacksShadow(_lumberjacksShadowAuthorityRunner.BuildStatusRow("route_start"));
+          LogInfo(startMessage);
+          _coordinator.RecordDevMarker($"{stop.Id} shadow_start {startMessage}");
+
+          NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "connect");
+          yield return new WaitForSeconds(2.0f);
+
+          yield return WaitForUsableLocalPlayer("shadow_route", stop.Id, "wait_local_player_before_benchmark", 15.0f);
+          if (!TryGetUsableLocalPlayer(out player)) {
+            NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "abort_local_player_missing_before_benchmark");
+            _coordinator.RecordDevMarker($"lumberjacks_shadow_route abort {stop.Id} local_player_missing_before_benchmark");
+            aborted = true;
+            break;
+          }
+
+          float benchmarkSeconds = Mathf.Max(1.0f, stop.BenchmarkSeconds);
+          PluginConfig.BenchmarkDurationSeconds.Value = benchmarkSeconds;
+          durationOverridden = true;
+
+          NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "benchmark_start");
+          _lumberjacksShadowAuthorityRunner.SetRouteContext("shadow_route", stop.Id, "benchmark_start");
+          if (!_coordinator.BenchmarkRunning) {
+            _coordinator.StartBenchmark();
+          }
+
+          float benchmarkStartedAt = Time.realtimeSinceStartup;
+          float maxWaitSeconds = benchmarkSeconds + 15.0f;
+          Vector3 origin = ((Component) player).transform.position;
+
+          NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, moveDuringBenchmark ? "movement_window" : "stationary_window");
+          while (_coordinator.BenchmarkRunning && Time.realtimeSinceStartup - benchmarkStartedAt < maxWaitSeconds) {
+            string routePhase = moveDuringBenchmark ? "movement_window" : "stationary_window";
+            _lumberjacksShadowAuthorityRunner.SetRouteContext("shadow_route", stop.Id, routePhase);
+
+            if (moveDuringBenchmark) {
+              if (TryGetUsableLocalPlayer(out Player currentPlayer)) {
+                StepRouteMovementPattern(currentPlayer, origin, Time.realtimeSinceStartup - benchmarkStartedAt);
+              } else {
+                NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "movement_wait_local_player");
+              }
+            }
+            yield return null;
+          }
+
+          if (_coordinator.BenchmarkRunning) {
+            NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "benchmark_timeout_cancel");
+            _coordinator.CancelBenchmark();
+            _coordinator.RecordDevMarker($"{stop.Id} shadow_route_benchmark_cancelled_after_timeout");
+          }
+
+          _coordinator.ConsumeLatestBenchmarkResult();
+        } finally {
+          if (durationOverridden) {
+            PluginConfig.BenchmarkDurationSeconds.Value = previousDuration;
+          }
+
+          if (shadowStarted && _lumberjacksShadowAuthorityRunner.IsRunning) {
+            NetworkSensePerfProbe.SetRouteState("shadow_route", stop.Id, "shadow_stop");
+            _lumberjacksShadowAuthorityRunner.SetRouteContext("shadow_route", stop.Id, aborted ? "route_abort" : "route_stop");
+            _coordinator.RecordLumberjacksShadow(_lumberjacksShadowAuthorityRunner.BuildStatusRow(aborted ? "route_abort" : "route_stop"));
+            string stopMessage = _lumberjacksShadowAuthorityRunner.Stop(_coordinator);
+            LogInfo(stopMessage);
+            _coordinator.RecordDevMarker($"{stop.Id} shadow_end {stopMessage}");
+          }
+        }
+
+        if (aborted) {
+          break;
+        }
+
+        _coordinator.RecordDevMarker($"{stop.Id} shadow_route_end");
+        yield return new WaitForSeconds(0.5f);
+      }
+    } finally {
+      if (_lumberjacksShadowAuthorityRunner.IsRunning) {
+        _lumberjacksShadowAuthorityRunner.SetRouteContext("shadow_route", activeStopId, "route_abort");
+        _coordinator.RecordLumberjacksShadow(_lumberjacksShadowAuthorityRunner.BuildStatusRow("route_abort"));
+        string stopMessage = _lumberjacksShadowAuthorityRunner.Stop(_coordinator);
+        LogInfo(stopMessage);
+      }
+
+      NetworkSensePerfProbe.SetRouteState("shadow_route", "", aborted ? "abort" : "end");
+      _coordinator.RecordDevMarker(aborted ? "lumberjacks_shadow_route abort" : "lumberjacks_shadow_route end");
+
+      NetworkSensePerfProbe.SetRouteState("shadow_route", "", "export");
+      string exportMessage = _coordinator.ExportSession();
+      LogInfo(exportMessage);
+
+      NetworkSensePerfProbe.SetRouteState("idle");
+      _routeRunning = false;
+    }
+  }
+
+  static IEnumerator WaitForUsableLocalPlayer(string routeState, string stopId, string phase, float timeoutSeconds) {
+    float startedAt = Time.realtimeSinceStartup;
+    float stableSeconds = 0.0f;
+    while (Time.realtimeSinceStartup - startedAt < timeoutSeconds) {
+      NetworkSensePerfProbe.SetRouteState(routeState, stopId, phase);
+      if (TryGetUsableLocalPlayer(out _)) {
+        stableSeconds += Time.unscaledDeltaTime;
+        if (stableSeconds >= 1.0f) {
+          yield break;
+        }
+      } else {
+        stableSeconds = 0.0f;
+      }
+
+      yield return null;
+    }
+  }
+
+  static bool TryGetUsableLocalPlayer(out Player player) {
+    player = Player.m_localPlayer;
+    if (!player) {
+      player = null;
+      return false;
+    }
+
+    try {
+      _ = ((Component) player).transform.position;
+      return true;
+    } catch {
+      player = null;
+      return false;
+    }
+  }
+
   static Vector3 ResolveRouteTarget(RouteStop stop) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.ResolveRouteTarget");
+
     float y = stop.Y ?? 80.0f;
     if (!stop.Y.HasValue && TryResolveGroundHeight(stop.X, stop.Z, out float groundHeight)) {
       y = groundHeight + 3.0f;
     }
 
     return new Vector3(stop.X, y, stop.Z);
+  }
+
+  static void StepRouteMovementPattern(Player player, Vector3 origin, float elapsedSeconds) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.StepRouteMovementPattern");
+
+    try {
+      const float radius = 4.0f;
+      float angle = elapsedSeconds * 1.5f;
+      Vector3 offset = new(Mathf.Cos(angle) * radius, 0.0f, Mathf.Sin(angle) * radius);
+      Vector3 next = origin + offset;
+      if (TryResolveGroundHeight(next.x, next.z, out float ground)) {
+        next.y = ground + 1.0f;
+      } else {
+        next.y = origin.y;
+      }
+      ((Component) player).transform.position = next;
+    } catch (Exception exception) {
+      LogWarning($"NetworkSense route movement step failed: {exception.Message}");
+    }
   }
 
   static bool TryParseRouteFloat(string value, out float result) {

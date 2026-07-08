@@ -9,12 +9,16 @@ using HarmonyLib;
 using UnityEngine;
 
 public sealed class ClientTelemetrySampler {
+  const int MaxOverlapColliders = 4096;
+
   static readonly AccessTools.FieldRef<ZRpc, int> _sentDataRef = AccessTools.FieldRefAccess<ZRpc, int>("m_sentData");
   static readonly AccessTools.FieldRef<ZRpc, int> _recvDataRef = AccessTools.FieldRefAccess<ZRpc, int>("m_recvData");
   static readonly AccessTools.FieldRef<ZRpc, int> _sentPackagesRef =
       AccessTools.FieldRefAccess<ZRpc, int>("m_sentPackages");
   static readonly AccessTools.FieldRef<ZRpc, int> _recvPackagesRef =
       AccessTools.FieldRefAccess<ZRpc, int>("m_recvPackages");
+  static readonly Collider[] _overlapColliders = new Collider[MaxOverlapColliders];
+  static readonly HashSet<int> _seenComponentIds = [];
 
   readonly List<float> _frameTimesMs = [];
 
@@ -25,8 +29,14 @@ public sealed class ClientTelemetrySampler {
   int _previousRecvPackages;
   float _previousCounterTime;
   float _lastRttMs;
+  float _lastSceneScanTime = -9999.0f;
+  string _lastSceneScanRegionId = string.Empty;
+  int _cachedNearbyEntities;
+  int _cachedNearbyBuildPieces;
 
   public void RecordFrame(float deltaTime) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ClientTelemetrySampler.RecordFrame");
+
     _frameTimesMs.Add(deltaTime * 1000.0f);
 
     if (_frameTimesMs.Count > 240) {
@@ -35,9 +45,12 @@ public sealed class ClientTelemetrySampler {
   }
 
   public ClientTelemetrySample Capture(string sessionId, NetworkSenseMode mode, string ownerId) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ClientTelemetrySampler.Capture");
+
     Player localPlayer = Player.m_localPlayer;
     Vector3 position = localPlayer ? localPlayer.transform.position : Vector3.zero;
     Vector2i zone = ZoneSystem.instance ? ZoneSystem.GetZone(position) : default;
+    string regionId = $"{zone.x}:{zone.y}";
 
     float rttMs = GetRttMs();
     float jitterMs = _lastRttMs > 0.0f ? Mathf.Abs(rttMs - _lastRttMs) : 0.0f;
@@ -78,8 +91,31 @@ public sealed class ClientTelemetrySampler {
     float cpuBoundEstimate = GetCpuBoundEstimate(frameTimeMs, p95FrameMs);
 
     int nearbyPlayers = CountNearbyPlayers(position, PluginConfig.NearbyRadiusMeters.Value, localPlayer);
-    int nearbyEntities = CountNearbyEntities(position, PluginConfig.NearbyRadiusMeters.Value, localPlayer);
-    int nearbyBuildPieces = CountNearbyPieces(position, PluginConfig.BuildScanRadiusMeters.Value);
+    int nearbyEntities = _cachedNearbyEntities;
+    int nearbyBuildPieces = _cachedNearbyBuildPieces;
+
+    if (_lastSceneScanRegionId != regionId) {
+      _lastSceneScanRegionId = regionId;
+      _lastSceneScanTime = -9999.0f;
+      _cachedNearbyEntities = 0;
+      _cachedNearbyBuildPieces = 0;
+      nearbyEntities = 0;
+      nearbyBuildPieces = 0;
+    }
+
+    bool zoneLoaded = ZoneSystem.instance == null || ZoneSystem.instance.IsZoneLoaded(zone);
+    float sceneScanIntervalSeconds = Mathf.Max(0.1f, PluginConfig.SceneScanIntervalSeconds.Value);
+    if (PluginConfig.SceneScanEnabled.Value
+        && zoneLoaded
+        && Time.unscaledTime - _lastSceneScanTime >= sceneScanIntervalSeconds) {
+      _lastSceneScanTime = Time.unscaledTime;
+      using (NetworkSensePerfProbe.Measure("ClientTelemetrySampler.SceneScan")) {
+        _cachedNearbyEntities = CountNearbyEntities(position, PluginConfig.NearbyRadiusMeters.Value, localPlayer);
+        _cachedNearbyBuildPieces = CountNearbyPieces(position, PluginConfig.BuildScanRadiusMeters.Value);
+      }
+      nearbyEntities = _cachedNearbyEntities;
+      nearbyBuildPieces = _cachedNearbyBuildPieces;
+    }
 
     return new() {
         TimestampUtc = DateTime.UtcNow.ToString("o"),
@@ -87,8 +123,8 @@ public sealed class ClientTelemetrySampler {
         SampleId = Guid.NewGuid().ToString("N"),
         PlayerId = localPlayer ? localPlayer.GetPlayerID().ToString() : string.Empty,
         PlayerName = localPlayer ? localPlayer.GetPlayerName() : string.Empty,
-        RegionId = $"{zone.x}:{zone.y}",
-        ClusterId = $"{zone.x}:{zone.y}",
+        RegionId = regionId,
+        ClusterId = regionId,
         Mode = mode.ToString(),
         OwnerId = ownerId ?? string.Empty,
         SampleSource = "client_live",
@@ -129,6 +165,8 @@ public sealed class ClientTelemetrySampler {
   }
 
   float GetP95FrameTimeMs() {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ClientTelemetrySampler.P95");
+
     if (_frameTimesMs.Count <= 0) {
       return 0.0f;
     }
@@ -170,34 +208,39 @@ public sealed class ClientTelemetrySampler {
   }
 
   static int CountNearbyEntities(Vector3 position, float radius, Player localPlayer) {
-    int count = 0;
-
-    foreach (Character character in UnityEngine.Object.FindObjectsByType<Character>(FindObjectsSortMode.None)) {
-      if (!character || character == localPlayer) {
-        continue;
-      }
-
-      if (Vector3.Distance(position, character.transform.position) <= radius) {
-        count++;
-      }
-    }
-
-    return count;
+    return CountNearbyComponents<Character>(position, radius, localPlayer);
   }
 
   static int CountNearbyPieces(Vector3 position, float radius) {
+    return CountNearbyComponents<Piece>(position, radius, null);
+  }
+
+  static int CountNearbyComponents<T>(Vector3 position, float radius, Component excluded) where T : Component {
+    _seenComponentIds.Clear();
+
+    int colliderCount = Physics.OverlapSphereNonAlloc(position, radius, _overlapColliders);
     int count = 0;
 
-    foreach (Piece piece in UnityEngine.Object.FindObjectsByType<Piece>(FindObjectsSortMode.None)) {
-      if (!piece) {
+    for (int index = 0; index < colliderCount; index++) {
+      Collider collider = _overlapColliders[index];
+      _overlapColliders[index] = null;
+
+      if (!collider) {
         continue;
       }
 
-      if (Vector3.Distance(position, piece.transform.position) <= radius) {
+      T component = collider.GetComponentInParent<T>();
+      if (!component || component == excluded) {
+        continue;
+      }
+
+      int instanceId = component.GetInstanceID();
+      if (_seenComponentIds.Add(instanceId)) {
         count++;
       }
     }
 
+    _seenComponentIds.Clear();
     return count;
   }
 }

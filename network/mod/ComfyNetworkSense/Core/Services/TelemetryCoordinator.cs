@@ -16,6 +16,7 @@ public sealed class TelemetryCoordinator : IDisposable {
   readonly string _sessionId =
       DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8);
   readonly TelemetryLogWriter _logWriter = new();
+  readonly NetworkSensePerfProbe _perfProbe;
   readonly ClientTelemetrySampler _clientTelemetrySampler = new();
   readonly ServerPulseBroadcaster _serverPulseBroadcaster = new();
   readonly BenchmarkRunner _benchmarkRunner = new();
@@ -39,14 +40,30 @@ public sealed class TelemetryCoordinator : IDisposable {
   string _latestExportPath = string.Empty;
   BenchmarkResult _latestBenchmarkResult;
 
-  public void Update(float deltaTime) {
-    RegisterServerPulseRpc();
+  public TelemetryCoordinator() {
+    _perfProbe = new NetworkSensePerfProbe(_sessionId, _logWriter);
+    NetworkSensePerfProbe.SetActive(_perfProbe);
+  }
 
-    HandleShortcuts();
+  public void Update(float deltaTime) {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("TelemetryCoordinator.Update");
+
+    using (NetworkSensePerfProbe.Measure("TelemetryCoordinator.RegisterServerPulseRpc")) {
+      RegisterServerPulseRpc();
+    }
+
+    using (NetworkSensePerfProbe.Measure("TelemetryCoordinator.HandleShortcuts")) {
+      HandleShortcuts();
+    }
 
     _clientTelemetrySampler.RecordFrame(deltaTime);
 
-    if (_benchmarkRunner.Update(deltaTime, _latestClientSample, _sessionId) is BenchmarkResult benchmarkResult) {
+    BenchmarkResult benchmarkResult;
+    using (NetworkSensePerfProbe.Measure("TelemetryCoordinator.BenchmarkRunner.Update")) {
+      benchmarkResult = _benchmarkRunner.Update(deltaTime, _latestClientSample, _sessionId);
+    }
+
+    if (benchmarkResult != null) {
       _latestBenchmarkResult = benchmarkResult;
       _logWriter.Write("benchmark-results.jsonl", benchmarkResult.ToDictionary());
       WriteEvent("benchmark_end", $"Benchmark complete. Tier: {benchmarkResult.RecommendedHeadroomTier}");
@@ -62,8 +79,15 @@ public sealed class TelemetryCoordinator : IDisposable {
     // ServerPulseBroadcaster be the server's clean data source.
     if (Time.unscaledTime - _lastClientSampleAt >= sampleIntervalSeconds && !IsDedicatedServer()) {
       _lastClientSampleAt = Time.unscaledTime;
-      _latestClientSample = _clientTelemetrySampler.Capture(_sessionId, _mode, _latestServerPulse?.OwnerId);
-      _latestScores = ScoreCalculator.Calculate(_latestClientSample, _latestServerPulse, _mode);
+
+      using (NetworkSensePerfProbe.Measure("TelemetryCoordinator.ClientTelemetrySampler.Capture")) {
+        _latestClientSample = _clientTelemetrySampler.Capture(_sessionId, _mode, _latestServerPulse?.OwnerId);
+      }
+
+      using (NetworkSensePerfProbe.Measure("TelemetryCoordinator.ScoreCalculator.Calculate")) {
+        _latestScores = ScoreCalculator.Calculate(_latestClientSample, _latestServerPulse, _mode);
+      }
+
       _logWriter.Write("telemetry-client.jsonl", _latestClientSample.ToDictionary());
 
       if (_latestClientSample.RegionId != _lastRegionId) {
@@ -72,7 +96,11 @@ public sealed class TelemetryCoordinator : IDisposable {
       }
     }
 
-    _serverPulseBroadcaster.Update(_sessionId, _mode, _logWriter);
+    using (NetworkSensePerfProbe.Measure("TelemetryCoordinator.ServerPulseBroadcaster.Update")) {
+      _serverPulseBroadcaster.Update(_sessionId, _mode, _logWriter);
+    }
+
+    _perfProbe?.SetRuntimeContext(_latestClientSample?.RegionId ?? string.Empty, _benchmarkRunner.IsRunning);
   }
 
   static bool IsDedicatedServer() {
@@ -80,6 +108,8 @@ public sealed class TelemetryCoordinator : IDisposable {
   }
 
   public void DrawHud() {
+    using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("TelemetryCoordinator.DrawHud");
+
     _hudRenderer.Draw(
         _hudVisible,
         _hudDetailLevel,
@@ -165,6 +195,13 @@ public sealed class TelemetryCoordinator : IDisposable {
             + $"benchmark={(_benchmarkRunner.IsRunning ? "running" : "idle")}, "
             + $"region={_latestClientSample?.RegionId ?? "n/a"}, "
             + $"serverPulse={GetServerPulseState()}.";
+  }
+
+  public string GetPerfStatus() {
+    string latestRegion = _latestClientSample?.RegionId ?? "n/a";
+    return _perfProbe != null
+        ? _perfProbe.GetStatus(latestRegion, _benchmarkRunner.IsRunning)
+        : "NetworkSense perf probe inactive.";
   }
 
   public void TogglePanel(string tab = null) {
@@ -300,6 +337,41 @@ public sealed class TelemetryCoordinator : IDisposable {
     string message = $"NetworkSense marker recorded: {label}";
     MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
     return message;
+  }
+
+  public void RecordLumberjacksBridgeProbe(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("lumberjacks-bridge-probes.jsonl", row);
+
+    string status = values.TryGetValue("status", out object value) ? Convert.ToString(value) : "unknown";
+    WriteEvent("lumberjacks_bridge_probe", $"Lumberjacks bridge probe {status}");
+  }
+
+  public void RecordLumberjacksProjection(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("lumberjacks-projection.jsonl", row);
+
+    string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
+    string status = values.TryGetValue("status", out object statusValue) ? Convert.ToString(statusValue) : "unknown";
+    WriteEvent("lumberjacks_projection", $"Lumberjacks projection {eventName}: {status}");
+  }
+
+  public void RecordLumberjacksShadow(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("lumberjacks-shadow.jsonl", row);
+
+    string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
+    string status = values.TryGetValue("status", out object statusValue) ? Convert.ToString(statusValue) : "unknown";
+    WriteEvent("lumberjacks_shadow", $"Lumberjacks shadow {eventName}: {status}");
   }
 
   public void StartRavenRequest(string requestKind) {
@@ -636,6 +708,7 @@ public sealed class TelemetryCoordinator : IDisposable {
   }
 
   public void Dispose() {
+    _perfProbe?.Dispose();
     _logWriter?.Dispose();
   }
 }
