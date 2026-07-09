@@ -1,5 +1,18 @@
 ## Changelog
 
+### 0.5.6
+
+- Added a config-driven auto-start for the I1 netcode probe under a new `[Netcode]` section (`netcodeProbeAutoStartEnabled`, `netcodeProbeAutoStartDelaySeconds`, `netcodeProbeAutoStopSeconds`, `netcodeProbeMaxDetailRows`).
+- Auto-start fires once `ZNet.GetPeerConnections() > 0` — it does **not** wait for a local player, so it runs headless on the dedicated server as well as on clients. Needed because the ZDO send/receive funnels only fire with a connected peer (singleplayer never invokes `SendZDOs`/`RPC_ZDOData`), and containerized lab clients have no console to type the command.
+- Auto-stops after the configured window, writing the lifecycle counters row. Wired into `run-autonomous-valheim-lab.ps1` (server + client configs enable it; a post-run step verifies whichever produced `netcode-probe.jsonl`).
+
+### 0.5.5
+
+- Added `network_sense_lumberjacks_netcode_probe [start|stop|status] [max-detail-rows]`, the rung I1 (interception reachability) observe-only probe.
+- Installs three auto-applied Harmony postfixes on `ZDOMan`: `RPC_ZDOData` (receive funnel), `SendZDOs` (the residual-inlining-risk send helper), and `CreateSyncList` (send-side fallback seam + per-ZDO send detail).
+- Writes one line per observed ZDO (uid, owner, ownerRevision, dataRevision, position, dir) plus lifecycle counters to `netcode-probe.jsonl`. The receive side re-parses a copy of the wire bytes so the live packet's read cursor is never touched; the send side only reads ZDO objects Valheim already selected. No ZDOs, owners, revisions, or transforms are modified.
+- Paired verifier `fieldlab/scripts/verify-netcode-probe.ps1` applies the I1 gate (nonzero sends AND receives with legible uid/owner) and discriminates whether `SendZDOs` was reachable directly or via the `CreateSyncList` fallback (inlining evidence).
+
 ### 0.5.1
 
 - Added `network_sense_lumberjacks_priority_mirror [start|stop|status] [eventlog-url]`, which live-mirrors priority manifest rows to Lumberjacks EventLog.

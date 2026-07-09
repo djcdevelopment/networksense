@@ -392,6 +392,23 @@ public sealed class TelemetryCoordinator : IDisposable {
     WriteEvent("lumberjacks_priority", $"Lumberjacks priority {eventName}: {status}");
   }
 
+  public void RecordNetcodeProbe(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("netcode-probe.jsonl", row);
+
+    string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
+    // Per-ZDO rows are the bulk of the stream; only surface lifecycle events to the timeline.
+    if (string.Equals(eventName, "zdo", StringComparison.OrdinalIgnoreCase)) {
+      return;
+    }
+
+    string status = values.TryGetValue("status", out object statusValue) ? Convert.ToString(statusValue) : "unknown";
+    WriteEvent("netcode_probe", $"Netcode probe {eventName}: {status}");
+  }
+
   public void SetLumberjacksPriorityMirror(LumberjacksPriorityMirrorRunner runner) {
     _priorityMirrorRunner = runner;
   }

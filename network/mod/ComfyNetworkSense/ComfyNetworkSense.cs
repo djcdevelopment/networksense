@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.4";
+  public const string PluginVersion = "0.5.6";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -35,11 +35,16 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityProbeRunner _lumberjacksPriorityProbeRunner;
   LumberjacksPriorityMirrorRunner _lumberjacksPriorityMirrorRunner;
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
+  NetcodeProbeRunner _netcodeProbeRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
   bool _autoRehearsalStarted;
   float _autoRehearsalStartAt = -1.0f;
+  bool _netcodeProbeAutoArmed;
+  bool _netcodeProbeAutoStarted;
+  float _netcodeProbeAutoStartAt = -1.0f;
+  float _netcodeProbeAutoStopAt = -1.0f;
 
   enum ShadowRouteMovementKind {
     Stationary,
@@ -64,6 +69,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityMirrorRunner = new();
     _coordinator.SetLumberjacksPriorityMirror(_lumberjacksPriorityMirrorRunner);
     _lumberjacksPriorityManifestListener = new();
+    _netcodeProbeRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -118,6 +124,63 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryStartAutoRehearsal")) {
       TryStartAutoRehearsal();
     }
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryDriveNetcodeProbeAuto")) {
+      TryDriveNetcodeProbeAuto();
+    }
+  }
+
+  // Config-driven auto-start for the rung I1 netcode probe. Unlike the auto-rehearsal, this
+  // does NOT wait for a local player — it fires as soon as a network peer is connected, so it
+  // works headless on the dedicated server as well as on clients. Intended for private lab
+  // runs (e.g. run-autonomous-valheim-lab.ps1) where no console is available to type the
+  // command. Observe-only, so it is safe to leave armed.
+  void TryDriveNetcodeProbeAuto() {
+    if (!PluginConfig.NetcodeProbeAutoStartEnabled.Value || _coordinator == null || _netcodeProbeRunner == null) {
+      return;
+    }
+
+    if (_netcodeProbeAutoStarted) {
+      // Already ran this session; only remaining job is the timed auto-stop.
+      if (_netcodeProbeRunner.IsRunning
+          && _netcodeProbeAutoStopAt >= 0.0f
+          && Time.time >= _netcodeProbeAutoStopAt) {
+        string stopMessage = _netcodeProbeRunner.Stop();
+        _coordinator.RecordNetcodeProbe(_netcodeProbeRunner.BuildStatusRow("auto_stop"));
+        _coordinator.RecordDevMarker("netcode_probe_auto stop");
+        LogInfo("Netcode probe auto-stopped: " + stopMessage);
+      }
+      return;
+    }
+
+    ZNet znet = ZNet.instance;
+    if (znet == null || znet.GetPeerConnections() <= 0) {
+      _netcodeProbeAutoArmed = false;
+      _netcodeProbeAutoStartAt = -1.0f;
+      return;
+    }
+
+    if (!_netcodeProbeAutoArmed) {
+      float delay = Math.Max(0.0f, PluginConfig.NetcodeProbeAutoStartDelaySeconds.Value);
+      _netcodeProbeAutoStartAt = Time.time + delay;
+      _netcodeProbeAutoArmed = true;
+      _coordinator.RecordDevMarker(
+          $"netcode_probe_auto armed delay={delay:0.##} peers={znet.GetPeerConnections()}");
+      return;
+    }
+
+    if (_netcodeProbeAutoStartAt >= 0.0f && Time.time < _netcodeProbeAutoStartAt) {
+      return;
+    }
+
+    _netcodeProbeAutoStarted = true;
+    int maxDetailRows = PluginConfig.NetcodeProbeMaxDetailRows.Value;
+    string message = _netcodeProbeRunner.Start(_coordinator, maxDetailRows);
+    float autoStopSeconds = PluginConfig.NetcodeProbeAutoStopSeconds.Value;
+    _netcodeProbeAutoStopAt = autoStopSeconds > 0.0f ? Time.time + autoStopSeconds : -1.0f;
+    _coordinator.RecordDevMarker(
+        $"netcode_probe_auto start maxDetailRows={maxDetailRows} autoStopSeconds={autoStopSeconds:0.##}");
+    LogInfo("Netcode probe auto-started: " + message);
   }
 
   void OnGUI() {
@@ -142,6 +205,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityMirrorRunner = null;
     _lumberjacksPriorityManifestListener?.Dispose();
     _lumberjacksPriorityManifestListener = null;
+    _netcodeProbeRunner?.Dispose();
+    _netcodeProbeRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();
@@ -250,6 +315,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         "network_sense_lumberjacks_priority_manifest_listen",
         "listen for the reliable Lumberjacks priority_manifest broadcast: network_sense_lumberjacks_priority_manifest_listen [start|stop|status] [ws-url] [region-id]",
         LumberjacksPriorityManifestListenCommand);
+    new Terminal.ConsoleCommand(
+        "network_sense_lumberjacks_netcode_probe",
+        "observe the live ZDO send/receive funnels to prove interception reachability (I1): network_sense_lumberjacks_netcode_probe [start|stop|status] [max-detail-rows]",
+        LumberjacksNetcodeProbeCommand);
     new Terminal.ConsoleCommand(
         "network_sense_tp",
         "teleport local player for baseline capture: network_sense_tp x z [label] or network_sense_tp x y z [label]",
@@ -556,6 +625,48 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
       default: {
         string message = "Usage: network_sense_lumberjacks_priority_probe [start|stop|status] [radius] [scan-interval] [max-objects]";
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogWarning(message);
+        return false;
+      }
+    }
+  }
+
+  object LumberjacksNetcodeProbeCommand(Terminal.ConsoleEventArgs args) {
+    string action = args.Length >= 2 ? args[1].Trim().ToLowerInvariant() : "start";
+
+    switch (action) {
+      case "start":
+      case "run":
+      case "on": {
+        int? maxDetailRows =
+            args.Length >= 3 && int.TryParse(args[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)
+                ? parsed
+                : (int?) null;
+        string message = _netcodeProbeRunner.Start(_coordinator, maxDetailRows);
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "stop":
+      case "off": {
+        string message = _netcodeProbeRunner.Stop();
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      case "status": {
+        string message = _netcodeProbeRunner.GetStatus();
+        _coordinator.RecordNetcodeProbe(_netcodeProbeRunner.BuildStatusRow("status"));
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+        LogInfo(message);
+        return message;
+      }
+
+      default: {
+        string message = "Usage: network_sense_lumberjacks_netcode_probe [start|stop|status] [max-detail-rows]";
         MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
         LogWarning(message);
         return false;

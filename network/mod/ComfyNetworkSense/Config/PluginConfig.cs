@@ -64,6 +64,10 @@ public static class PluginConfig {
   public static ConfigEntry<float> LumberjacksPriorityProbeIntervalSeconds { get; private set; }
   public static ConfigEntry<int> LumberjacksPriorityProbeMaxObjectsPerSample { get; private set; }
   public static ConfigEntry<string> LumberjacksEventLogUrl { get; private set; }
+  public static ConfigEntry<bool> NetcodeProbeAutoStartEnabled { get; private set; }
+  public static ConfigEntry<float> NetcodeProbeAutoStartDelaySeconds { get; private set; }
+  public static ConfigEntry<float> NetcodeProbeAutoStopSeconds { get; private set; }
+  public static ConfigEntry<int> NetcodeProbeMaxDetailRows { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -543,6 +547,34 @@ public static class PluginConfig {
             "lumberjacksEventLogUrl",
             "http://127.0.0.1:4002",
             "Lumberjacks EventLog base URL used by live priority mirror commands.");
+
+    NetcodeProbeAutoStartEnabled =
+        config.Bind(
+            "Netcode",
+            "netcodeProbeAutoStartEnabled",
+            false,
+            "Automatically start the rung I1 ZDO netcode reachability probe once at least one network peer is connected. Works headless on both the dedicated server and clients (no local player required). Intended for private lab runs.");
+
+    NetcodeProbeAutoStartDelaySeconds =
+        config.Bind(
+            "Netcode",
+            "netcodeProbeAutoStartDelaySeconds",
+            25.0f,
+            "Seconds to wait after the first peer connects before the netcode probe auto-starts.");
+
+    NetcodeProbeAutoStopSeconds =
+        config.Bind(
+            "Netcode",
+            "netcodeProbeAutoStopSeconds",
+            150.0f,
+            "If greater than 0, automatically stop the netcode probe this many seconds after it auto-starts, writing the lifecycle counters row. 0 = run until shutdown.");
+
+    NetcodeProbeMaxDetailRows =
+        config.Bind(
+            "Netcode",
+            "netcodeProbeMaxDetailRows",
+            5000,
+            "Maximum per-ZDO detail rows written to netcode-probe.jsonl per auto-started run. Aggregate counters keep counting past the cap.");
 
     WriteTelemetryLogs =
         config.Bind(
