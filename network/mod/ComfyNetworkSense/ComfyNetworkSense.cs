@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.10";
+  public const string PluginVersion = "0.5.11";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -38,6 +38,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   NetcodeProbeRunner _netcodeProbeRunner;
   OwnershipObserveRunner _ownershipObserveRunner;
   OwnershipPinRunner _ownershipPinRunner;
+  ZdoRedirectRunner _zdoRedirectRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
@@ -74,6 +75,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _netcodeProbeRunner = new();
     _ownershipObserveRunner = new();
     _ownershipPinRunner = new();
+    _zdoRedirectRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -167,6 +169,15 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
           _coordinator.RecordDevMarker("ownership_pin stop");
           LogInfo("Ownership pin auto-stopped: " + pinStop);
         }
+
+        // P4/I3 ZDO redirect (behaviour-changing) is coupled to the same window: disarm in
+        // lockstep (it usually auto-disarmed already at zdoRedirectActiveSeconds — the in-window
+        // rollback rehearsal).
+        if (_zdoRedirectRunner != null && _zdoRedirectRunner.IsRunning) {
+          string redirectStop = _zdoRedirectRunner.Stop();
+          _coordinator.RecordDevMarker("zdo_redirect stop");
+          LogInfo("ZDO redirect auto-stopped: " + redirectStop);
+        }
       }
       return;
     }
@@ -219,6 +230,17 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _coordinator.RecordDevMarker("ownership_pin start (coupled to netcode probe)");
       LogInfo("Ownership pin auto-started: " + pinMessage);
     }
+
+    // P4/I3 outbound REDIRECT (behaviour-changing), coupled to the same window. Rollback-gated
+    // (zdoRedirectEnabled, default off; empty prefab allowlist refuses). Server-side postfix on
+    // ZDOMan.CreateSyncList suppresses native send for tagged prefabs and posts the
+    // wire-equivalent to the Lumberjacks gateway; auto-disarms at zdoRedirectActiveSeconds for
+    // the in-window rollback rehearsal.
+    if (PluginConfig.ZdoRedirectEnabled.Value && _zdoRedirectRunner != null) {
+      string redirectMessage = _zdoRedirectRunner.Start(_coordinator, maxDetailRows);
+      _coordinator.RecordDevMarker("zdo_redirect start (coupled to netcode probe)");
+      LogInfo("ZDO redirect auto-started: " + redirectMessage);
+    }
   }
 
   void OnGUI() {
@@ -249,6 +271,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipObserveRunner = null;
     _ownershipPinRunner?.Dispose();
     _ownershipPinRunner = null;
+    _zdoRedirectRunner?.Dispose();
+    _zdoRedirectRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();

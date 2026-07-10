@@ -74,6 +74,11 @@ public static class PluginConfig {
   public static ConfigEntry<bool> OwnershipPinEnabled { get; private set; }
   public static ConfigEntry<int> OwnershipPinAutoCaptureMax { get; private set; }
   public static ConfigEntry<string> OwnershipPinPrefabs { get; private set; }
+  public static ConfigEntry<bool> ZdoRedirectEnabled { get; private set; }
+  public static ConfigEntry<string> ZdoRedirectPrefabs { get; private set; }
+  public static ConfigEntry<string> ZdoRedirectEndpoint { get; private set; }
+  public static ConfigEntry<string> ZdoRedirectWindowId { get; private set; }
+  public static ConfigEntry<float> ZdoRedirectActiveSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -636,6 +641,58 @@ public static class PluginConfig {
             + "When set, only ZDOs whose prefab is in the list are eligible for auto-capture "
             + "(targeted test). Blank = any prefab is eligible (broad test). Names are matched by "
             + "stable hash, so no ZNetScene lookup is needed.");
+
+    ZdoRedirectEnabled =
+        config.Bind(
+            "Netcode",
+            "zdoRedirectEnabled",
+            false,
+            "P4/I3 outbound REDIRECT. BEHAVIOUR-CHANGING (server-side/am4 only), rollback flag. "
+            + "When on, a server-side Harmony postfix on ZDOMan.CreateSyncList removes "
+            + "allowlisted-prefab ZDOs from the native send list (replicating the native per-peer "
+            + "ack so revision bookkeeping stays exact) and posts the wire-equivalent payload to "
+            + "the Lumberjacks gateway instead. Writes no persisted ZDO state (send path is "
+            + "runtime bookkeeping only). Non-tagged ZDOs sync normally (the negative control). "
+            + "REFUSES to arm with an empty prefab allowlist. off = vanilla behaviour, zero cost. "
+            + "Intended for private lab runs on the dedicated server; coupled to the "
+            + "netcode-probe window.");
+
+    ZdoRedirectPrefabs =
+        config.Bind(
+            "Netcode",
+            "zdoRedirectPrefabs",
+            "",
+            "Comma-separated prefab name allowlist for the redirect (e.g. 'Beech1'). REQUIRED — "
+            + "unlike the pin, blank does NOT mean 'any': suppressing every ZDO would freeze "
+            + "world sync for the client, so an empty list refuses to start. Names are matched "
+            + "by stable hash.");
+
+    ZdoRedirectEndpoint =
+        config.Bind(
+            "Netcode",
+            "zdoRedirectEndpoint",
+            "http://100.124.12.37:4000",
+            "Base URL of the Lumberjacks gateway (OMEN tailnet). The runner POSTs envelope "
+            + "batches to <endpoint>/valheim/zdo-redirect/receipts. The gateway must be launched "
+            + "with a 0.0.0.0 bind (its appsettings default is localhost-only).");
+
+    ZdoRedirectWindowId =
+        config.Bind(
+            "Netcode",
+            "zdoRedirectWindowId",
+            "",
+            "Window id stamped on every envelope + local row (the gate join key against the "
+            + "gateway's per-window receipt counters). Blank = auto 'i3-<utc timestamp>' per run.");
+
+    ZdoRedirectActiveSeconds =
+        config.Bind(
+            "Netcode",
+            "zdoRedirectActiveSeconds",
+            90.0f,
+            "Suppression sub-window in seconds. Set SHORTER than the netcode-probe window and the "
+            + "redirect auto-disarms mid-capture, so the still-running probe records native sends "
+            + "of the tagged prefab RESUMING — the in-window rollback rehearsal (P4 step 11), "
+            + "hands-free. 0 = suppress for the whole probe window.");
 
     WriteTelemetryLogs =
         config.Bind(
