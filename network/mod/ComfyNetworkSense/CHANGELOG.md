@@ -13,6 +13,14 @@
 - Writes one line per observed ZDO (uid, owner, ownerRevision, dataRevision, position, dir) plus lifecycle counters to `netcode-probe.jsonl`. The receive side re-parses a copy of the wire bytes so the live packet's read cursor is never touched; the send side only reads ZDO objects Valheim already selected. No ZDOs, owners, revisions, or transforms are modified.
 - Paired verifier `fieldlab/scripts/verify-netcode-probe.ps1` applies the I1 gate (nonzero sends AND receives with legible uid/owner) and discriminates whether `SendZDOs` was reachable directly or via the `CreateSyncList` fallback (inlining evidence).
 
+### 0.5.4 *(backfilled 2026-07-09 — shipped in commit `adddebf` without a changelog entry)*
+
+- Fixed UDP datagram loss in the priority-manifest listener (drained the socket per tick instead of one datagram per tick, so bursts no longer drop rows).
+
+### 0.5.3 *(backfilled 2026-07-09 — shipped in commit `6c44983` without a changelog entry; 0.5.2 was never released)*
+
+- Added `network_sense_lumberjacks_priority_manifest_listen [start|stop|status] [ws-url] [region-id]`, the real in-game consumer for the reliable Lumberjacks `priority_manifest` broadcast (UDP datagram lane + WS control).
+
 ### 0.5.1
 
 - Added `network_sense_lumberjacks_priority_mirror [start|stop|status] [eventlog-url]`, which live-mirrors priority manifest rows to Lumberjacks EventLog.

@@ -25,6 +25,9 @@ In-game Valheim console commands:
 - `network_sense_lumberjacks_priority_mirror [start|stop|status] [eventlog-url]`: live-mirror priority manifest rows to Lumberjacks EventLog as sample events plus per-sample object batches.
 - `network_sense_lumberjacks_priority_route_mirror [teleport-route.tsv] [radius] [scan-interval] [max-objects] [eventlog-url]`: run the priority route and live-mirror the same per-stop batches to Lumberjacks EventLog.
 - `network_sense_lumberjacks_netcode_probe [start|stop|status] [max-detail-rows]`: rung I1 observe-only probe of the live ZDO send/receive funnels (`RPC_ZDOData` / `SendZDOs` / `CreateSyncList`). Writes one row per observed ZDO (uid, owner, revisions, position, dir) to `netcode-probe.jsonl`. Changes nothing. The funnels only fire with a connected peer (not in singleplayer). For headless/lab runs, the `[Netcode]` config keys (`netcodeProbeAutoStartEnabled`, `netcodeProbeAutoStartDelaySeconds`, `netcodeProbeAutoStopSeconds`, `netcodeProbeMaxDetailRows`) auto-start it once a peer connects — no console needed.
+- `network_sense_lumberjacks_priority_manifest_listen [start|stop|status] [ws-url] [region-id]`: listen for the reliable Lumberjacks `priority_manifest` broadcast (UDP datagram lane + WS control). *(since 0.5.3; doc backfilled 2026-07-09)*
+- `network_sense_perf_status`: show the current perf-capture state. *(since 0.4.2; doc backfilled 2026-07-09)*
+- `network_sense_perf_mark <label>`: record a ComfyNetworkSense perf marker. *(since 0.4.2; doc backfilled 2026-07-09)*
 - `network_sense_reload_config`: reload BepInEx config.
 - `network_sense_export_session`: write a compact dev session export JSON.
 - `network_sense_mcp_status`: check whether the local Comfy MCP gateway is reachable.
