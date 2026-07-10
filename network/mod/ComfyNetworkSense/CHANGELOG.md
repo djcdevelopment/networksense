@@ -1,5 +1,11 @@
 ## Changelog
 
+### 0.5.9
+
+- P3/I2 ownership-seizure grounding, **observe only**: new server-side Harmony postfixes on `ZDO.SetOwner(long)` and `ZDO.SetOwnerInternal(long)` (`OwnershipObserveRunner` + `OwnershipObservePatches`) that log every ZDO ownership change — `{uid, old_owner, new_owner, owner_revision, data_revision, is_owner_now, sector, via, is_server}` — to `ownership-churn.jsonl`. The `via` tag separates the two funnels: `SetOwner` = the authoritative, revision-**bumping** path; `SetOwnerInternal` = the revision-**silent** remote-apply path (`RPC_ZDOData`, NETCODE-OWNERSHIP-MAP.md caveat #2 — a `SetOwner` guard alone would not cover it). Changes **no** gameplay: both hooks read state in postfix after Valheim applied it; no owners, revisions, or transforms are written. A prefix stashes the pre-change owner into `__state` since by postfix time `GetOwner()` is already the new owner.
+- Gated by new `[Netcode] ownershipObserveEnabled` (default `false`; rollback flag). Coupled to the netcode-probe run window (starts/stops in lockstep) so one auto-rehearsal walk captures both, sharing the detail-row cap. Idle cost is a volatile read + null-check when the flag is off, mirroring the netcode probe.
+- Purpose: measure the P3 ownership funnel against real churn *before* any behaviour-changing pin code, and empirically confirm the `ReleaseNearbyZDOS`→`SetOwner` funnel actually reaches a Harmony patch. Read through the new MCP tools `valheim_tail_ownership_churn` / `valheim_ownership_churn_summary`.
+
 ### 0.5.8
 
 - Route/rehearsal walks now enable god mode + debug-fly on the local player before the first teleport, so a fall after any teleport can't kill the character mid-walk (a death would abort the route and force a human back into the loop). Gated by `[Automation] routeGodFlySafeguard` (default on); no-op headless.

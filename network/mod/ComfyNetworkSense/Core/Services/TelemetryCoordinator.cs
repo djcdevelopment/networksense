@@ -409,6 +409,23 @@ public sealed class TelemetryCoordinator : IDisposable {
     WriteEvent("netcode_probe", $"Netcode probe {eventName}: {status}");
   }
 
+  public void RecordOwnershipChurn(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("ownership-churn.jsonl", row);
+
+    string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
+    // Per-change ownership rows are the bulk of the stream; only surface lifecycle events.
+    if (string.Equals(eventName, "ownership", StringComparison.OrdinalIgnoreCase)) {
+      return;
+    }
+
+    string status = values.TryGetValue("status", out object statusValue) ? Convert.ToString(statusValue) : "unknown";
+    WriteEvent("ownership_observe", $"Ownership observe {eventName}: {status}");
+  }
+
   public void SetLumberjacksPriorityMirror(LumberjacksPriorityMirrorRunner runner) {
     _priorityMirrorRunner = runner;
   }

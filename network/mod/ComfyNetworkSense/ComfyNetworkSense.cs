@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.8";
+  public const string PluginVersion = "0.5.9";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -36,6 +36,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityMirrorRunner _lumberjacksPriorityMirrorRunner;
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
   NetcodeProbeRunner _netcodeProbeRunner;
+  OwnershipObserveRunner _ownershipObserveRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
@@ -70,6 +71,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator.SetLumberjacksPriorityMirror(_lumberjacksPriorityMirrorRunner);
     _lumberjacksPriorityManifestListener = new();
     _netcodeProbeRunner = new();
+    _ownershipObserveRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -149,6 +151,13 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         _coordinator.RecordNetcodeProbe(_netcodeProbeRunner.BuildStatusRow("auto_stop"));
         _coordinator.RecordDevMarker("netcode_probe_auto stop");
         LogInfo("Netcode probe auto-stopped: " + stopMessage);
+
+        // Ownership observe is coupled to the probe window: stop it in lockstep.
+        if (_ownershipObserveRunner != null && _ownershipObserveRunner.IsRunning) {
+          string ownershipStop = _ownershipObserveRunner.Stop();
+          _coordinator.RecordDevMarker("ownership_observe stop");
+          LogInfo("Ownership observe auto-stopped: " + ownershipStop);
+        }
       }
       return;
     }
@@ -182,6 +191,14 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator.RecordDevMarker(
         $"netcode_probe_auto start maxDetailRows={maxDetailRows} autoStopSeconds={autoStopSeconds:0.##}");
     LogInfo("Netcode probe auto-started: " + message);
+
+    // P3/I2 ownership-churn observer, coupled to the probe capture window. Rollback-gated and
+    // observe-only (server-side postfix on ZDO.SetOwner/SetOwnerInternal); off by default.
+    if (PluginConfig.OwnershipObserveEnabled.Value && _ownershipObserveRunner != null) {
+      string ownershipMessage = _ownershipObserveRunner.Start(_coordinator, maxDetailRows);
+      _coordinator.RecordDevMarker("ownership_observe start (coupled to netcode probe)");
+      LogInfo("Ownership observe auto-started: " + ownershipMessage);
+    }
   }
 
   void OnGUI() {
@@ -208,6 +225,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = null;
     _netcodeProbeRunner?.Dispose();
     _netcodeProbeRunner = null;
+    _ownershipObserveRunner?.Dispose();
+    _ownershipObserveRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();

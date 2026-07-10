@@ -70,6 +70,7 @@ public static class PluginConfig {
   public static ConfigEntry<float> NetcodeProbeAutoStartDelaySeconds { get; private set; }
   public static ConfigEntry<float> NetcodeProbeAutoStopSeconds { get; private set; }
   public static ConfigEntry<int> NetcodeProbeMaxDetailRows { get; private set; }
+  public static ConfigEntry<bool> OwnershipObserveEnabled { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -591,6 +592,13 @@ public static class PluginConfig {
             "netcodeProbeMaxDetailRows",
             5000,
             "Maximum per-ZDO detail rows written to netcode-probe.jsonl per auto-started run. Aggregate counters keep counting past the cap.");
+
+    OwnershipObserveEnabled =
+        config.Bind(
+            "Netcode",
+            "ownershipObserveEnabled",
+            false,
+            "P3/I2 observe-only ownership-churn logger. When on, server-side Harmony postfixes on ZDO.SetOwner / SetOwnerInternal record every ownership change (uid, old/new owner, revision, sector, via, is_server) to ownership-churn.jsonl for the window a netcode probe run is active. Changes NO gameplay - pure measurement for the ownership-seizure (pin) work; off = no observation, zero cost (rollback flag). Intended for private lab runs on the dedicated server.");
 
     WriteTelemetryLogs =
         config.Bind(
