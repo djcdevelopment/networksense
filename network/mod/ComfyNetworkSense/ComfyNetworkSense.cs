@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.7";
+  public const string PluginVersion = "0.5.8";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -1158,6 +1158,41 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     return true;
   }
 
+  // Enable god mode + debug-fly on the local player before a teleport walk begins, so a fall after
+  // any teleport can't kill the character mid-route (a death aborts the walk and drags Derek back
+  // into the loop — the exact KVM regression the hands-free rig exists to prevent). We call the
+  // Player API directly rather than issuing the 'god'/'fly' console commands: those are cheat-gated
+  // (Terminal.IsCheatsEnabled() returns ZNet.IsServer(), which is false on a client joined to the
+  // dedicated am4 server) and 'fly' is onlyServer, so the console strings would be rejected
+  // client-side and the character would still fall. Direct calls also avoid devcommands' RemoteCommand
+  // side effect on the authoritative server during baseline capture. Idempotent; try/caught so a
+  // not-yet-networked player (null m_nview in ToggleDebugFly) degrades to a warning, never a route
+  // abort. No-op headless (Player.m_localPlayer is null on the dedicated server).
+  void EnableRouteMovementSafeguards() {
+    if (!PluginConfig.RouteGodFlySafeguard.Value) {
+      return;
+    }
+
+    Player player = Player.m_localPlayer;
+    if (player == null) {
+      return;
+    }
+
+    try {
+      if (!player.InGodMode()) {
+        player.SetGodMode(true);
+      }
+      if (!player.InDebugFlyMode()) {
+        player.ToggleDebugFly();
+      }
+      string state = $"god={player.InGodMode()} fly={player.InDebugFlyMode()}";
+      _coordinator?.RecordDevMarker($"route_safeguards {state}");
+      LogInfo($"route movement safeguards on: {state}");
+    } catch (Exception ex) {
+      LogWarning($"route movement safeguards failed: {ex.Message}");
+    }
+  }
+
   IEnumerator RunTeleportRoute(
       List<RouteStop> stops,
       string routePath,
@@ -1168,6 +1203,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     bool aborted = false;
     NetworkSensePerfProbe.SetRouteState("route", "", "start");
     _coordinator.RecordDevMarker($"route_run start stops={stops.Count} file={Path.GetFileName(routePath)}");
+
+    EnableRouteMovementSafeguards();
 
     foreach (RouteStop stop in stops) {
       Player player = Player.m_localPlayer;

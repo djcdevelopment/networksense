@@ -34,6 +34,7 @@ public static class PluginConfig {
   public static ConfigEntry<float> AutoRehearsalDelaySeconds { get; private set; }
   public static ConfigEntry<bool> AutoRehearsalRunOncePerSession { get; private set; }
   public static ConfigEntry<bool> CoupleAutoRehearsalToNetcodeProbe { get; private set; }
+  public static ConfigEntry<bool> RouteGodFlySafeguard { get; private set; }
   public static ConfigEntry<bool> AutoJoinEnabled { get; private set; }
   public static ConfigEntry<string> AutoJoinCharacterName { get; private set; }
   public static ConfigEntry<int> AutoJoinCharacterIndex { get; private set; }
@@ -338,6 +339,13 @@ public static class PluginConfig {
             "coupleAutoRehearsalToNetcodeProbe",
             false,
             "When the netcode probe auto-starts on a client, also trigger the automatic route rehearsal so captured ZDO traffic exists without a human hand-walking the route. Requires a local player; skipped headless on the dedicated server. Intended for private lab clients only.");
+
+    RouteGodFlySafeguard =
+        config.Bind(
+            "Automation",
+            "routeGodFlySafeguard",
+            true,
+            "Before any teleport route or rehearsal walk starts, enable god mode + debug-fly on the local player so post-teleport falls cannot kill the character mid-walk. Calls the Player API directly rather than the 'god'/'fly' console commands, which are cheat-gated (IsCheatsEnabled() returns ZNet.IsServer(), false on a client joined to a dedicated server) and would be rejected client-side. No-op headless.");
 
     AutoJoinEnabled =
         config.Bind(

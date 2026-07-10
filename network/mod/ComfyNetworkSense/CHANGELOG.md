@@ -1,5 +1,14 @@
 ## Changelog
 
+### 0.5.8
+
+- Route/rehearsal walks now enable god mode + debug-fly on the local player before the first teleport, so a fall after any teleport can't kill the character mid-walk (a death would abort the route and force a human back into the loop). Gated by `[Automation] routeGodFlySafeguard` (default on); no-op headless.
+- Implemented via the `Player.SetGodMode` / `Player.ToggleDebugFly` API directly rather than the `god`/`fly` console commands: those are cheat-gated (`Terminal.IsCheatsEnabled()` returns `ZNet.IsServer()`, false on a client joined to a dedicated server) and `fly` is `onlyServer`, so the console strings are rejected client-side. Direct calls also avoid `devcommands`' `RemoteCommand` side effect on the authoritative server during baseline capture.
+
+### 0.5.7 *(backfilled — shipped in commit `c64ca1d` "Land P1 headless code" without a changelog entry or manifest bump)*
+
+- Added `[Automation] coupleAutoRehearsalToNetcodeProbe`: when the netcode probe auto-starts on a client, also trigger the automatic route rehearsal so captured ZDO traffic exists without a human hand-walking the route (P1 step 7, probe-walk coupling). Plus the P1 netcode MCP tools, verifier max-age/source-host hardening, and the one-command probe-cycle orchestrator.
+
 ### 0.5.6
 
 - Added a config-driven auto-start for the I1 netcode probe under a new `[Netcode]` section (`netcodeProbeAutoStartEnabled`, `netcodeProbeAutoStartDelaySeconds`, `netcodeProbeAutoStopSeconds`, `netcodeProbeMaxDetailRows`).
