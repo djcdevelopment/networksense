@@ -1,5 +1,9 @@
 ## Changelog
 
+### 0.5.12
+
+- **Fix: redirect POST delivery on the dedicated server.** `ZdoRedirectRunner.PostBatch` used `WebRequest.Create("http://…")`, which throws `NotSupportedException("The URI prefix is not recognized.")` in Valheim's stripped **server** Mono runtime (the WebRequest prefix table is empty there) — so window i3-w3 suppressed 88 tree ZDOs correctly (`ack_failures=0`) but posted **0** (all 88 dropped after 9 failed batches / 176 requeues). Replaced with a raw `TcpClient` HTTP/1.1 POST (`SendHttpPostViaSocket`) that bypasses the prefix table: runs on the poster's background thread, bounded 5s connect/send/receive, throws on non-2xx so the existing retry + `last_error` path is unchanged. Only the delivery call changed; suppression/ack/rollback semantics are identical. NB: the sibling `WebRequest.Create` call sites (priority mirror, telemetry, apply-profile) share the same latent defect but run **client-side**, where the prefix table is populated — left for a follow-up.
+
 ### 0.5.11
 
 - P4/I3 outbound **REDIRECT** — the second behaviour-changing rung (server-side/am4 only, rollback-gated). New `ZdoRedirectRunner` + a `Priority.High` Harmony postfix on `ZDOMan.CreateSyncList` that removes allowlisted-prefab ZDOs from the freshly built `toSync` list *before* `SendZDOs` serializes it, and posts the wire-equivalent payload — `{seq, uid, owner, owner_rev, data_rev, prefab, pos, body_b64 = base64(zdo.Serialize bytes)}` in batched JSON — to the Lumberjacks gateway (`POST /valheim/zdo-redirect/receipts`). Every suppression is also logged locally to `redirect-send.jsonl` (the mod-side count of record for the gate: gateway distinct-seq == local seq, zero gaps).

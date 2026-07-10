@@ -6,7 +6,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -388,18 +390,11 @@ public sealed class ZdoRedirectRunner : IDisposable {
       };
       string body = JsonLineSerializer.Serialize(bodyValues);
 
-      HttpWebRequest request =
-          (HttpWebRequest) WebRequest.Create(endpoint + "/valheim/zdo-redirect/receipts");
-      request.Method = "POST";
-      request.ContentType = "application/json";
-      request.Timeout = 5000;
-      request.ReadWriteTimeout = 5000;
-      using (Stream requestStream = request.GetRequestStream()) {
-        using StreamWriter writer = new(requestStream);
-        writer.Write(body);
-      }
-      using WebResponse response = request.GetResponse();
-      _ = response;
+      // Valheim's stripped server Mono runtime does not register the WebRequest "http://" prefix
+      // handler, so WebRequest.Create/HttpWebRequest throws NotSupportedException("The URI prefix
+      // is not recognized.") on the dedicated server (observed i3-w3: 88 suppressed, 0 posted, all
+      // dropped). Post over a raw socket instead - no dependency on the runtime's prefix table.
+      SendHttpPostViaSocket(endpoint + "/valheim/zdo-redirect/receipts", body);
 
       lock (_lock) {
         _postedOk += batch.Count;
@@ -430,6 +425,49 @@ public sealed class ZdoRedirectRunner : IDisposable {
       if (!_postQueue.IsEmpty) {
         TryFlushQueue();
       }
+    }
+  }
+
+  // Raw-socket HTTP POST (see PostBatch): bypasses the WebRequest prefix table, which is empty in
+  // Valheim's server Mono runtime. Runs on the poster's background thread. Throws on
+  // connect-timeout / write error / non-2xx so the caller's retry + last_error path is unchanged.
+  static void SendHttpPostViaSocket(string url, string jsonBody) {
+    Uri uri = new(url);
+    if (uri.Scheme != "http") {
+      throw new NotSupportedException("redirect endpoint must be http (got '" + uri.Scheme + "')");
+    }
+
+    byte[] bodyBytes = Encoding.UTF8.GetBytes(jsonBody);
+    string head =
+        "POST " + uri.PathAndQuery + " HTTP/1.1\r\n"
+        + "Host: " + uri.Host + ":" + uri.Port.ToString(CultureInfo.InvariantCulture) + "\r\n"
+        + "Content-Type: application/json\r\n"
+        + "Content-Length: " + bodyBytes.Length.ToString(CultureInfo.InvariantCulture) + "\r\n"
+        + "Connection: close\r\n\r\n";
+    byte[] headBytes = Encoding.ASCII.GetBytes(head);
+
+    using TcpClient client = new();
+    IAsyncResult connect = client.BeginConnect(uri.Host, uri.Port, null, null);
+    if (!connect.AsyncWaitHandle.WaitOne(5000)) {
+      throw new TimeoutException("connect timeout to " + uri.Host + ":" + uri.Port);
+    }
+    client.EndConnect(connect);
+    client.SendTimeout = 5000;
+    client.ReceiveTimeout = 5000;
+
+    using NetworkStream stream = client.GetStream();
+    stream.Write(headBytes, 0, headBytes.Length);
+    stream.Write(bodyBytes, 0, bodyBytes.Length);
+    stream.Flush();
+
+    byte[] buffer = new byte[512];
+    int read = stream.Read(buffer, 0, buffer.Length);
+    string statusLine = read > 0
+        ? Encoding.ASCII.GetString(buffer, 0, read).Split('\n')[0].Trim()
+        : string.Empty;
+    string[] parts = statusLine.Split(' ');
+    if (parts.Length < 2 || parts[1].Length == 0 || parts[1][0] != '2') {
+      throw new Exception("http status: " + (statusLine.Length == 0 ? "(no response)" : statusLine));
     }
   }
 
