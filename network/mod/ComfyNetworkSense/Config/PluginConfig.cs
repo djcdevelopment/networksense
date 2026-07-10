@@ -71,6 +71,9 @@ public static class PluginConfig {
   public static ConfigEntry<float> NetcodeProbeAutoStopSeconds { get; private set; }
   public static ConfigEntry<int> NetcodeProbeMaxDetailRows { get; private set; }
   public static ConfigEntry<bool> OwnershipObserveEnabled { get; private set; }
+  public static ConfigEntry<bool> OwnershipPinEnabled { get; private set; }
+  public static ConfigEntry<int> OwnershipPinAutoCaptureMax { get; private set; }
+  public static ConfigEntry<string> OwnershipPinPrefabs { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -599,6 +602,40 @@ public static class PluginConfig {
             "ownershipObserveEnabled",
             false,
             "P3/I2 observe-only ownership-churn logger. When on, server-side Harmony postfixes on ZDO.SetOwner / SetOwnerInternal record every ownership change (uid, old/new owner, revision, sector, via, is_server) to ownership-churn.jsonl for the window a netcode probe run is active. Changes NO gameplay - pure measurement for the ownership-seizure (pin) work; off = no observation, zero cost (rollback flag). Intended for private lab runs on the dedicated server.");
+
+    OwnershipPinEnabled =
+        config.Bind(
+            "Netcode",
+            "ownershipPinEnabled",
+            false,
+            "P3/I2 ownership-seizure PIN. BEHAVIOUR-CHANGING (server-side/am4 only), rollback flag. "
+            + "When on, server-side Harmony prefixes on ZDO.SetOwner / SetOwnerInternal SKIP the "
+            + "vanilla ownership transfer on a small auto-captured set of ZDOs, scoped to exactly "
+            + "the two churn funnels (ReleaseNearbyZDOS release/reseize + RPC_ZDOData remote-apply), "
+            + "so a pinned ZDO's owner does not transfer on zone entry. It writes NO synthetic "
+            + "owners/revisions - it only skips vanilla owner changes; uncaptured ZDOs transfer "
+            + "normally (the negative control). off = vanilla behaviour, zero cost. Requires "
+            + "ownershipObserveEnabled for the paired per-transfer negative-control detail. Intended "
+            + "for private lab runs on the dedicated server; coupled to the netcode-probe window.");
+
+    OwnershipPinAutoCaptureMax =
+        config.Bind(
+            "Netcode",
+            "ownershipPinAutoCaptureMax",
+            25,
+            "Maximum number of ZDOs the pin will auto-capture (and then hold) in a run. Keeps the "
+            + "pin test-scoped on the ~9M-ZDO world: the first N owned ZDOs the churn funnel tries "
+            + "to transfer are pinned; every ZDO past the cap transfers normally.");
+
+    OwnershipPinPrefabs =
+        config.Bind(
+            "Netcode",
+            "ownershipPinPrefabs",
+            "",
+            "Optional comma-separated prefab name allowlist for the pin (e.g. 'Beech1,Rock_4'). "
+            + "When set, only ZDOs whose prefab is in the list are eligible for auto-capture "
+            + "(targeted test). Blank = any prefab is eligible (broad test). Names are matched by "
+            + "stable hash, so no ZNetScene lookup is needed.");
 
     WriteTelemetryLogs =
         config.Bind(

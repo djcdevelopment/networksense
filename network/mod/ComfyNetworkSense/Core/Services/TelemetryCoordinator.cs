@@ -426,6 +426,24 @@ public sealed class TelemetryCoordinator : IDisposable {
     WriteEvent("ownership_observe", $"Ownership observe {eventName}: {status}");
   }
 
+  public void RecordOwnershipPin(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("ownership-pin.jsonl", row);
+
+    string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
+    // Per-hold rows are the bulk of the stream; only surface lifecycle events to the timeline.
+    if (string.Equals(eventName, "pin_hold", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(eventName, "pin_capture", StringComparison.OrdinalIgnoreCase)) {
+      return;
+    }
+
+    string status = values.TryGetValue("status", out object statusValue) ? Convert.ToString(statusValue) : "unknown";
+    WriteEvent("ownership_pin", $"Ownership pin {eventName}: {status}");
+  }
+
   public void SetLumberjacksPriorityMirror(LumberjacksPriorityMirrorRunner runner) {
     _priorityMirrorRunner = runner;
   }

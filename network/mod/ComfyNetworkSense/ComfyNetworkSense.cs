@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.9";
+  public const string PluginVersion = "0.5.10";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -37,6 +37,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
   NetcodeProbeRunner _netcodeProbeRunner;
   OwnershipObserveRunner _ownershipObserveRunner;
+  OwnershipPinRunner _ownershipPinRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
@@ -72,6 +73,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = new();
     _netcodeProbeRunner = new();
     _ownershipObserveRunner = new();
+    _ownershipPinRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -158,6 +160,13 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
           _coordinator.RecordDevMarker("ownership_observe stop");
           LogInfo("Ownership observe auto-stopped: " + ownershipStop);
         }
+
+        // Ownership pin (behaviour-changing) is coupled to the same window: disarm in lockstep.
+        if (_ownershipPinRunner != null && _ownershipPinRunner.IsRunning) {
+          string pinStop = _ownershipPinRunner.Stop();
+          _coordinator.RecordDevMarker("ownership_pin stop");
+          LogInfo("Ownership pin auto-stopped: " + pinStop);
+        }
       }
       return;
     }
@@ -193,11 +202,22 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     LogInfo("Netcode probe auto-started: " + message);
 
     // P3/I2 ownership-churn observer, coupled to the probe capture window. Rollback-gated and
-    // observe-only (server-side postfix on ZDO.SetOwner/SetOwnerInternal); off by default.
+    // observe-only (server-side postfix on ZDO.SetOwner/SetOwnerInternal); off by default. Started
+    // BEFORE the pin so its prefix is registered first — a pin-blocked change then reads as a no-op
+    // to the observer (correct) rather than a spurious transition.
     if (PluginConfig.OwnershipObserveEnabled.Value && _ownershipObserveRunner != null) {
       string ownershipMessage = _ownershipObserveRunner.Start(_coordinator, maxDetailRows);
       _coordinator.RecordDevMarker("ownership_observe start (coupled to netcode probe)");
       LogInfo("Ownership observe auto-started: " + ownershipMessage);
+    }
+
+    // P3/I2 ownership PIN (behaviour-changing), coupled to the same window. Rollback-gated
+    // (ownershipPinEnabled, default off). Server-side prefixes on ZDO.SetOwner/SetOwnerInternal
+    // skip the vanilla transfer on auto-captured ZDOs so ownership stays pinned across zone entry.
+    if (PluginConfig.OwnershipPinEnabled.Value && _ownershipPinRunner != null) {
+      string pinMessage = _ownershipPinRunner.Start(_coordinator, maxDetailRows);
+      _coordinator.RecordDevMarker("ownership_pin start (coupled to netcode probe)");
+      LogInfo("Ownership pin auto-started: " + pinMessage);
     }
   }
 
@@ -227,6 +247,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _netcodeProbeRunner = null;
     _ownershipObserveRunner?.Dispose();
     _ownershipObserveRunner = null;
+    _ownershipPinRunner?.Dispose();
+    _ownershipPinRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();
