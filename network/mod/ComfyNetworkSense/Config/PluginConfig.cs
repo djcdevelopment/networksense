@@ -33,6 +33,7 @@ public static class PluginConfig {
   public static ConfigEntry<string> AutoRehearsalProfile { get; private set; }
   public static ConfigEntry<float> AutoRehearsalDelaySeconds { get; private set; }
   public static ConfigEntry<bool> AutoRehearsalRunOncePerSession { get; private set; }
+  public static ConfigEntry<bool> CoupleAutoRehearsalToNetcodeProbe { get; private set; }
   public static ConfigEntry<bool> AutoJoinEnabled { get; private set; }
   public static ConfigEntry<string> AutoJoinCharacterName { get; private set; }
   public static ConfigEntry<int> AutoJoinCharacterIndex { get; private set; }
@@ -330,6 +331,13 @@ public static class PluginConfig {
             "autoRehearsalRunOncePerSession",
             true,
             "Run the automatic rehearsal at most once per Valheim client session.");
+
+    CoupleAutoRehearsalToNetcodeProbe =
+        config.Bind(
+            "Automation",
+            "coupleAutoRehearsalToNetcodeProbe",
+            false,
+            "When the netcode probe auto-starts on a client, also trigger the automatic route rehearsal so captured ZDO traffic exists without a human hand-walking the route. Requires a local player; skipped headless on the dedicated server. Intended for private lab clients only.");
 
     AutoJoinEnabled =
         config.Bind(

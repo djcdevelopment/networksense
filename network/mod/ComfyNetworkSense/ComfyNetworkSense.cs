@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.6";
+  public const string PluginVersion = "0.5.7";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -174,6 +174,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     _netcodeProbeAutoStarted = true;
+    TryCoupleAutoRehearsalToNetcodeProbe();
     int maxDetailRows = PluginConfig.NetcodeProbeMaxDetailRows.Value;
     string message = _netcodeProbeRunner.Start(_coordinator, maxDetailRows);
     float autoStopSeconds = PluginConfig.NetcodeProbeAutoStopSeconds.Value;
@@ -955,6 +956,42 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       return;
     }
 
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+    LogInfo(message);
+  }
+
+  // P1 step 7: optionally couple the auto-rehearsal route walk to the netcode probe auto-start,
+  // so captured ZDO traffic exists without a human hand-walking the route. Client-side only —
+  // RunTeleportRoute needs a local player, so this is skipped headless (the dedicated server keeps
+  // the probe running solo). Reuses the same TryStartRehearsal kickoff and _autoRehearsalStarted
+  // run-once guard as TryStartAutoRehearsal. Off by default.
+  void TryCoupleAutoRehearsalToNetcodeProbe() {
+    if (!PluginConfig.CoupleAutoRehearsalToNetcodeProbe.Value) {
+      return;
+    }
+
+    if (_autoRehearsalStarted && PluginConfig.AutoRehearsalRunOncePerSession.Value) {
+      return;
+    }
+
+    Player player = Player.m_localPlayer;
+    if (player == null) {
+      return;
+    }
+
+    _autoRehearsalStarted = true;
+    if (!TryStartRehearsal(
+        PluginConfig.AutoRehearsalRouteFile.Value,
+        PluginConfig.AutoRehearsalProfile.Value,
+        initiatedByAuto: true,
+        out string message)) {
+      _coordinator.RecordDevMarker($"auto_rehearsal blocked {message}");
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+      LogWarning(message);
+      return;
+    }
+
+    _coordinator.RecordDevMarker("auto_rehearsal coupled_to_netcode_probe");
     MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
     LogInfo(message);
   }
