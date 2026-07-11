@@ -87,6 +87,11 @@ public static class PluginConfig {
   public static ConfigEntry<string> ZdoInjectionAuthorityId { get; private set; }
   public static ConfigEntry<float> ZdoInjectionPollSeconds { get; private set; }
   public static ConfigEntry<float> ZdoInjectionActiveSeconds { get; private set; }
+  public static ConfigEntry<bool> HandshakeResponderEnabled { get; private set; }
+  public static ConfigEntry<string> HandshakeResponderEndpoint { get; private set; }
+  public static ConfigEntry<string> HandshakeResponderWindowId { get; private set; }
+  public static ConfigEntry<float> HandshakeResponderPollSeconds { get; private set; }
+  public static ConfigEntry<float> HandshakeResponderActiveSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -763,6 +768,48 @@ public static class PluginConfig {
             90.0f,
             "Injection sub-window seconds. Shorter than the probe window provides automatic "
             + "rollback rehearsal. 0 runs until the probe stops.");
+
+    HandshakeResponderEnabled =
+        config.Bind(
+            "Netcode",
+            "handshakeResponderEnabled",
+            false,
+            "P6/I5 server-side handshake responder rollback flag (am4 only). When armed, a Harmony "
+            + "hook answers RPC_ServerHandshake/RPC_PeerInfo with decisions supplied by the "
+            + "Lumberjacks handshake responder (Steam-only per I6). off = pure pass-through; an "
+            + "empty endpoint also refuses to arm. Fail-safe default OFF. NB: the RPC interceptor "
+            + "is built + wire-validated at the armed session (first real-client bytes in-game).");
+
+    HandshakeResponderEndpoint =
+        config.Bind(
+            "Netcode",
+            "handshakeResponderEndpoint",
+            "http://127.0.0.1:4000",
+            "Lumberjacks gateway base URL the am4 responder polls for the emulated server context "
+            + "(needPassword/salt/ban/full/password/dup). Empty refuses to arm.");
+
+    HandshakeResponderWindowId =
+        config.Bind(
+            "Netcode",
+            "handshakeResponderWindowId",
+            "",
+            "P6/I5 gate window id. Blank generates i5-<utc timestamp>; gate staging sets it.");
+
+    HandshakeResponderPollSeconds =
+        config.Bind(
+            "Netcode",
+            "handshakeResponderPollSeconds",
+            2.0f,
+            "Seconds between off-thread context polls of the Lumberjacks responder; clamped to at "
+            + "least 0.5 seconds. Server-side HTTP uses a raw TcpClient POST (Mono trap, ADR 0003).");
+
+    HandshakeResponderActiveSeconds =
+        config.Bind(
+            "Netcode",
+            "handshakeResponderActiveSeconds",
+            90.0f,
+            "Handshake responder sub-window seconds; shorter than the probe window gives an "
+            + "in-window rollback rehearsal. 0 runs until the probe stops.");
 
     WriteTelemetryLogs =
         config.Bind(

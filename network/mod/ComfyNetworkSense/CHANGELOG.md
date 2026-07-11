@@ -1,5 +1,14 @@
 ## Changelog
 
+### 0.5.16
+
+- P6/I5 handshake responder: stage the `handshakeResponder*` config surface (server-side am4
+  hook, Steam-only per I6, disabled by default; empty endpoint refuses to arm). Config only —
+  the RPC interceptor (Harmony on `RPC_ServerHandshake`/`RPC_PeerInfo`, `ZPackage` clone-decode,
+  raw `TcpClient` context poll per the server Mono trap) is built and wire-validated at the armed
+  session, where it meets a real client's PeerInfo bytes. Architecture + contract:
+  `fieldlab/NETCODE-HANDSHAKE-CONTRACT.md`, worklog I5 design block.
+
 ### 0.5.15
 
 - Replace the inbound-injection poll parser with a narrow gateway-shape parser so the client no
