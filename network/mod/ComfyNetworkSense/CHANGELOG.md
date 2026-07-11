@@ -1,5 +1,23 @@
 ## Changelog
 
+### 0.5.15
+
+- Replace the inbound-injection poll parser with a narrow gateway-shape parser so the client no
+  longer depends on Unity `JsonUtility` DTO population under BepInEx/Mono. The command still goes
+  through the same synthetic authority, prefab allowlist, revision, position, and vanilla
+  `RPC_ZDOData` validation before any ZDO is applied.
+
+### 0.5.14
+
+- P5/I4 inbound injection runway: client-only, disabled by default, synthetic-authority and
+  prefab-allowlist scoped. Polls bounded Lumberjacks commands off-thread, validates them on the
+  Unity main thread, rebuilds vanilla `ZDOData` packages, applies through `RPC_ZDOData`, records
+  apply/render/readback lifecycle to `injection-apply.jsonl`, and auto-stops.
+- Expose the Unity JSON DTOs as public serializable top-level types with the gateway's exact
+  snake_case field names. An in-game parser self-check now refuses at arm time on incompatibility.
+- Add the bounded Lumberjacks queue/ack/status contract, malformed-input rejection, MCP gate
+  reads, and the `run-injection-window.ps1` deploy/arm/stage/gate/disarm driver.
+
 ### 0.5.12
 
 - **Fix: redirect POST delivery on the dedicated server.** `ZdoRedirectRunner.PostBatch` used `WebRequest.Create("http://…")`, which throws `NotSupportedException("The URI prefix is not recognized.")` in Valheim's stripped **server** Mono runtime (the WebRequest prefix table is empty there) — so window i3-w3 suppressed 88 tree ZDOs correctly (`ack_failures=0`) but posted **0** (all 88 dropped after 9 failed batches / 176 requeues). Replaced with a raw `TcpClient` HTTP/1.1 POST (`SendHttpPostViaSocket`) that bypasses the prefix table: runs on the poster's background thread, bounded 5s connect/send/receive, throws on non-2xx so the existing retry + `last_error` path is unchanged. Only the delivery call changed; suppression/ack/rollback semantics are identical. NB: the sibling `WebRequest.Create` call sites (priority mirror, telemetry, apply-profile) share the same latent defect but run **client-side**, where the prefix table is populated — left for a follow-up.

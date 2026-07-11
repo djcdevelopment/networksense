@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.12";
+  public const string PluginVersion = "0.5.15";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -39,6 +39,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   OwnershipObserveRunner _ownershipObserveRunner;
   OwnershipPinRunner _ownershipPinRunner;
   ZdoRedirectRunner _zdoRedirectRunner;
+  ZdoInjectionRunner _zdoInjectionRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
@@ -76,6 +77,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipObserveRunner = new();
     _ownershipPinRunner = new();
     _zdoRedirectRunner = new();
+    _zdoInjectionRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -125,6 +127,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksPriorityProbeRunner.Update")) {
       _lumberjacksPriorityProbeRunner?.Update(deltaTime, _coordinator);
+    }
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ZdoInjectionRunner.Update")) {
+      _zdoInjectionRunner?.Update(deltaTime, _coordinator);
     }
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryStartAutoRehearsal")) {
@@ -177,6 +183,12 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
           string redirectStop = _zdoRedirectRunner.Stop();
           _coordinator.RecordDevMarker("zdo_redirect stop");
           LogInfo("ZDO redirect auto-stopped: " + redirectStop);
+        }
+
+        if (_zdoInjectionRunner != null && _zdoInjectionRunner.IsRunning) {
+          string injectionStop = _zdoInjectionRunner.Stop();
+          _coordinator.RecordDevMarker("zdo_injection stop");
+          LogInfo("ZDO injection auto-stopped: " + injectionStop);
         }
       }
       return;
@@ -241,6 +253,15 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _coordinator.RecordDevMarker("zdo_redirect start (coupled to netcode probe)");
       LogInfo("ZDO redirect auto-started: " + redirectMessage);
     }
+
+
+    // P5/I4 inbound injection, coupled to the same finite probe window. Client-only,
+    // synthetic-authority + prefab allowlist scoped, and off by default.
+    if (PluginConfig.ZdoInjectionEnabled.Value && _zdoInjectionRunner != null) {
+      string injectionMessage = _zdoInjectionRunner.Start(_coordinator);
+      _coordinator.RecordDevMarker("zdo_injection start (coupled to netcode probe)");
+      LogInfo("ZDO injection auto-started: " + injectionMessage);
+    }
   }
 
   void OnGUI() {
@@ -273,6 +294,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipPinRunner = null;
     _zdoRedirectRunner?.Dispose();
     _zdoRedirectRunner = null;
+    _zdoInjectionRunner?.Dispose();
+    _zdoInjectionRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();

@@ -79,6 +79,14 @@ public static class PluginConfig {
   public static ConfigEntry<string> ZdoRedirectEndpoint { get; private set; }
   public static ConfigEntry<string> ZdoRedirectWindowId { get; private set; }
   public static ConfigEntry<float> ZdoRedirectActiveSeconds { get; private set; }
+  public static ConfigEntry<bool> ZdoInjectionEnabled { get; private set; }
+  public static ConfigEntry<string> ZdoInjectionPrefabs { get; private set; }
+  public static ConfigEntry<string> ZdoInjectionEndpoint { get; private set; }
+  public static ConfigEntry<string> ZdoInjectionWindowId { get; private set; }
+  public static ConfigEntry<string> ZdoInjectionClientId { get; private set; }
+  public static ConfigEntry<string> ZdoInjectionAuthorityId { get; private set; }
+  public static ConfigEntry<float> ZdoInjectionPollSeconds { get; private set; }
+  public static ConfigEntry<float> ZdoInjectionActiveSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -693,6 +701,68 @@ public static class PluginConfig {
             + "redirect auto-disarms mid-capture, so the still-running probe records native sends "
             + "of the tagged prefab RESUMING — the in-window rollback rehearsal (P4 step 11), "
             + "hands-free. 0 = suppress for the whole probe window.");
+
+    ZdoInjectionEnabled =
+        config.Bind(
+            "Netcode",
+            "zdoInjectionEnabled",
+            false,
+            "P5/I4 inbound injection rollback flag. Client-side only and coupled to the finite "
+            + "netcode-probe window. Polls Lumberjacks for a bounded synthetic fixture, rebuilds "
+            + "the vanilla ZDOData wire package, and applies it through RPC_ZDOData. off = no "
+            + "polling or state changes.");
+
+    ZdoInjectionPrefabs =
+        config.Bind(
+            "Netcode",
+            "zdoInjectionPrefabs",
+            "",
+            "Required comma-separated prefab allowlist for inbound synthetic fixtures (for "
+            + "example 'Wood'). Empty refuses to arm.");
+
+    ZdoInjectionEndpoint =
+        config.Bind(
+            "Netcode",
+            "zdoInjectionEndpoint",
+            "http://127.0.0.1:4000",
+            "Lumberjacks gateway base URL. The rendered OMEN client polls the local gateway.");
+
+    ZdoInjectionWindowId =
+        config.Bind(
+            "Netcode",
+            "zdoInjectionWindowId",
+            "",
+            "P5 gate window id. Blank generates i4-<utc timestamp>; gate staging should set it.");
+
+    ZdoInjectionClientId =
+        config.Bind(
+            "Netcode",
+            "zdoInjectionClientId",
+            "omen",
+            "Client id used for Lumberjacks poll/ack bookkeeping.");
+
+    ZdoInjectionAuthorityId =
+        config.Bind(
+            "Netcode",
+            "zdoInjectionAuthorityId",
+            "5497853135698",
+            "Non-zero Int64 reserved for the synthetic Lumberjacks ZDO uid/owner namespace. "
+            + "Commands outside this namespace are rejected before package construction.");
+
+    ZdoInjectionPollSeconds =
+        config.Bind(
+            "Netcode",
+            "zdoInjectionPollSeconds",
+            1.0f,
+            "Seconds between off-thread gateway polls; clamped to at least 0.25 seconds.");
+
+    ZdoInjectionActiveSeconds =
+        config.Bind(
+            "Netcode",
+            "zdoInjectionActiveSeconds",
+            90.0f,
+            "Injection sub-window seconds. Shorter than the probe window provides automatic "
+            + "rollback rehearsal. 0 runs until the probe stops.");
 
     WriteTelemetryLogs =
         config.Bind(
