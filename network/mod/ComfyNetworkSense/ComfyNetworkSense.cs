@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.16";
+  public const string PluginVersion = "0.5.18";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -40,6 +40,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   OwnershipPinRunner _ownershipPinRunner;
   ZdoRedirectRunner _zdoRedirectRunner;
   ZdoInjectionRunner _zdoInjectionRunner;
+  HandshakeResponderRunner _handshakeResponderRunner;
   Harmony _harmony;
   bool _routeRunning;
   bool _autoRehearsalArmed;
@@ -78,6 +79,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipPinRunner = new();
     _zdoRedirectRunner = new();
     _zdoInjectionRunner = new();
+    _handshakeResponderRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -131,6 +133,12 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ZdoInjectionRunner.Update")) {
       _zdoInjectionRunner?.Update(deltaTime, _coordinator);
+    }
+
+    // P6/I5 handshake responder self-arms on the server (the handshake fires at connect time,
+    // before any netcode-probe window) and stays armed until config-off + restart.
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.HandshakeResponderRunner.Update")) {
+      _handshakeResponderRunner?.Update(deltaTime, _coordinator);
     }
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryStartAutoRehearsal")) {
@@ -296,6 +304,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _zdoRedirectRunner = null;
     _zdoInjectionRunner?.Dispose();
     _zdoInjectionRunner = null;
+    _handshakeResponderRunner?.Dispose();
+    _handshakeResponderRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();
