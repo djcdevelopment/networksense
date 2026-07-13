@@ -1,5 +1,13 @@
 ## Changelog
 
+### 0.5.19
+
+- Add `network_sense_godfly [on|off]` console command: on-demand god mode + debug-fly toggle for a
+  client joined to a dedicated server, where the vanilla `god`/`fly` commands are cheat-gated
+  (`IsCheatsEnabled() == ZNet.IsServer()`, false on a client) and `fly` is `onlyServer`. Drives the
+  `Player` API directly — the same path the route-walk safeguard already uses. Client-only (no-op
+  headless). Additive; no existing behaviour changes.
+
 ### 0.5.16
 
 - P6/I5 handshake responder: stage the `handshakeResponder*` config surface (server-side am4

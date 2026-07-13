@@ -1,6 +1,6 @@
 {
   "name": "ComfyNetworkSense",
-  "version_number": "0.5.18",
+  "version_number": "0.5.19",
   "website_url": "https://github.com/djcdevelopment/comfy",
   "author": "djcdevelopment",
   "description": "Telemetry and HUD scaffold for multiplayer network research in Valheim.",

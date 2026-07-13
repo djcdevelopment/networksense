@@ -8,6 +8,7 @@ In-game Valheim console commands:
 - `network_sense_debug`: open the debug drawer.
 - `network_sense_raven`: open the Raven drawer.
 - `network_sense_hud`: toggle HUD.
+- `network_sense_godfly [on|off]`: toggle god mode + debug-fly on the local player. Client-safe — the vanilla `god`/`fly` console commands are cheat-gated on a client joined to a dedicated server; this drives the `Player` API directly. No argument toggles. *(since 0.5.19)*
 - `network_sense_detail`: cycle HUD detail.
 - `network_sense_mode`: cycle mode.
 - `network_sense_mode solo|combat|group|town`: set mode.

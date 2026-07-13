@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.18";
+  public const string PluginVersion = "0.5.19";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -339,6 +339,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         "show ComfyNetworkSense HUD/detail/mode/benchmark status",
         _ => RunCommand(_coordinator.GetStatus));
     new Terminal.ConsoleCommand(
+        "network_sense_godfly",
+        "toggle god mode + debug-fly on the local player (client-safe; the vanilla 'god'/'fly' console commands are cheat-gated on a dedicated-server client): network_sense_godfly [on|off]",
+        GodFlyCommand);
+    new Terminal.ConsoleCommand(
         "network_sense_perf_status",
         "show ComfyNetworkSense perf probe and telemetry writer status",
         _ => RunCommand(_coordinator.GetPerfStatus));
@@ -445,6 +449,52 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
     LogWarning(message);
     return false;
+  }
+
+  // On-demand god+fly toggle for a client joined to a dedicated server, where the vanilla
+  // 'god'/'fly' console commands are cheat-gated (Terminal.IsCheatsEnabled() == ZNet.IsServer(),
+  // false on a client) and 'fly' is onlyServer. Drives the Player API directly, the same path the
+  // route-walk safeguard (EnableRouteMovementSafeguards) uses. Client-only: Player.m_localPlayer is
+  // null headless on the dedicated server, so this is a no-op warning there. Idempotent.
+  object GodFlyCommand(Terminal.ConsoleEventArgs args) {
+    Player player = Player.m_localPlayer;
+    if (player == null) {
+      string warn = "network_sense_godfly: no local player (join a world first).";
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, warn);
+      LogWarning(warn);
+      return warn;
+    }
+
+    string arg = args.Length >= 2 ? args[1].Trim().ToLowerInvariant() : "toggle";
+    bool enable;
+    switch (arg) {
+      case "on": case "true": case "1": enable = true; break;
+      case "off": case "false": case "0": enable = false; break;
+      case "toggle": case "": enable = !player.InGodMode(); break;
+      default:
+        string usage = "Usage: network_sense_godfly [on|off]";
+        MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, usage);
+        LogWarning(usage);
+        return usage;
+    }
+
+    string message;
+    try {
+      if (player.InGodMode() != enable) {
+        player.SetGodMode(enable);
+      }
+      if (player.InDebugFlyMode() != enable) {
+        player.ToggleDebugFly();
+      }
+      message = $"network_sense_godfly {(enable ? "ON" : "OFF")}: god={player.InGodMode()} fly={player.InDebugFlyMode()}";
+      _coordinator?.RecordDevMarker($"godfly {(enable ? "on" : "off")} god={player.InGodMode()} fly={player.InDebugFlyMode()}");
+    } catch (Exception ex) {
+      message = $"network_sense_godfly failed: {ex.Message}";
+      LogWarning(message);
+    }
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+    LogInfo(message);
+    return message;
   }
 
   object PanelCommand(Terminal.ConsoleEventArgs args) {
