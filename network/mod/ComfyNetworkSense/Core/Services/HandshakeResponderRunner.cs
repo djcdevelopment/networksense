@@ -1,5 +1,7 @@
 namespace ComfyNetworkSense;
 
+using System.Collections.Generic;
+
 using System;
 using System.Globalization;
 using System.IO;
@@ -115,6 +117,15 @@ public sealed class HandshakeResponderRunner : IDisposable {
   public string GetStatus() {
     lock (_lock) {
       return StatusLineLocked();
+    }
+  }
+
+  public Dictionary<string, object> GetTelemetrySnapshot() {
+    lock (_lock) {
+      return new Dictionary<string, object> {
+          ["handshake_accepted"] = _accepted,
+          ["handshake_rejected"] = _rejected
+      };
     }
   }
 

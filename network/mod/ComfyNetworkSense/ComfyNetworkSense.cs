@@ -73,6 +73,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityProbeRunner = new();
     _lumberjacksPriorityMirrorRunner = new();
     _coordinator.SetLumberjacksPriorityMirror(_lumberjacksPriorityMirrorRunner);
+    _coordinator.SetLumberjacksReplacementTelemetryProvider(GetLumberjacksReplacementTelemetry);
     _lumberjacksPriorityManifestListener = new();
     _netcodeProbeRunner = new();
     _ownershipObserveRunner = new();
@@ -96,6 +97,30 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     LogInfo("Telemetry scaffold ready.");
+  }
+
+  Dictionary<string, object> GetLumberjacksReplacementTelemetry() {
+    Dictionary<string, object> result = new();
+    Dictionary<string, object> handshake = _handshakeResponderRunner?.GetTelemetrySnapshot();
+    Dictionary<string, object> redirect = _zdoRedirectRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
+    Dictionary<string, object> injection = _zdoInjectionRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
+
+    if (handshake != null) {
+      result["handshake_accepted"] = handshake["handshake_accepted"];
+      result["handshake_rejected"] = handshake["handshake_rejected"];
+    }
+    if (redirect != null) {
+      result["redirect_suppressed"] = redirect.TryGetValue("suppressed", out object suppressed) ? suppressed : null;
+      result["redirect_received"] = redirect.TryGetValue("posted_ok", out object received) ? received : null;
+      result["redirect_missing"] = null;
+      result["redirect_duplicates"] = null;
+    }
+    if (injection != null) {
+      result["injection_applied"] = injection.TryGetValue("applied", out object applied) ? applied : null;
+      result["injection_rendered"] = injection.TryGetValue("rendered", out object rendered) ? rendered : null;
+      result["injection_rejected"] = injection.TryGetValue("rejected", out object rejected) ? rejected : null;
+    }
+    return result;
   }
 
   void Update() {

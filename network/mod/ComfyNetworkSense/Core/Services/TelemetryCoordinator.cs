@@ -41,6 +41,7 @@ public sealed class TelemetryCoordinator : IDisposable {
   ZRoutedRpc _registeredRoutedRpc;
   string _latestExportPath = string.Empty;
   BenchmarkResult _latestBenchmarkResult;
+  Func<Dictionary<string, object>> _replacementTelemetryProvider;
 
   public TelemetryCoordinator() {
     _perfProbe = new NetworkSensePerfProbe(_sessionId, _logWriter);
@@ -464,13 +465,17 @@ public sealed class TelemetryCoordinator : IDisposable {
     WriteEvent("zdo_redirect", $"ZDO redirect {eventName}: {status}");
   }
 
+  public void SetLumberjacksReplacementTelemetryProvider(Func<Dictionary<string, object>> provider) {
+    _replacementTelemetryProvider = provider;
+  }
+
   public Dictionary<string, object> GetLumberjacksTelemetryHeartbeat() {
     int peers = 0;
     if (ZNet.instance != null && ZNet.instance.IsServer()) {
       peers = ZNet.instance.GetPeers()?.Count ?? 0;
     }
 
-    return new Dictionary<string, object> {
+    Dictionary<string, object> payload = new() {
         ["instance_id"] = _sessionId,
         ["mod_version"] = ComfyNetworkSense.PluginVersion,
         ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
@@ -487,6 +492,14 @@ public sealed class TelemetryCoordinator : IDisposable {
         ["injection_rendered"] = null,
         ["injection_rejected"] = null
     };
+
+    Dictionary<string, object> replacement = _replacementTelemetryProvider?.Invoke();
+    if (replacement != null) {
+      foreach (KeyValuePair<string, object> pair in replacement) {
+        payload[pair.Key] = pair.Value;
+      }
+    }
+    return payload;
   }
 
   public void RecordZdoInjection(IDictionary<string, object> values) {
