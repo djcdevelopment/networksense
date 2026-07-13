@@ -49,6 +49,8 @@ public static class PluginConfig {
   public static ConfigEntry<float> MatrixPollIntervalSeconds { get; private set; }
   public static ConfigEntry<string> MatrixClientId { get; private set; }
   public static ConfigEntry<string> LumberjacksGatewayUrl { get; private set; }
+  public static ConfigEntry<string> LumberjacksCutoverMode { get; private set; }
+  public static ConfigEntry<string> LumberjacksEnrollmentManifestId { get; private set; }
   public static ConfigEntry<bool> LumberjacksTelemetryHeartbeatEnabled { get; private set; }
   public static ConfigEntry<float> LumberjacksTelemetryHeartbeatIntervalSeconds { get; private set; }
   public static ConfigEntry<string> LumberjacksTelemetryKey { get; private set; }
@@ -469,6 +471,20 @@ public static class PluginConfig {
             "lumberjacksGatewayUrl",
             "ws://127.0.0.1:4000",
             "Lumberjacks Gateway WebSocket URL used by network_sense_lumberjacks_probe. Overridden by COMFY_LUMBERJACKS_GATEWAY_URL.");
+
+    LumberjacksCutoverMode =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksCutoverMode",
+            "native",
+            "Declared gameplay-network mode: native, mirrored, or lumberjacks-primary. This is a declaration for telemetry and rollout control; primary mode must not be enabled until the coverage gate passes.");
+
+    LumberjacksEnrollmentManifestId =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksEnrollmentManifestId",
+            "",
+            "Enrollment manifest revision assigned by the Lumberjacks control plane. Empty means this installation is not enrolled.");
 
     LumberjacksTelemetryHeartbeatEnabled =
         config.Bind("Lumberjacks", "lumberjacksTelemetryHeartbeatEnabled", true,
