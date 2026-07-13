@@ -19,6 +19,7 @@ public sealed class TelemetryCoordinator : IDisposable {
   readonly NetworkSensePerfProbe _perfProbe;
   readonly ClientTelemetrySampler _clientTelemetrySampler = new();
   readonly ServerPulseBroadcaster _serverPulseBroadcaster = new();
+  readonly LumberjacksTelemetryHeartbeatRunner _lumberjacksTelemetryHeartbeatRunner = new();
   readonly BenchmarkRunner _benchmarkRunner = new();
   readonly HudRenderer _hudRenderer = new();
   readonly NetworkSensePanel _panel = new();
@@ -100,6 +101,8 @@ public sealed class TelemetryCoordinator : IDisposable {
     using (NetworkSensePerfProbe.Measure("TelemetryCoordinator.ServerPulseBroadcaster.Update")) {
       _serverPulseBroadcaster.Update(_sessionId, _mode, _logWriter);
     }
+
+    _lumberjacksTelemetryHeartbeatRunner.Update(deltaTime, this);
 
     _perfProbe?.SetRuntimeContext(_latestClientSample?.RegionId ?? string.Empty, _benchmarkRunner.IsRunning);
   }
@@ -459,6 +462,31 @@ public sealed class TelemetryCoordinator : IDisposable {
 
     string status = values.TryGetValue("status", out object statusValue) ? Convert.ToString(statusValue) : "unknown";
     WriteEvent("zdo_redirect", $"ZDO redirect {eventName}: {status}");
+  }
+
+  public Dictionary<string, object> GetLumberjacksTelemetryHeartbeat() {
+    int peers = 0;
+    if (ZNet.instance != null && ZNet.instance.IsServer()) {
+      peers = ZNet.instance.GetPeers()?.Count ?? 0;
+    }
+
+    return new Dictionary<string, object> {
+        ["instance_id"] = _sessionId,
+        ["mod_version"] = ComfyNetworkSense.PluginVersion,
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["server_role"] = "dedicated",
+        ["server_state"] = ZNet.instance == null ? "starting" : "ready",
+        ["peer_count"] = peers,
+        ["handshake_accepted"] = null,
+        ["handshake_rejected"] = null,
+        ["redirect_suppressed"] = null,
+        ["redirect_received"] = null,
+        ["redirect_missing"] = null,
+        ["redirect_duplicates"] = null,
+        ["injection_applied"] = null,
+        ["injection_rendered"] = null,
+        ["injection_rejected"] = null
+    };
   }
 
   public void RecordZdoInjection(IDictionary<string, object> values) {
@@ -835,6 +863,7 @@ public sealed class TelemetryCoordinator : IDisposable {
   }
 
   public void Dispose() {
+    _lumberjacksTelemetryHeartbeatRunner.Dispose();
     _perfProbe?.Dispose();
     _logWriter?.Dispose();
   }

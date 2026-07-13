@@ -49,6 +49,9 @@ public static class PluginConfig {
   public static ConfigEntry<float> MatrixPollIntervalSeconds { get; private set; }
   public static ConfigEntry<string> MatrixClientId { get; private set; }
   public static ConfigEntry<string> LumberjacksGatewayUrl { get; private set; }
+  public static ConfigEntry<bool> LumberjacksTelemetryHeartbeatEnabled { get; private set; }
+  public static ConfigEntry<float> LumberjacksTelemetryHeartbeatIntervalSeconds { get; private set; }
+  public static ConfigEntry<string> LumberjacksTelemetryKey { get; private set; }
   public static ConfigEntry<string> LumberjacksRegionId { get; private set; }
   public static ConfigEntry<int> LumberjacksProbeInputCount { get; private set; }
   public static ConfigEntry<float> LumberjacksProjectionInputHz { get; private set; }
@@ -466,6 +469,18 @@ public static class PluginConfig {
             "lumberjacksGatewayUrl",
             "ws://127.0.0.1:4000",
             "Lumberjacks Gateway WebSocket URL used by network_sense_lumberjacks_probe. Overridden by COMFY_LUMBERJACKS_GATEWAY_URL.");
+
+    LumberjacksTelemetryHeartbeatEnabled =
+        config.Bind("Lumberjacks", "lumberjacksTelemetryHeartbeatEnabled", true,
+            "Publish an identity-free server heartbeat to the Lumberjacks Gateway from dedicated servers.");
+
+    LumberjacksTelemetryHeartbeatIntervalSeconds =
+        config.Bind("Lumberjacks", "lumberjacksTelemetryHeartbeatIntervalSeconds", 5.0f,
+            "Seconds between aggregate Lumberjacks telemetry heartbeats.");
+
+    LumberjacksTelemetryKey =
+        config.Bind("Lumberjacks", "lumberjacksTelemetryKey", "",
+            "Optional shared key sent as X-Lumberjacks-Telemetry-Key for heartbeat ingestion.");
 
     LumberjacksRegionId =
         config.Bind(
