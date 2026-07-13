@@ -481,8 +481,8 @@ public sealed class TelemetryCoordinator : IDisposable {
         ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
         ["server_role"] = "dedicated",
         ["server_state"] = ZNet.instance == null ? "starting" : "ready",
-        ["cutover_mode"] = PluginConfig.LumberjacksCutoverMode?.Value ?? "native",
-        ["enrollment_manifest_id"] = PluginConfig.LumberjacksEnrollmentManifestId?.Value ?? string.Empty,
+        ["cutover_mode"] = EffectiveCutoverMode(),
+        ["enrollment_manifest_id"] = EffectiveEnrollmentManifestId(),
         ["coverage_total"] = null,
         ["coverage_lumberjacks"] = null,
         ["coverage_native_only"] = null,
@@ -506,6 +506,18 @@ public sealed class TelemetryCoordinator : IDisposable {
       }
     }
     return payload;
+  }
+
+  static string EffectiveCutoverMode() {
+    string configured = PluginConfig.LumberjacksCutoverMode?.Value ?? "native";
+    string environment = Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_CUTOVER_MODE");
+    return string.IsNullOrWhiteSpace(environment) ? configured : environment.Trim().ToLowerInvariant();
+  }
+
+  static string EffectiveEnrollmentManifestId() {
+    string configured = PluginConfig.LumberjacksEnrollmentManifestId?.Value ?? string.Empty;
+    string environment = Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_ENROLLMENT_MANIFEST_ID");
+    return string.IsNullOrWhiteSpace(environment) ? configured : environment.Trim();
   }
 
   public void RecordZdoInjection(IDictionary<string, object> values) {
