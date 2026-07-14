@@ -51,6 +51,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   async Task Poll() {
     try {
       using WebClient client = new();
+      client.Proxy = null;
       string json = client.DownloadString(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=64");
       var response = ZdoRedirectEnvelopeCodec.Parse(json);
       foreach (var envelope in response.envelopes ?? Array.Empty<ZdoRedirectEnvelopeCodec.Envelope>()) {
@@ -85,6 +86,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   void Ack(long seq, bool applied) {
     try {
       using WebClient client = new();
+      client.Proxy = null;
       string body = "[" + seq.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
       client.Headers[HttpRequestHeader.ContentType] = "application/json";
       client.UploadString(_endpoint + "/valheim/zdo-redirect/ack/" + _window, "POST", body);
