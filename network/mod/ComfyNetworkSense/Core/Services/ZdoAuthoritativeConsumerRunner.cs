@@ -54,8 +54,8 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       string json = SendGet(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=64");
       var response = ZdoRedirectEnvelopeCodec.Parse(json);
       foreach (var envelope in response.envelopes ?? Array.Empty<ZdoRedirectEnvelopeCodec.Envelope>()) {
-        if (envelope.seq is null) continue;
-        lock (_gate) { if (!_seen.Add(envelope.seq.Value)) { _duplicates++; continue; } }
+        if (envelope.seq == 0) continue;
+        lock (_gate) { if (!_seen.Add(envelope.seq)) { _duplicates++; continue; } }
         _queue.Enqueue(envelope);
       }
     } catch (Exception exception) {
@@ -75,7 +75,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       if (applyRpc == null) throw new InvalidOperationException("no connected peer RPC available");
       _rpc.Invoke(ZDOMan.instance, new object[] { applyRpc, packet });
       _applied++;
-      Ack(envelope.seq.Value, true);
+      Ack(envelope.seq, true);
     } catch (Exception exception) {
       _rejected++; _retried++;
       ComfyNetworkSense.LogWarning("Authoritative consumer apply failed: " + exception.GetType().Name + ": " + exception.Message);
