@@ -85,6 +85,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     string authoritativeWindow = string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentManifestId.Value)
         ? Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_ENROLLMENT_MANIFEST_ID")
         : PluginConfig.LumberjacksEnrollmentManifestId.Value;
+    LogInfo("Authoritative consumer config: enabled=" + PluginConfig.ZdoAuthoritativeConsumerEnabled.Value
+        + ", manifest=" + (authoritativeWindow ?? "")
+        + ", gateway=" + PluginConfig.LumberjacksGatewayUrl.Value);
     if (PluginConfig.ZdoAuthoritativeConsumerEnabled.Value && !string.IsNullOrWhiteSpace(authoritativeWindow)) {
       LogInfo(_zdoAuthoritativeConsumerRunner.Start(
           PluginConfig.LumberjacksGatewayUrl.Value.Replace("ws://", "http://").Replace("wss://", "https://"),
