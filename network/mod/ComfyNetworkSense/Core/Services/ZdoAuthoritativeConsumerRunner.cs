@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -50,9 +51,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
 
   async Task Poll() {
     try {
-      using WebClient client = new();
-      client.Proxy = null;
-      string json = client.DownloadString(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=64");
+      string json = SendGet(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=64");
       var response = ZdoRedirectEnvelopeCodec.Parse(json);
       foreach (var envelope in response.envelopes ?? Array.Empty<ZdoRedirectEnvelopeCodec.Envelope>()) {
         if (envelope.seq is null) continue;
@@ -85,15 +84,40 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
 
   void Ack(long seq, bool applied) {
     try {
-      using WebClient client = new();
-      client.Proxy = null;
       string body = "[" + seq.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
-      client.Headers[HttpRequestHeader.ContentType] = "application/json";
-      client.UploadString(_endpoint + "/valheim/zdo-redirect/ack/" + _window, "POST", body);
+      SendPost(_endpoint + "/valheim/zdo-redirect/ack/" + _window, body);
     } catch (Exception exception) {
       _retried++;
       ComfyNetworkSense.LogWarning("Authoritative consumer ack failed: " + exception.GetType().Name + ": " + exception.Message);
     }
+  }
+
+  static string SendGet(string url) => Send(url, "GET", string.Empty);
+  static void SendPost(string url, string body) { Send(url, "POST", body); }
+
+  static string Send(string url, string method, string body) {
+    Uri uri = new(url);
+    byte[] bytes = Encoding.UTF8.GetBytes(body ?? string.Empty);
+    using TcpClient client = new();
+    client.Connect(uri.Host, uri.Port);
+    using NetworkStream stream = client.GetStream();
+    string request = method + " " + uri.PathAndQuery + " HTTP/1.1\r\nHost: " + uri.Host
+        + "\r\nContent-Type: application/json\r\nContent-Length: " + bytes.Length
+        + "\r\nConnection: close\r\n\r\n";
+    byte[] header = Encoding.ASCII.GetBytes(request);
+    stream.Write(header, 0, header.Length);
+    if (bytes.Length > 0) stream.Write(bytes, 0, bytes.Length);
+    stream.Flush();
+    byte[] buffer = new byte[8192];
+    StringBuilder response = new();
+    int read;
+    while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+      response.Append(Encoding.UTF8.GetString(buffer, 0, read));
+    string raw = response.ToString();
+    int split = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+    if (!raw.StartsWith("HTTP/1.1 2", StringComparison.Ordinal))
+      throw new InvalidOperationException("HTTP request failed: " + (raw.Split('\n')[0] ?? ""));
+    return split >= 0 ? raw.Substring(split + 4) : string.Empty;
   }
 
   public Dictionary<string, object> Snapshot() => new() {
