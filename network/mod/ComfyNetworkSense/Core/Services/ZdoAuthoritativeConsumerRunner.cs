@@ -117,7 +117,28 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     int split = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
     if (!raw.StartsWith("HTTP/1.1 2", StringComparison.Ordinal))
       throw new InvalidOperationException("HTTP request failed: " + (raw.Split('\n')[0] ?? ""));
-    return split >= 0 ? raw.Substring(split + 4) : string.Empty;
+    if (split < 0) return string.Empty;
+    string headers = raw.Substring(0, split);
+    string payload = raw.Substring(split + 4);
+    if (headers.IndexOf("transfer-encoding: chunked", StringComparison.OrdinalIgnoreCase) >= 0)
+      return DecodeChunked(payload);
+    return payload;
+  }
+
+  static string DecodeChunked(string payload) {
+    StringBuilder result = new();
+    int offset = 0;
+    while (offset < payload.Length) {
+      int end = payload.IndexOf("\r\n", offset, StringComparison.Ordinal);
+      if (end < 0) break;
+      int size = Convert.ToInt32(payload.Substring(offset, end - offset).Trim(), 16);
+      if (size == 0) break;
+      offset = end + 2;
+      if (offset + size > payload.Length) break;
+      result.Append(payload, offset, size);
+      offset += size + 2;
+    }
+    return result.ToString();
   }
 
   public Dictionary<string, object> Snapshot() => new() {
