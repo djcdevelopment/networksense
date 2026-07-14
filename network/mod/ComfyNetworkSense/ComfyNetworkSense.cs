@@ -130,7 +130,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       result["injection_rendered"] = injection.TryGetValue("rendered", out object rendered) ? rendered : null;
       result["injection_rejected"] = injection.TryGetValue("rejected", out object rejected) ? rejected : null;
     }
-    if (authoritative != null) foreach (var pair in authoritative) result["zdo_authoritative_" + pair.Key] = pair.Value;
+    if (authoritative != null) foreach (var pair in authoritative) result["zdo_authoritative_" + (pair.Key == "authoritative_enabled" ? "enabled" : pair.Key)] = pair.Value;
     if (netcode != null) {
       result["zdo_probe_running"] = netcode.TryGetValue("running", out object running) ? running : null;
       result["zdo_probe_recv_rows"] = netcode.TryGetValue("recv_zdo_rows", out object recv) ? recv : null;
