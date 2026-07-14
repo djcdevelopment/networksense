@@ -58,7 +58,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
         lock (_gate) { if (!_seen.Add(envelope.seq.Value)) { _duplicates++; continue; } }
         _queue.Enqueue(envelope);
       }
-    } catch { _retried++; }
+    } catch (Exception exception) {
+      _retried++;
+      ComfyNetworkSense.LogWarning("Authoritative consumer poll failed: " + exception.GetType().Name + ": " + exception.Message);
+    }
     finally { Interlocked.Exchange(ref _polling, 0); }
   }
 
@@ -73,7 +76,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       _rpc.Invoke(ZDOMan.instance, new object[] { applyRpc, packet });
       _applied++;
       Ack(envelope.seq.Value, true);
-    } catch { _rejected++; _retried++; }
+    } catch (Exception exception) {
+      _rejected++; _retried++;
+      ComfyNetworkSense.LogWarning("Authoritative consumer apply failed: " + exception.GetType().Name + ": " + exception.Message);
+    }
   }
 
   void Ack(long seq, bool applied) {
@@ -82,7 +88,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       string body = "[" + seq.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
       client.Headers[HttpRequestHeader.ContentType] = "application/json";
       client.UploadString(_endpoint + "/valheim/zdo-redirect/ack/" + _window, "POST", body);
-    } catch { _retried++; }
+    } catch (Exception exception) {
+      _retried++;
+      ComfyNetworkSense.LogWarning("Authoritative consumer ack failed: " + exception.GetType().Name + ": " + exception.Message);
+    }
   }
 
   public Dictionary<string, object> Snapshot() => new() {
