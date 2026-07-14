@@ -51,7 +51,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   async Task Poll() {
     try {
       using WebClient client = new();
-      string json = await client.DownloadStringTaskAsync(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=64");
+      string json = client.DownloadString(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=64");
       var response = ZdoRedirectEnvelopeCodec.Parse(json);
       foreach (var envelope in response.envelopes ?? Array.Empty<ZdoRedirectEnvelopeCodec.Envelope>()) {
         if (envelope.seq is null) continue;
