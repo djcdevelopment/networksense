@@ -82,11 +82,13 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _zdoRedirectRunner = new();
     _zdoInjectionRunner = new();
     _zdoAuthoritativeConsumerRunner = new();
-    if (PluginConfig.ZdoAuthoritativeConsumerEnabled.Value &&
-        !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentManifestId.Value)) {
+    string authoritativeWindow = string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentManifestId.Value)
+        ? Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_ENROLLMENT_MANIFEST_ID")
+        : PluginConfig.LumberjacksEnrollmentManifestId.Value;
+    if (PluginConfig.ZdoAuthoritativeConsumerEnabled.Value && !string.IsNullOrWhiteSpace(authoritativeWindow)) {
       LogInfo(_zdoAuthoritativeConsumerRunner.Start(
           PluginConfig.LumberjacksGatewayUrl.Value.Replace("ws://", "http://").Replace("wss://", "https://"),
-          PluginConfig.LumberjacksEnrollmentManifestId.Value));
+          authoritativeWindow));
     }
     _handshakeResponderRunner = new();
 
