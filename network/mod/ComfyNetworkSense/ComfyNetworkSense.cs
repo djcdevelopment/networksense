@@ -40,6 +40,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   OwnershipPinRunner _ownershipPinRunner;
   ZdoRedirectRunner _zdoRedirectRunner;
   ZdoInjectionRunner _zdoInjectionRunner;
+  ZdoAuthoritativeConsumerRunner _zdoAuthoritativeConsumerRunner;
   HandshakeResponderRunner _handshakeResponderRunner;
   Harmony _harmony;
   bool _routeRunning;
@@ -80,6 +81,13 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipPinRunner = new();
     _zdoRedirectRunner = new();
     _zdoInjectionRunner = new();
+    _zdoAuthoritativeConsumerRunner = new();
+    if (PluginConfig.ZdoAuthoritativeConsumerEnabled.Value &&
+        !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentManifestId.Value)) {
+      LogInfo(_zdoAuthoritativeConsumerRunner.Start(
+          PluginConfig.LumberjacksGatewayUrl.Value.Replace("ws://", "http://").Replace("wss://", "https://"),
+          PluginConfig.LumberjacksEnrollmentManifestId.Value));
+    }
     _handshakeResponderRunner = new();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
@@ -104,6 +112,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     Dictionary<string, object> handshake = _handshakeResponderRunner?.GetTelemetrySnapshot();
     Dictionary<string, object> redirect = _zdoRedirectRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
     Dictionary<string, object> injection = _zdoInjectionRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
+    Dictionary<string, object> authoritative = _zdoAuthoritativeConsumerRunner?.Snapshot();
     Dictionary<string, object> netcode = _netcodeProbeRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
 
     if (handshake != null) {
@@ -121,6 +130,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       result["injection_rendered"] = injection.TryGetValue("rendered", out object rendered) ? rendered : null;
       result["injection_rejected"] = injection.TryGetValue("rejected", out object rejected) ? rejected : null;
     }
+    if (authoritative != null) foreach (var pair in authoritative) result["zdo_authoritative_" + pair.Key] = pair.Value;
     if (netcode != null) {
       result["zdo_probe_running"] = netcode.TryGetValue("running", out object running) ? running : null;
       result["zdo_probe_recv_rows"] = netcode.TryGetValue("recv_zdo_rows", out object recv) ? recv : null;
@@ -137,6 +147,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     float deltaTime = Time.unscaledDeltaTime;
+    _zdoAuthoritativeConsumerRunner?.Update(Time.unscaledTime);
     using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.Update");
     NetworkSensePerfProbe.Active?.UpdateFrame(deltaTime);
 

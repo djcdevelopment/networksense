@@ -51,6 +51,7 @@ public static class PluginConfig {
   public static ConfigEntry<string> LumberjacksGatewayUrl { get; private set; }
   public static ConfigEntry<string> LumberjacksCutoverMode { get; private set; }
   public static ConfigEntry<string> LumberjacksEnrollmentManifestId { get; private set; }
+  public static ConfigEntry<bool> ZdoAuthoritativeConsumerEnabled { get; private set; }
   public static ConfigEntry<bool> LumberjacksTelemetryHeartbeatEnabled { get; private set; }
   public static ConfigEntry<float> LumberjacksTelemetryHeartbeatIntervalSeconds { get; private set; }
   public static ConfigEntry<string> LumberjacksTelemetryKey { get; private set; }
@@ -485,6 +486,10 @@ public static class PluginConfig {
             "lumberjacksEnrollmentManifestId",
             "",
             "Enrollment manifest revision assigned by the Lumberjacks control plane. Empty means this installation is not enrolled.");
+
+    ZdoAuthoritativeConsumerEnabled = config.Bind(
+        "Lumberjacks", "zdoAuthoritativeConsumerEnabled", false,
+        "Apply queued Lumberjacks ZDO envelopes through RPC_ZDOData. Requires an explicit authoritative window.");
 
     LumberjacksTelemetryHeartbeatEnabled =
         config.Bind("Lumberjacks", "lumberjacksTelemetryHeartbeatEnabled", true,
