@@ -65,7 +65,12 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   void Apply(ZdoRedirectEnvelopeCodec.Envelope envelope) {
     try {
       ZPackage packet = ZdoRedirectEnvelopeCodec.BuildPacket(envelope);
-      _rpc.Invoke(ZDOMan.instance, new object[] { null, packet });
+      ZRpc applyRpc = null;
+      foreach (ZNetPeer peer in ZNet.instance.GetPeers()) {
+        if (peer?.m_rpc != null) { applyRpc = peer.m_rpc; break; }
+      }
+      if (applyRpc == null) throw new InvalidOperationException("no connected peer RPC available");
+      _rpc.Invoke(ZDOMan.instance, new object[] { applyRpc, packet });
       _applied++;
       Ack(envelope.seq.Value, true);
     } catch { _rejected++; _retried++; }
