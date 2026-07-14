@@ -81,19 +81,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipPinRunner = new();
     _zdoRedirectRunner = new();
     _zdoInjectionRunner = new();
-    _zdoAuthoritativeConsumerRunner = new();
-    string authoritativeWindow = string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentManifestId.Value)
-        ? Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_ENROLLMENT_MANIFEST_ID")
-        : PluginConfig.LumberjacksEnrollmentManifestId.Value;
-    LogInfo("Authoritative consumer config: enabled=" + PluginConfig.ZdoAuthoritativeConsumerEnabled.Value
-        + ", manifest=" + (authoritativeWindow ?? "")
-        + ", gateway=" + PluginConfig.LumberjacksGatewayUrl.Value);
-    if (PluginConfig.ZdoAuthoritativeConsumerEnabled.Value && !string.IsNullOrWhiteSpace(authoritativeWindow)) {
-      LogInfo(_zdoAuthoritativeConsumerRunner.Start(
-          PluginConfig.LumberjacksGatewayUrl.Value.Replace("ws://", "http://").Replace("wss://", "https://"),
-          authoritativeWindow));
-    }
     _handshakeResponderRunner = new();
+    _zdoAuthoritativeConsumerRunner = new();
+    InitializeAuthoritativeConsumer();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
@@ -110,6 +100,25 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     LogInfo("Telemetry scaffold ready.");
+  }
+
+  void InitializeAuthoritativeConsumer() {
+    try {
+      string authoritativeWindow = string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentManifestId.Value)
+          ? Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_ENROLLMENT_MANIFEST_ID")
+          : PluginConfig.LumberjacksEnrollmentManifestId.Value;
+      LogInfo("Authoritative consumer init: enabled=" + PluginConfig.ZdoAuthoritativeConsumerEnabled.Value
+          + ", manifest=" + (authoritativeWindow ?? "")
+          + ", gateway=" + PluginConfig.LumberjacksGatewayUrl.Value);
+      if (!PluginConfig.ZdoAuthoritativeConsumerEnabled.Value || string.IsNullOrWhiteSpace(authoritativeWindow)) {
+        LogInfo("Authoritative consumer init: disabled or unenrolled");
+        return;
+      }
+      string endpoint = PluginConfig.LumberjacksGatewayUrl.Value.Replace("ws://", "http://").Replace("wss://", "https://");
+      LogInfo("Authoritative consumer init: " + _zdoAuthoritativeConsumerRunner.Start(endpoint, authoritativeWindow));
+    } catch (Exception exception) {
+      LogWarning("Authoritative consumer init failed: " + exception.GetType().Name + ": " + exception.Message);
+    }
   }
 
   Dictionary<string, object> GetLumberjacksReplacementTelemetry() {
