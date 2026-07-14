@@ -104,6 +104,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     Dictionary<string, object> handshake = _handshakeResponderRunner?.GetTelemetrySnapshot();
     Dictionary<string, object> redirect = _zdoRedirectRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
     Dictionary<string, object> injection = _zdoInjectionRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
+    Dictionary<string, object> netcode = _netcodeProbeRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
 
     if (handshake != null) {
       result["handshake_accepted"] = handshake["handshake_accepted"];
@@ -119,6 +120,13 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       result["injection_applied"] = injection.TryGetValue("applied", out object applied) ? applied : null;
       result["injection_rendered"] = injection.TryGetValue("rendered", out object rendered) ? rendered : null;
       result["injection_rejected"] = injection.TryGetValue("rejected", out object rejected) ? rejected : null;
+    }
+    if (netcode != null) {
+      result["zdo_probe_running"] = netcode.TryGetValue("running", out object running) ? running : null;
+      result["zdo_probe_recv_rows"] = netcode.TryGetValue("recv_zdo_rows", out object recv) ? recv : null;
+      result["zdo_probe_send_rows"] = netcode.TryGetValue("send_zdo_rows", out object send) ? send : null;
+      result["zdo_probe_recv_calls"] = netcode.TryGetValue("recv_funnel_calls", out object recvCalls) ? recvCalls : null;
+      result["zdo_probe_create_sync_calls"] = netcode.TryGetValue("create_sync_list_calls", out object syncCalls) ? syncCalls : null;
     }
     return result;
   }
