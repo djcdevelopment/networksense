@@ -16,6 +16,7 @@ using HarmonyLib;
 public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   const int MaxAppliesPerUpdate = 64;
   const int MaxApplyAttempts = 30;
+  const int PollBatchMax = 256;
 
   readonly ConcurrentQueue<ZdoRedirectEnvelopeCodec.Envelope> _queue = new();
   readonly ConcurrentQueue<long> _ackQueue = new();
@@ -76,7 +77,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
 
   void Poll() {
     try {
-      string json = SendGet(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=64");
+      string json = SendGet(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=" + PollBatchMax);
       var response = ZdoRedirectEnvelopeCodec.Parse(json);
       foreach (var envelope in response.envelopes ?? Array.Empty<ZdoRedirectEnvelopeCodec.Envelope>()) {
         if (envelope.seq == 0) continue;

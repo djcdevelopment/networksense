@@ -1,5 +1,10 @@
 ## Changelog
 
+### 0.5.25
+
+- Raise authoritative Gateway polling from 64 to 256 envelopes per second while retaining the
+  64-apply Unity frame budget and 256-sequence acknowledgement batches.
+
 ### 0.5.24
 
 - Reconcile an obsolete envelope as `superseded` when `RPC_ZDOData` leaves a matching ZDO at a
