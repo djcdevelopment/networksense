@@ -1,5 +1,13 @@
 ## Changelog
 
+### 0.5.23
+
+- Treat `RPC_ZDOData` readback mismatches as transient retries until a bounded terminal threshold;
+  only terminal failures increment the authoritative rejection counter.
+- Retry locally on Unity's main thread with exponential backoff and a 64-apply frame budget, while
+  suppressing expected Gateway redelivery for sequences already queued or waiting to retry.
+- Add sequence, attempt, UID, owner, revision, and prefab diagnostics without per-frame log spam.
+
 ### 0.5.19
 
 - Add `network_sense_godfly [on|off]` console command: on-demand god mode + debug-fly toggle for a

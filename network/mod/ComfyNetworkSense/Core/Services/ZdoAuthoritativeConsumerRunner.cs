@@ -14,11 +14,17 @@ using HarmonyLib;
 
 /// <summary>Applies queued Lumberjacks ZDO envelopes through Valheim's native receive funnel.</summary>
 public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
+  const int MaxAppliesPerUpdate = 64;
+  const int MaxApplyAttempts = 30;
+
   readonly ConcurrentQueue<ZdoRedirectEnvelopeCodec.Envelope> _queue = new();
   readonly ConcurrentQueue<long> _ackQueue = new();
   readonly HashSet<long> _seen = new();
   readonly HashSet<long> _queued = new();
+  readonly HashSet<long> _failed = new();
   readonly HashSet<long> _ackQueued = new();
+  readonly Dictionary<long, int> _applyAttempts = new();
+  readonly Dictionary<long, PendingRetry> _pendingRetries = new();
   readonly object _gate = new();
   MethodInfo _rpc;
   string _endpoint;
@@ -59,7 +65,11 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     }
     if (!_ackQueue.IsEmpty && Interlocked.CompareExchange(ref _acking, 1, 0) == 0)
       _ = Task.Run(FlushAcks);
-    while (_queue.TryDequeue(out var envelope)) Apply(envelope);
+
+    PromoteDueRetries(now);
+    int processed = 0;
+    while (processed++ < MaxAppliesPerUpdate && _queue.TryDequeue(out var envelope))
+      Apply(envelope, now);
   }
 
   void Poll() {
@@ -74,7 +84,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
             QueueAckLocked(envelope.seq);
             continue;
           }
-          if (!_queued.Add(envelope.seq)) { _duplicates++; continue; }
+          if (_failed.Contains(envelope.seq) || !_queued.Add(envelope.seq)) continue;
         }
         _queue.Enqueue(envelope);
       }
@@ -88,7 +98,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     }
   }
 
-  void Apply(ZdoRedirectEnvelopeCodec.Envelope envelope) {
+  void Apply(ZdoRedirectEnvelopeCodec.Envelope envelope, float now) {
     try {
       ZPackage packet = ZdoRedirectEnvelopeCodec.BuildPacket(envelope);
       ZRpc applyRpc = null;
@@ -98,24 +108,73 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       if (applyRpc == null) throw new InvalidOperationException("no connected peer RPC available");
       _rpc.Invoke(ZDOMan.instance, new object[] { applyRpc, packet });
       ZDO applied = ZDOMan.instance.GetZDO(new ZDOID(envelope.uid_user, (uint)envelope.uid_id));
-      if (applied == null || applied.GetOwner() != envelope.owner
-          || applied.OwnerRevision != (ushort)envelope.owner_rev
-          || applied.DataRevision != (uint)envelope.data_rev
-          || (envelope.prefab != 0 && applied.GetPrefab() != envelope.prefab))
-        throw new InvalidOperationException("vanilla receive funnel did not produce the expected ZDO readback");
+      string mismatch = ReadbackMismatch(envelope, applied);
+      if (mismatch != null) throw new InvalidOperationException(mismatch);
       lock (_gate) {
         _queued.Remove(envelope.seq);
+        _applyAttempts.Remove(envelope.seq);
+        _pendingRetries.Remove(envelope.seq);
         _seen.Add(envelope.seq);
         QueueAckLocked(envelope.seq);
       }
       _applied++;
     } catch (Exception exception) {
-      lock (_gate) { _queued.Remove(envelope.seq); }
-      _rejected++; _retried++;
       Exception root = exception is TargetInvocationException tie && tie.InnerException != null
           ? tie.InnerException : exception;
-      ComfyNetworkSense.LogWarning("Authoritative consumer apply failed: " + root.GetType().Name + ": " + root.Message);
+      int attempt;
+      bool terminal;
+      lock (_gate) {
+        attempt = _applyAttempts.TryGetValue(envelope.seq, out int previous) ? previous + 1 : 1;
+        _applyAttempts[envelope.seq] = attempt;
+        terminal = attempt >= MaxApplyAttempts;
+        if (terminal) {
+          _queued.Remove(envelope.seq);
+          _pendingRetries.Remove(envelope.seq);
+          _failed.Add(envelope.seq);
+        } else {
+          float delay = Math.Min(2.0f, 0.05f * (1 << Math.Min(attempt, 5)));
+          _pendingRetries[envelope.seq] = new PendingRetry(envelope, now + delay);
+        }
+      }
+      _retried++;
+      if (terminal) _rejected++;
+      if (attempt == 1 || attempt % 5 == 0 || terminal) {
+        ComfyNetworkSense.LogWarning(
+            $"Authoritative consumer apply {(terminal ? "rejected" : "retry")}: "
+            + $"seq={envelope.seq} attempt={attempt}/{MaxApplyAttempts} "
+            + root.GetType().Name + ": " + root.Message);
+      }
     }
+  }
+
+  void PromoteDueRetries(float now) {
+    List<long> dueSequences = new();
+    List<ZdoRedirectEnvelopeCodec.Envelope> dueEnvelopes = new();
+    lock (_gate) {
+      foreach (KeyValuePair<long, PendingRetry> pair in _pendingRetries) {
+        if (pair.Value.DueAt > now) continue;
+        dueSequences.Add(pair.Key);
+        dueEnvelopes.Add(pair.Value.Envelope);
+        if (dueEnvelopes.Count >= MaxAppliesPerUpdate) break;
+      }
+      foreach (long sequence in dueSequences) _pendingRetries.Remove(sequence);
+    }
+    foreach (ZdoRedirectEnvelopeCodec.Envelope envelope in dueEnvelopes) _queue.Enqueue(envelope);
+  }
+
+  static string ReadbackMismatch(ZdoRedirectEnvelopeCodec.Envelope expected, ZDO actual) {
+    if (actual == null)
+      return $"readback missing uid={expected.uid_user}:{expected.uid_id}";
+    long owner = actual.GetOwner();
+    int ownerRevision = actual.OwnerRevision;
+    long dataRevision = actual.DataRevision;
+    int prefab = actual.GetPrefab();
+    if (owner == expected.owner && ownerRevision == expected.owner_rev
+        && dataRevision == expected.data_rev
+        && (expected.prefab == 0 || prefab == expected.prefab)) return null;
+    return $"readback mismatch uid={expected.uid_user}:{expected.uid_id} "
+        + $"owner={owner}/{expected.owner} owner_rev={ownerRevision}/{expected.owner_rev} "
+        + $"data_rev={dataRevision}/{expected.data_rev} prefab={prefab}/{expected.prefab}";
   }
 
   void QueueAckLocked(long seq) {
@@ -151,6 +210,8 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
 
   void PostTelemetry() {
     try {
+      int pending;
+      lock (_gate) pending = _queue.Count + _ackQueue.Count + _pendingRetries.Count + _failed.Count;
       Dictionary<string, object> payload = new() {
           ["window_id"] = _window,
           ["consumer_id"] = _consumerId,
@@ -161,7 +222,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
           ["rejected"] = Interlocked.Read(ref _rejected),
           ["duplicates"] = Interlocked.Read(ref _duplicates),
           ["retried"] = Interlocked.Read(ref _retried),
-          ["pending"] = _queue.Count + _ackQueue.Count
+          ["pending"] = pending
       };
       SendPost(_endpoint + "/valheim/zdo-redirect/consumer", JsonLineSerializer.Serialize(payload));
       _lastTelemetryError = string.Empty;
@@ -222,15 +283,28 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     return result.ToString();
   }
 
-  public Dictionary<string, object> Snapshot() => new() {
+  public Dictionary<string, object> Snapshot() {
+    int pending;
+    lock (_gate) pending = _queue.Count + _ackQueue.Count + _pendingRetries.Count + _failed.Count;
+    return new() {
       ["authoritative_enabled"] = IsRunning,
       ["applied"] = _applied,
       ["rejected"] = _rejected,
       ["duplicates"] = _duplicates,
       ["retried"] = _retried,
       ["acknowledged"] = _acknowledged,
-      ["pending"] = _queue.Count + _ackQueue.Count
-  };
+      ["pending"] = pending
+    };
+  }
+
+  sealed class PendingRetry {
+    public readonly ZdoRedirectEnvelopeCodec.Envelope Envelope;
+    public readonly float DueAt;
+    public PendingRetry(ZdoRedirectEnvelopeCodec.Envelope envelope, float dueAt) {
+      Envelope = envelope;
+      DueAt = dueAt;
+    }
+  }
 
   public void Dispose() { IsRunning = false; }
 }
