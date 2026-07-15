@@ -1,12 +1,8 @@
 namespace ComfyNetworkSense;
 
 using System;
-using System.IO;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
-using System.Text;
 using System.Text.RegularExpressions;
 
 using UnityEngine;
@@ -14,36 +10,22 @@ using UnityEngine;
 /// <summary>Decodes an authoritative Lumberjacks ZDO envelope into Valheim's wire package shape.</summary>
 public static class ZdoRedirectEnvelopeCodec {
   [Serializable]
-  [DataContract]
   public sealed class PendingResponse {
-    [DataMember] 
     public int schema_version;
-    [DataMember]
     public string window_id;
-    [DataMember]
     public Envelope[] envelopes;
   }
 
   [Serializable]
-  [DataContract]
   public sealed class Envelope {
-    [DataMember]
     public long seq;
-    [DataMember]
     public long uid_user;
-    [DataMember]
     public long uid_id;
-    [DataMember]
     public long owner;
-    [DataMember]
     public int owner_rev;
-    [DataMember]
     public int data_rev;
-    [DataMember]
     public int prefab;
-    [DataMember]
     public float[] pos;
-    [DataMember]
     public string body_b64;
   }
 
@@ -100,7 +82,6 @@ public static class ZdoRedirectEnvelopeCodec {
 
   public static ZPackage BuildPacket(Envelope envelope) {
     if (envelope == null || envelope.uid_user == 0 || envelope.uid_id == 0
-        || envelope.owner == 0 || envelope.owner_rev == 0 || envelope.data_rev == 0
         || envelope.pos == null || envelope.pos.Length != 3 || string.IsNullOrWhiteSpace(envelope.body_b64))
       throw new InvalidOperationException("envelope is missing required ZDO fields");
 

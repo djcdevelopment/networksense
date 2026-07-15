@@ -15,12 +15,16 @@ using HarmonyLib;
 /// <summary>Applies queued Lumberjacks ZDO envelopes through Valheim's native receive funnel.</summary>
 public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   readonly ConcurrentQueue<ZdoRedirectEnvelopeCodec.Envelope> _queue = new();
+  readonly ConcurrentQueue<long> _ackQueue = new();
   readonly HashSet<long> _seen = new();
+  readonly HashSet<long> _queued = new();
+  readonly HashSet<long> _ackQueued = new();
   readonly object _gate = new();
   MethodInfo _rpc;
   string _endpoint;
   string _window;
   int _polling;
+  int _acking;
   float _nextPoll;
   long _applied;
   long _rejected;
@@ -46,16 +50,25 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     if (now >= _nextPoll && Interlocked.CompareExchange(ref _polling, 1, 0) == 0) {
       _nextPoll = now + 1f; _ = Task.Run(Poll);
     }
+    if (!_ackQueue.IsEmpty && Interlocked.CompareExchange(ref _acking, 1, 0) == 0)
+      _ = Task.Run(FlushAcks);
     while (_queue.TryDequeue(out var envelope)) Apply(envelope);
   }
 
-  async Task Poll() {
+  void Poll() {
     try {
       string json = SendGet(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=64");
       var response = ZdoRedirectEnvelopeCodec.Parse(json);
       foreach (var envelope in response.envelopes ?? Array.Empty<ZdoRedirectEnvelopeCodec.Envelope>()) {
         if (envelope.seq == 0) continue;
-        lock (_gate) { if (!_seen.Add(envelope.seq)) { _duplicates++; continue; } }
+        lock (_gate) {
+          if (_seen.Contains(envelope.seq)) {
+            _duplicates++;
+            QueueAckLocked(envelope.seq);
+            continue;
+          }
+          if (!_queued.Add(envelope.seq)) { _duplicates++; continue; }
+        }
         _queue.Enqueue(envelope);
       }
     } catch (Exception exception) {
@@ -74,21 +87,47 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       }
       if (applyRpc == null) throw new InvalidOperationException("no connected peer RPC available");
       _rpc.Invoke(ZDOMan.instance, new object[] { applyRpc, packet });
+      ZDO applied = ZDOMan.instance.GetZDO(new ZDOID(envelope.uid_user, (uint)envelope.uid_id));
+      if (applied == null || applied.GetOwner() != envelope.owner
+          || applied.OwnerRevision != (ushort)envelope.owner_rev
+          || applied.DataRevision != (uint)envelope.data_rev
+          || (envelope.prefab != 0 && applied.GetPrefab() != envelope.prefab))
+        throw new InvalidOperationException("vanilla receive funnel did not produce the expected ZDO readback");
+      lock (_gate) {
+        _queued.Remove(envelope.seq);
+        _seen.Add(envelope.seq);
+        QueueAckLocked(envelope.seq);
+      }
       _applied++;
-      Ack(envelope.seq, true);
     } catch (Exception exception) {
+      lock (_gate) { _queued.Remove(envelope.seq); }
       _rejected++; _retried++;
-      ComfyNetworkSense.LogWarning("Authoritative consumer apply failed: " + exception.GetType().Name + ": " + exception.Message);
+      Exception root = exception is TargetInvocationException tie && tie.InnerException != null
+          ? tie.InnerException : exception;
+      ComfyNetworkSense.LogWarning("Authoritative consumer apply failed: " + root.GetType().Name + ": " + root.Message);
     }
   }
 
-  void Ack(long seq, bool applied) {
+  void QueueAckLocked(long seq) {
+    if (_ackQueued.Add(seq)) _ackQueue.Enqueue(seq);
+  }
+
+  void FlushAcks() {
     try {
-      string body = "[" + seq.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
-      SendPost(_endpoint + "/valheim/zdo-redirect/ack/" + _window, body);
-    } catch (Exception exception) {
-      _retried++;
-      ComfyNetworkSense.LogWarning("Authoritative consumer ack failed: " + exception.GetType().Name + ": " + exception.Message);
+      while (_ackQueue.TryDequeue(out long seq)) {
+        try {
+          string body = "[" + seq.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
+          SendPost(_endpoint + "/valheim/zdo-redirect/ack/" + _window, body);
+          lock (_gate) { _ackQueued.Remove(seq); }
+        } catch (Exception exception) {
+          lock (_gate) { _ackQueued.Remove(seq); }
+          _retried++;
+          ComfyNetworkSense.LogWarning("Authoritative consumer ack failed: " + exception.GetType().Name + ": " + exception.Message);
+          break;
+        }
+      }
+    } finally {
+      Interlocked.Exchange(ref _acking, 0);
     }
   }
 
