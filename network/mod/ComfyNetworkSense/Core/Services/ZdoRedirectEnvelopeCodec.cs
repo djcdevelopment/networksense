@@ -8,6 +8,7 @@ using UnityEngine;
 public static class ZdoRedirectEnvelopeCodec {
   [Serializable]
   public sealed class PendingResponse {
+    public int schema_version;
     public string window_id;
     public Envelope[] envelopes;
   }
@@ -29,7 +30,7 @@ public static class ZdoRedirectEnvelopeCodec {
     if (string.IsNullOrWhiteSpace(json))
       throw new ArgumentException("pending envelope response is empty", nameof(json));
     PendingResponse response = JsonUtility.FromJson<PendingResponse>(json);
-    if (response == null || response.envelopes == null)
+    if (response == null || response.schema_version != 1 || response.envelopes == null)
       throw new InvalidOperationException("pending envelope response is malformed");
     return response;
   }
