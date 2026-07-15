@@ -35,6 +35,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   int _acking;
   float _nextPoll;
   long _applied;
+  long _superseded;
   long _rejected;
   long _duplicates;
   long _retried;
@@ -42,6 +43,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
 
   public bool IsRunning { get; private set; }
   public long Applied => _applied;
+  public long Superseded => _superseded;
   public long Rejected => _rejected;
   public long Duplicates => _duplicates;
   public long Retried => _retried;
@@ -108,8 +110,8 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       if (applyRpc == null) throw new InvalidOperationException("no connected peer RPC available");
       _rpc.Invoke(ZDOMan.instance, new object[] { applyRpc, packet });
       ZDO applied = ZDOMan.instance.GetZDO(new ZDOID(envelope.uid_user, (uint)envelope.uid_id));
-      string mismatch = ReadbackMismatch(envelope, applied);
-      if (mismatch != null) throw new InvalidOperationException(mismatch);
+      ReadbackResult readback = ValidateReadback(envelope, applied);
+      if (readback.Error != null) throw new InvalidOperationException(readback.Error);
       lock (_gate) {
         _queued.Remove(envelope.seq);
         _applyAttempts.Remove(envelope.seq);
@@ -117,7 +119,8 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
         _seen.Add(envelope.seq);
         QueueAckLocked(envelope.seq);
       }
-      _applied++;
+      if (readback.Superseded) _superseded++;
+      else _applied++;
     } catch (Exception exception) {
       Exception root = exception is TargetInvocationException tie && tie.InnerException != null
           ? tie.InnerException : exception;
@@ -162,19 +165,28 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     foreach (ZdoRedirectEnvelopeCodec.Envelope envelope in dueEnvelopes) _queue.Enqueue(envelope);
   }
 
-  static string ReadbackMismatch(ZdoRedirectEnvelopeCodec.Envelope expected, ZDO actual) {
+  static ReadbackResult ValidateReadback(ZdoRedirectEnvelopeCodec.Envelope expected, ZDO actual) {
     if (actual == null)
-      return $"readback missing uid={expected.uid_user}:{expected.uid_id}";
+      return new(false, $"readback missing uid={expected.uid_user}:{expected.uid_id}");
     long owner = actual.GetOwner();
     int ownerRevision = actual.OwnerRevision;
     long dataRevision = actual.DataRevision;
     int prefab = actual.GetPrefab();
     if (owner == expected.owner && ownerRevision == expected.owner_rev
         && dataRevision == expected.data_rev
-        && (expected.prefab == 0 || prefab == expected.prefab)) return null;
-    return $"readback mismatch uid={expected.uid_user}:{expected.uid_id} "
+        && (expected.prefab == 0 || prefab == expected.prefab)) return new(false, null);
+
+    // RPC_ZDOData intentionally refuses an obsolete revision. A matching ZDO with
+    // either monotonic revision already ahead is safely reconciled: applying the
+    // envelope would roll state backward, while acknowledging it lets the queue drain.
+    bool samePrefab = expected.prefab == 0 || prefab == expected.prefab;
+    bool newerRevision = dataRevision > (uint)expected.data_rev
+        || ownerRevision > (ushort)expected.owner_rev;
+    if (samePrefab && newerRevision) return new(true, null);
+
+    return new(false, $"readback mismatch uid={expected.uid_user}:{expected.uid_id} "
         + $"owner={owner}/{expected.owner} owner_rev={ownerRevision}/{expected.owner_rev} "
-        + $"data_rev={dataRevision}/{expected.data_rev} prefab={prefab}/{expected.prefab}";
+        + $"data_rev={dataRevision}/{expected.data_rev} prefab={prefab}/{expected.prefab}");
   }
 
   void QueueAckLocked(long seq) {
@@ -218,6 +230,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
           ["mod_version"] = ComfyNetworkSense.PluginVersion,
           ["timestamp_utc"] = DateTime.UtcNow.ToString("O"),
           ["applied"] = Interlocked.Read(ref _applied),
+          ["superseded"] = Interlocked.Read(ref _superseded),
           ["acknowledged"] = Interlocked.Read(ref _acknowledged),
           ["rejected"] = Interlocked.Read(ref _rejected),
           ["duplicates"] = Interlocked.Read(ref _duplicates),
@@ -289,6 +302,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     return new() {
       ["authoritative_enabled"] = IsRunning,
       ["applied"] = _applied,
+      ["superseded"] = _superseded,
       ["rejected"] = _rejected,
       ["duplicates"] = _duplicates,
       ["retried"] = _retried,
@@ -303,6 +317,15 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     public PendingRetry(ZdoRedirectEnvelopeCodec.Envelope envelope, float dueAt) {
       Envelope = envelope;
       DueAt = dueAt;
+    }
+  }
+
+  sealed class ReadbackResult {
+    public readonly bool Superseded;
+    public readonly string Error;
+    public ReadbackResult(bool superseded, string error) {
+      Superseded = superseded;
+      Error = error;
     }
   }
 

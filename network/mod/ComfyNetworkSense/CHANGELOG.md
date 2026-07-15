@@ -1,5 +1,11 @@
 ## Changelog
 
+### 0.5.24
+
+- Reconcile an obsolete envelope as `superseded` when `RPC_ZDOData` leaves a matching ZDO at a
+  strictly newer owner or data revision. Acknowledge that sequence without rolling state backward,
+  and report it separately from exact applies and terminal rejects.
+
 ### 0.5.23
 
 - Treat `RPC_ZDOData` readback mismatches as transient retries until a bounded terminal threshold;
