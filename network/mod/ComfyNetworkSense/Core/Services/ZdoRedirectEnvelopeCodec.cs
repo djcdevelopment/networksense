@@ -1,35 +1,57 @@
 namespace ComfyNetworkSense;
 
 using System;
+using System.IO;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
+using System.Text;
 
 using UnityEngine;
 
 /// <summary>Decodes an authoritative Lumberjacks ZDO envelope into Valheim's wire package shape.</summary>
 public static class ZdoRedirectEnvelopeCodec {
   [Serializable]
+  [DataContract]
   public sealed class PendingResponse {
+    [DataMember] 
     public int schema_version;
+    [DataMember]
     public string window_id;
+    [DataMember]
     public Envelope[] envelopes;
   }
 
   [Serializable]
+  [DataContract]
   public sealed class Envelope {
+    [DataMember]
     public long seq;
+    [DataMember]
     public long uid_user;
+    [DataMember]
     public long uid_id;
+    [DataMember]
     public long owner;
+    [DataMember]
     public int owner_rev;
+    [DataMember]
     public int data_rev;
+    [DataMember]
     public int prefab;
+    [DataMember]
     public float[] pos;
+    [DataMember]
     public string body_b64;
   }
 
   public static PendingResponse Parse(string json) {
     if (string.IsNullOrWhiteSpace(json))
       throw new ArgumentException("pending envelope response is empty", nameof(json));
-    PendingResponse response = JsonUtility.FromJson<PendingResponse>(json);
+    DataContractJsonSerializer serializer = new(typeof(PendingResponse));
+    PendingResponse response;
+    using (MemoryStream stream = new(Encoding.UTF8.GetBytes(json))) {
+      response = serializer.ReadObject(stream) as PendingResponse;
+    }
     if (response == null || response.schema_version != 1 || response.envelopes == null)
       throw new InvalidOperationException("pending envelope response is malformed");
     return response;
