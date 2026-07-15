@@ -1,5 +1,10 @@
 ## Changelog
 
+### 0.5.27
+
+- Keep the all-prefab redirect armed after the finite diagnostic probe stops when the effective
+  cutover mode is `lumberjacks-primary`; mirrored/bounded gates retain automatic rollback.
+
 ### 0.5.26
 
 - Publish concrete all-prefab coverage totals from the authoritative redirect so Gateway can

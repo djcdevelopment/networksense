@@ -513,7 +513,7 @@ public sealed class TelemetryCoordinator : IDisposable {
     return payload;
   }
 
-  static string EffectiveCutoverMode() {
+  public static string EffectiveCutoverMode() {
     string configured = PluginConfig.LumberjacksCutoverMode?.Value ?? "native";
     string environment = Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_CUTOVER_MODE");
     return string.IsNullOrWhiteSpace(environment) ? configured : environment.Trim().ToLowerInvariant();

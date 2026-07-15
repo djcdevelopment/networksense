@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.26";
+  public const string PluginVersion = "0.5.27";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -256,9 +256,15 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         // lockstep (it usually auto-disarmed already at zdoRedirectActiveSeconds — the in-window
         // rollback rehearsal).
         if (_zdoRedirectRunner != null && _zdoRedirectRunner.IsRunning) {
-          string redirectStop = _zdoRedirectRunner.Stop();
-          _coordinator.RecordDevMarker("zdo_redirect stop");
-          LogInfo("ZDO redirect auto-stopped: " + redirectStop);
+          if (string.Equals(TelemetryCoordinator.EffectiveCutoverMode(), "lumberjacks-primary",
+              StringComparison.OrdinalIgnoreCase)) {
+            _coordinator.RecordDevMarker("zdo_redirect remains armed (lumberjacks-primary)");
+            LogInfo("ZDO redirect remains armed after probe stop: lumberjacks-primary owns the live path.");
+          } else {
+            string redirectStop = _zdoRedirectRunner.Stop();
+            _coordinator.RecordDevMarker("zdo_redirect stop");
+            LogInfo("ZDO redirect auto-stopped: " + redirectStop);
+          }
         }
 
         if (_zdoInjectionRunner != null && _zdoInjectionRunner.IsRunning) {
