@@ -2,9 +2,12 @@ namespace ComfyNetworkSense;
 
 using System;
 using System.IO;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Text.RegularExpressions;
 
 using UnityEngine;
 
@@ -47,14 +50,52 @@ public static class ZdoRedirectEnvelopeCodec {
   public static PendingResponse Parse(string json) {
     if (string.IsNullOrWhiteSpace(json))
       throw new ArgumentException("pending envelope response is empty", nameof(json));
-    DataContractJsonSerializer serializer = new(typeof(PendingResponse));
-    PendingResponse response;
-    using (MemoryStream stream = new(Encoding.UTF8.GetBytes(json))) {
-      response = serializer.ReadObject(stream) as PendingResponse;
+    Match schema = Regex.Match(json, "\\\"schema_version\\\"\\s*:\\s*(\\d+)");
+    Match window = Regex.Match(json, "\\\"window_id\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"");
+    List<Envelope> envelopes = new();
+    foreach (Match match in Regex.Matches(json, "\\{([^{}]*\\\"body_b64\\\"[^{}]*)\\}")) {
+      string item = match.Value;
+      Envelope envelope = new() {
+          seq = ReadLong(item, "seq"), uid_user = ReadLong(item, "uid_user"),
+          uid_id = ReadLong(item, "uid_id"), owner = ReadLong(item, "owner"),
+          owner_rev = (int)ReadLong(item, "owner_rev"), data_rev = (int)ReadLong(item, "data_rev"),
+          prefab = (int)ReadLong(item, "prefab"), body_b64 = ReadString(item, "body_b64"),
+          pos = ReadPosition(item)
+      };
+      envelopes.Add(envelope);
     }
+    PendingResponse response = new() {
+        schema_version = schema.Success ? int.Parse(schema.Groups[1].Value, CultureInfo.InvariantCulture) : 0,
+        window_id = window.Success ? window.Groups[1].Value : string.Empty,
+        envelopes = envelopes.ToArray()
+    };
     if (response == null || response.schema_version != 1 || response.envelopes == null)
       throw new InvalidOperationException("pending envelope response is malformed");
     return response;
+  }
+
+  static long ReadLong(string json, string name) {
+    Match match = Regex.Match(json, "\\\"" + name + "\\\"\\s*:\\s*(-?\\d+)");
+    if (!match.Success) throw new InvalidOperationException("missing " + name);
+    return long.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+  }
+
+  static string ReadString(string json, string name) {
+    Match match = Regex.Match(json, "\\\"" + name + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"");
+    if (!match.Success) throw new InvalidOperationException("missing " + name);
+    return match.Groups[1].Value;
+  }
+
+  static float[] ReadPosition(string json) {
+    Match match = Regex.Match(json, "\\\"pos\\\"\\s*:\\s*\\[([^]]+)\\]");
+    if (!match.Success) throw new InvalidOperationException("missing pos");
+    string[] values = match.Groups[1].Value.Split(',');
+    if (values.Length != 3) throw new InvalidOperationException("pos must have three values");
+    return new[] {
+        float.Parse(values[0], CultureInfo.InvariantCulture),
+        float.Parse(values[1], CultureInfo.InvariantCulture),
+        float.Parse(values[2], CultureInfo.InvariantCulture)
+    };
   }
 
   public static ZPackage BuildPacket(Envelope envelope) {
