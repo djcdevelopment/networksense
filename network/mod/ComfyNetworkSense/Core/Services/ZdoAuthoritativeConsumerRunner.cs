@@ -46,7 +46,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   }
 
   public void Update(float now) {
-    if (!IsRunning || ZNet.instance == null || !ZNet.instance.IsServer()) return;
+    // Redirect envelopes represent the server-to-client delivery path.  The dedicated
+    // server produces them; only an enrolled connected client may consume them.
+    if (!IsRunning || ZNet.instance == null || ZNet.instance.IsServer()
+        || ZNet.instance.GetPeers() == null || ZNet.instance.GetPeers().Count == 0) return;
     if (now >= _nextPoll && Interlocked.CompareExchange(ref _polling, 1, 0) == 0) {
       _nextPoll = now + 1f; _ = Task.Run(Poll);
     }
