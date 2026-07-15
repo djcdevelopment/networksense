@@ -94,6 +94,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
   float _stopAtTime = -1.0f;
   int _maxRows = DefaultMaxRows;
   HashSet<int> _prefabFilter;
+  bool _allPrefabs;
   string _windowId = string.Empty;
   string _endpoint = string.Empty;
 
@@ -119,8 +120,9 @@ public sealed class ZdoRedirectRunner : IDisposable {
       return "ZDO redirect REFUSED: server-side only (this instance is not the server).";
     }
 
-    HashSet<int> filter = BuildPrefabFilter(PluginConfig.ZdoRedirectPrefabs.Value);
-    if (filter == null) {
+    bool allPrefabs = string.Equals(PluginConfig.ZdoRedirectPrefabs.Value?.Trim(), "*", StringComparison.Ordinal);
+    HashSet<int> filter = allPrefabs ? new HashSet<int>() : BuildPrefabFilter(PluginConfig.ZdoRedirectPrefabs.Value);
+    if (!allPrefabs && filter == null) {
       return "ZDO redirect REFUSED: zdoRedirectPrefabs is empty. An empty allowlist would "
           + "suppress ALL ZDO sync (world-freeze for the client); name the tagged prefab(s).";
     }
@@ -137,6 +139,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
       _startedUtc = DateTime.UtcNow;
       _maxRows = Mathf.Clamp(maxRowsOverride ?? DefaultMaxRows, 0, 200000);
       _prefabFilter = filter;
+      _allPrefabs = allPrefabs;
       _endpoint = PluginConfig.ZdoRedirectEndpoint.Value.TrimEnd('/');
       string configuredWindow = PluginConfig.ZdoRedirectWindowId.Value;
       _windowId = string.IsNullOrWhiteSpace(configuredWindow)
@@ -159,7 +162,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
     coordinator?.RecordZdoRedirect(BuildStatusRow("redirect_start"));
     return
         "ZDO redirect ARMED (behaviour-changing, server-side). Suppressing native send for "
-        + $"{_prefabFilter.Count} prefab(s) -> {_endpoint} window={_windowId}"
+        + (_allPrefabs ? "ALL prefabs" : $"{_prefabFilter.Count} prefab(s)")
+        + $" -> {_endpoint} window={_windowId}"
         + (_stopAtTime > 0.0f
             ? $", auto-disarms after {PluginConfig.ZdoRedirectActiveSeconds.Value:0.##}s (in-window rollback rehearsal)."
             : ", no active-window cap (disarms with the probe window).")
@@ -232,13 +236,14 @@ public sealed class ZdoRedirectRunner : IDisposable {
     }
 
     HashSet<int> filter = _prefabFilter;
-    if (filter == null || filter.Count == 0) {
+    bool allPrefabs = _allPrefabs;
+    if (!allPrefabs && (filter == null || filter.Count == 0)) {
       return;
     }
 
     for (int i = toSync.Count - 1; i >= 0; i--) {
       ZDO zdo = toSync[i];
-      if (zdo == null || !filter.Contains(SafePrefab(zdo))) {
+      if (zdo == null || (!allPrefabs && !filter.Contains(SafePrefab(zdo)))) {
         continue;
       }
 
@@ -515,6 +520,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["rows_written"] = _rowsWritten,
         ["capped"] = _capped,
         ["prefab_filter_count"] = _prefabFilter?.Count ?? 0,
+        ["all_prefabs"] = _allPrefabs,
         ["active_seconds"] = PluginConfig.ZdoRedirectActiveSeconds.Value,
         ["reflection_ok"] = ReflectionReady,
         ["last_error"] = _lastError,
@@ -532,7 +538,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
   }
 
   static string ScopeClaim() =>
-      "ZDO redirect is BEHAVIOUR-CHANGING (server-side). On allowlisted prefabs ONLY it removes "
+      "ZDO redirect is BEHAVIOUR-CHANGING (server-side). On the explicit allowlist (or '*' all-prefab mode) it removes "
       + "ZDOs from CreateSyncList's toSync before native serialization, replicates the native "
       + "per-peer ack, and posts the wire-equivalent payload to the Lumberjacks gateway. It "
       + "writes no persisted ZDO state (send path is runtime bookkeeping only; save is the "

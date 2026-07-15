@@ -23,6 +23,8 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   MethodInfo _rpc;
   string _endpoint;
   string _window;
+  string _consumerId;
+  string _lastTelemetryError = string.Empty;
   int _polling;
   int _acking;
   float _nextPoll;
@@ -30,6 +32,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   long _rejected;
   long _duplicates;
   long _retried;
+  long _acknowledged;
 
   public bool IsRunning { get; private set; }
   public long Applied => _applied;
@@ -42,6 +45,7 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     _rpc = AccessTools.Method(typeof(ZDOMan), "RPC_ZDOData", new[] { typeof(ZRpc), typeof(ZPackage) });
     if (_rpc == null) return "RPC_ZDOData reflection handle unavailable";
     _endpoint = endpoint.TrimEnd('/'); _window = windowId;
+    _consumerId = Guid.NewGuid().ToString("N").Substring(0, 12);
     IsRunning = true; _nextPoll = 0; return "authoritative consumer armed";
   }
 
@@ -78,7 +82,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       _retried++;
       ComfyNetworkSense.LogWarning("Authoritative consumer poll failed: " + exception.GetType().Name + ": " + exception.Message);
     }
-    finally { Interlocked.Exchange(ref _polling, 0); }
+    finally {
+      PostTelemetry();
+      Interlocked.Exchange(ref _polling, 0);
+    }
   }
 
   void Apply(ZdoRedirectEnvelopeCodec.Envelope envelope) {
@@ -117,13 +124,21 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
 
   void FlushAcks() {
     try {
-      while (_ackQueue.TryDequeue(out long seq)) {
+      while (!_ackQueue.IsEmpty) {
+        List<long> batch = new(256);
+        while (batch.Count < 256 && _ackQueue.TryDequeue(out long seq)) batch.Add(seq);
+        if (batch.Count == 0) break;
         try {
-          string body = "[" + seq.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]";
+          string body = "[" + string.Join(",", batch) + "]";
           SendPost(_endpoint + "/valheim/zdo-redirect/ack/" + _window, body);
-          lock (_gate) { _ackQueued.Remove(seq); }
+          lock (_gate) {
+            foreach (long acknowledged in batch) _ackQueued.Remove(acknowledged);
+          }
+          Interlocked.Add(ref _acknowledged, batch.Count);
         } catch (Exception exception) {
-          lock (_gate) { _ackQueued.Remove(seq); }
+          lock (_gate) {
+            foreach (long failed in batch) _ackQueued.Remove(failed);
+          }
           _retried++;
           ComfyNetworkSense.LogWarning("Authoritative consumer ack failed: " + exception.GetType().Name + ": " + exception.Message);
           break;
@@ -131,6 +146,30 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       }
     } finally {
       Interlocked.Exchange(ref _acking, 0);
+    }
+  }
+
+  void PostTelemetry() {
+    try {
+      Dictionary<string, object> payload = new() {
+          ["window_id"] = _window,
+          ["consumer_id"] = _consumerId,
+          ["mod_version"] = ComfyNetworkSense.PluginVersion,
+          ["timestamp_utc"] = DateTime.UtcNow.ToString("O"),
+          ["applied"] = Interlocked.Read(ref _applied),
+          ["acknowledged"] = Interlocked.Read(ref _acknowledged),
+          ["rejected"] = Interlocked.Read(ref _rejected),
+          ["duplicates"] = Interlocked.Read(ref _duplicates),
+          ["retried"] = Interlocked.Read(ref _retried),
+          ["pending"] = _queue.Count + _ackQueue.Count
+      };
+      SendPost(_endpoint + "/valheim/zdo-redirect/consumer", JsonLineSerializer.Serialize(payload));
+      _lastTelemetryError = string.Empty;
+    } catch (Exception exception) {
+      string error = exception.GetType().Name + ": " + exception.Message;
+      if (!string.Equals(error, _lastTelemetryError, StringComparison.Ordinal))
+        ComfyNetworkSense.LogWarning("Authoritative consumer telemetry failed: " + error);
+      _lastTelemetryError = error;
     }
   }
 
@@ -189,7 +228,8 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       ["rejected"] = _rejected,
       ["duplicates"] = _duplicates,
       ["retried"] = _retried,
-      ["pending"] = _queue.Count
+      ["acknowledged"] = _acknowledged,
+      ["pending"] = _queue.Count + _ackQueue.Count
   };
 
   public void Dispose() { IsRunning = false; }

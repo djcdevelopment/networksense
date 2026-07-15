@@ -713,8 +713,9 @@ public static class PluginConfig {
             "",
             "Comma-separated prefab name allowlist for the redirect (e.g. 'Beech1'). REQUIRED — "
             + "unlike the pin, blank does NOT mean 'any': suppressing every ZDO would freeze "
-            + "world sync for the client, so an empty list refuses to start. Names are matched "
-            + "by stable hash.");
+            + "world sync for the client, so an empty list refuses to start. The explicit value "
+            + "'*' selects all prefabs and must only be armed behind the authoritative coverage "
+            + "gate. Names are otherwise matched by stable hash.");
 
     ZdoRedirectEndpoint =
         config.Bind(
