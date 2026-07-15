@@ -21,7 +21,7 @@ public static class ZdoRedirectEnvelopeCodec {
     public int owner_rev;
     public int data_rev;
     public int prefab;
-    public double[] pos;
+    public float[] pos;
     public string body_b64;
   }
 
