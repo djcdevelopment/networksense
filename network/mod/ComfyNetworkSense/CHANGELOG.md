@@ -1,5 +1,11 @@
 ## Changelog
 
+### 0.5.26
+
+- Publish concrete all-prefab coverage totals from the authoritative redirect so Gateway can
+  promote a fully posted and applied window to `lumberjacks-primary`.
+- Keep the persistent cold-start plugin copy synchronized during GCP deployments.
+
 ### 0.5.25
 
 - Raise authoritative Gateway polling from 64 to 256 envelopes per second while retaining the

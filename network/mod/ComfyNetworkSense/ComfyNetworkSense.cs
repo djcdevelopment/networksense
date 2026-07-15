@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.25";
+  public const string PluginVersion = "0.5.26";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -138,6 +138,16 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       result["redirect_received"] = redirect.TryGetValue("posted_ok", out object received) ? received : null;
       result["redirect_missing"] = null;
       result["redirect_duplicates"] = null;
+      bool allPrefabs = redirect.TryGetValue("all_prefabs", out object allPrefabsValue)
+          && Convert.ToBoolean(allPrefabsValue);
+      if (allPrefabs) {
+        long total = Convert.ToInt64(suppressed ?? 0L);
+        long routed = Convert.ToInt64(received ?? 0L);
+        result["coverage_total"] = total;
+        result["coverage_lumberjacks"] = routed;
+        result["coverage_native_only"] = Math.Max(0L, total - routed);
+        result["native_fallbacks"] = 0L;
+      }
     }
     if (injection != null) {
       result["injection_applied"] = injection.TryGetValue("applied", out object applied) ? applied : null;
