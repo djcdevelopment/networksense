@@ -387,6 +387,7 @@ public sealed class LumberjacksShadowAuthorityRunner : IDisposable {
 
     try {
       using ClientWebSocket localSocket = new();
+      LumberjacksClientAuth.Apply(localSocket);
       socket = localSocket;
       _socket = socket;
 

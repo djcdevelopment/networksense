@@ -26,6 +26,9 @@ public static class ZdoRedirectEnvelopeCodec {
     public int data_rev;
     public int prefab;
     public float[] pos;
+    public string priority_tier;
+    public int priority_rank;
+    public float distance_meters;
     public string body_b64;
   }
 
@@ -42,7 +45,9 @@ public static class ZdoRedirectEnvelopeCodec {
           uid_id = ReadLong(item, "uid_id"), owner = ReadLong(item, "owner"),
           owner_rev = (int)ReadLong(item, "owner_rev"), data_rev = (int)ReadLong(item, "data_rev"),
           prefab = (int)ReadLong(item, "prefab"), body_b64 = ReadString(item, "body_b64"),
-          pos = ReadPosition(item)
+          pos = ReadPosition(item), priority_tier = ReadOptionalString(item, "priority_tier"),
+          priority_rank = (int)ReadOptionalLong(item, "priority_rank", int.MaxValue),
+          distance_meters = ReadOptionalFloat(item, "distance_meters", float.MaxValue)
       };
       envelopes.Add(envelope);
     }
@@ -66,6 +71,21 @@ public static class ZdoRedirectEnvelopeCodec {
     Match match = Regex.Match(json, "\\\"" + name + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"");
     if (!match.Success) throw new InvalidOperationException("missing " + name);
     return match.Groups[1].Value;
+  }
+
+  static long ReadOptionalLong(string json, string name, long fallback) {
+    Match match = Regex.Match(json, "\\\"" + name + "\\\"\\s*:\\s*(-?\\d+)");
+    return match.Success ? long.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : fallback;
+  }
+
+  static float ReadOptionalFloat(string json, string name, float fallback) {
+    Match match = Regex.Match(json, "\\\"" + name + "\\\"\\s*:\\s*(-?[0-9]+(?:\\.[0-9]+)?)");
+    return match.Success ? float.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : fallback;
+  }
+
+  static string ReadOptionalString(string json, string name) {
+    Match match = Regex.Match(json, "\\\"" + name + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"");
+    return match.Success ? match.Groups[1].Value : string.Empty;
   }
 
   static float[] ReadPosition(string json) {

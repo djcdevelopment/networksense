@@ -1,5 +1,42 @@
 ## Changelog
 
+### 0.5.31
+
+- Start permanent primary redirection as soon as the server peer is ready instead of waiting for
+  the diagnostic netcode probe's 25-second delay.
+- Carry the proven FieldLab priority tiers into every authoritative envelope, preserve Valheim's
+  `ServerSortSendZDOS` order, and let Gateway deliver critical/portal/structural state first while
+  keeping every ZDO in the durable acknowledged queue.
+- Raise the end-to-end poll/ack batch from 256 to 1,024 and serialize batch apply/ack/poll phases,
+  removing the 256-envelope-per-second ceiling and duplicate redelivery churn without increasing
+  the Unity main-thread apply budget.
+
+### 0.5.30
+
+- Give the permanent primary window a server-session boundary: while the dedicated server is
+  empty, reset the durable delivery window before sequence numbers can be reused after a restart.
+- Refuse to arm all-prefab primary suppression until that empty-server reset succeeds, preserving
+  native delivery as the fail-safe path when Gateway maintenance is unavailable.
+- Treat an existing ZDO at equal-or-newer owner/data revisions as a native-funnel reconciliation
+  even when an obsolete queued identity has a different prefab; older local revisions still retry
+  and reject rather than acknowledging un-applied state.
+
+### 0.5.29
+
+- Merge authoritative consumer state into the normal client JSONL stream so the local MCP
+  development channel can inspect the live poll/apply/ack path without dashboard inference.
+- Report the consumer phase, peer readiness, queue depths, sequence progress, request activity,
+  timestamps, and sanitized errors; enrollment secrets are never written to telemetry.
+- Bound direct Gateway connect, send, receive, and response sizes so a dead route cannot strand
+  the background poller or acknowledgement loop indefinitely.
+
+### 0.5.28
+
+- Separate the shared authoritative queue/window id from each player's Steam enrollment id.
+- Send the enrollment credential on authoritative HTTP and Lumberjacks WebSocket connections so
+  the mod can use a direct authenticated Gateway route instead of requiring OMEN's IAP tunnel.
+- Retain `lumberjacksEnrollmentManifestId` as a backwards-compatible queue id fallback.
+
 ### 0.5.27
 
 - Keep the all-prefab redirect armed after the finite diagnostic probe stops when the effective

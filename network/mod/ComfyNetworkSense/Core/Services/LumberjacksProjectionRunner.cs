@@ -183,6 +183,7 @@ public sealed class LumberjacksProjectionRunner : IDisposable {
   async Task RunReceiveLoop(CancellationToken token, TelemetryCoordinator coordinator) {
     try {
       using ClientWebSocket socket = new();
+      LumberjacksClientAuth.Apply(socket);
       _socket = socket;
 
       using (CancellationTokenSource connectCts = new(ConnectTimeoutMs)) {

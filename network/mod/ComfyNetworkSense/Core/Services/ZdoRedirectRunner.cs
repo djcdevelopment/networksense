@@ -72,6 +72,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
       ZdoPeerType == null ? null : AccessTools.Field(ZdoPeerType, "m_zdos");
   static readonly FieldInfo ForceSendField =
       ZdoPeerType == null ? null : AccessTools.Field(ZdoPeerType, "m_forceSend");
+  static readonly FieldInfo NetworkPeerField =
+      ZdoPeerType == null ? null : AccessTools.Field(ZdoPeerType, "m_peer");
   static readonly ConstructorInfo PeerInfoCtor =
       PeerZdoInfoType == null
           ? null
@@ -85,6 +87,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
 
   readonly object _lock = new();
   readonly ConcurrentQueue<Dictionary<string, object>> _postQueue = new();
+  readonly Dictionary<int, PriorityDescriptor> _priorityDescriptors = new();
 
   TelemetryCoordinator _coordinator;
   bool _running;
@@ -108,8 +111,71 @@ public sealed class ZdoRedirectRunner : IDisposable {
   long _rowsWritten;
   bool _capped;
   int _postInFlight;
+  int _primaryResetInFlight;
+  volatile bool _primaryWindowReady;
+  int _lastPrimaryPeerCount = -1;
+  float _nextPrimaryResetAt;
+  string _primaryResetError = string.Empty;
 
   public bool IsRunning => _running;
+
+  /// <summary>
+  /// Establishes a delivery epoch for the permanent primary window while no
+  /// clients are connected. Redirect sequence numbers are process-local, so a
+  /// durable queue from a previous Valheim process must be cleared before the
+  /// counter can safely start at one again. The reset runs off the Unity thread;
+  /// Start() remains fail-safe and refuses primary suppression until it succeeds.
+  /// </summary>
+  public void MaintainPrimaryWindow(float now) {
+    if (!PluginConfig.ZdoRedirectEnabled.Value
+        || !string.Equals(TelemetryCoordinator.EffectiveCutoverMode(), "lumberjacks-primary",
+            StringComparison.OrdinalIgnoreCase)
+        || ZNet.instance == null || !ZNet.instance.IsServer()) return;
+
+    int peers = ZNet.instance.GetPeers()?.Count ?? 0;
+    if (peers > 0) {
+      _lastPrimaryPeerCount = peers;
+      return;
+    }
+
+    if (_lastPrimaryPeerCount > 0) {
+      _primaryWindowReady = false;
+      _nextPrimaryResetAt = now + 2.0f;
+    }
+    _lastPrimaryPeerCount = 0;
+    if (_primaryWindowReady || now < _nextPrimaryResetAt || !_postQueue.IsEmpty
+        || Interlocked.CompareExchange(ref _postInFlight, 0, 0) != 0
+        || Interlocked.CompareExchange(ref _primaryResetInFlight, 1, 0) != 0) return;
+
+    string endpoint = PluginConfig.ZdoRedirectEndpoint.Value?.Trim().TrimEnd('/') ?? string.Empty;
+    string window = PluginConfig.ZdoRedirectWindowId.Value?.Trim() ?? string.Empty;
+    if (endpoint.Length == 0 || window.Length == 0) {
+      _primaryResetError = "primary reset requires zdoRedirectEndpoint and zdoRedirectWindowId";
+      Interlocked.Exchange(ref _primaryResetInFlight, 0);
+      _nextPrimaryResetAt = now + 5.0f;
+      return;
+    }
+
+    _ = Task.Run(() => {
+      try {
+        SendHttpPostViaSocket(endpoint + "/valheim/zdo-redirect/reset/"
+            + Uri.EscapeDataString(window), string.Empty);
+        lock (_lock) {
+          _seq = 0;
+          _primaryResetError = string.Empty;
+        }
+        _primaryWindowReady = true;
+        ComfyNetworkSense.LogInfo("ZDO primary delivery window reset while server is empty: " + window);
+      } catch (Exception exception) {
+        _primaryWindowReady = false;
+        lock (_lock) _primaryResetError = exception.GetType().Name + ": " + exception.Message;
+        ComfyNetworkSense.LogWarning("ZDO primary delivery window reset failed; native path remains armed: "
+            + _primaryResetError);
+      } finally {
+        Interlocked.Exchange(ref _primaryResetInFlight, 0);
+      }
+    });
+  }
 
   public string Start(TelemetryCoordinator coordinator, int? maxRowsOverride = null) {
     if (!ReflectionReady) {
@@ -125,6 +191,14 @@ public sealed class ZdoRedirectRunner : IDisposable {
     if (!allPrefabs && filter == null) {
       return "ZDO redirect REFUSED: zdoRedirectPrefabs is empty. An empty allowlist would "
           + "suppress ALL ZDO sync (world-freeze for the client); name the tagged prefab(s).";
+    }
+    if (allPrefabs
+        && string.Equals(TelemetryCoordinator.EffectiveCutoverMode(), "lumberjacks-primary",
+            StringComparison.OrdinalIgnoreCase)
+        && !_primaryWindowReady) {
+      return "ZDO redirect REFUSED: primary delivery window has not completed its empty-server "
+          + "sequence reset. Native delivery remains active."
+          + (string.IsNullOrWhiteSpace(_primaryResetError) ? string.Empty : " Last error: " + _primaryResetError);
     }
 
     lock (_lock) {
@@ -156,6 +230,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
       _dropped = 0;
       _rowsWritten = 0;
       _capped = false;
+      _priorityDescriptors.Clear();
     }
 
     _active = this;
@@ -241,16 +316,23 @@ public sealed class ZdoRedirectRunner : IDisposable {
       return;
     }
 
-    for (int i = toSync.Count - 1; i >= 0; i--) {
+    // CreateSyncList has already passed through Valheim's ServerSortSendZDOS priority
+    // ordering. Remove from the source list backwards for index safety, but redirect in
+    // the original forward order; the old loop emitted the lowest-priority tail first.
+    List<ZDO> selected = new();
+    List<int> selectedIndexes = new();
+    for (int i = 0; i < toSync.Count; i++) {
       ZDO zdo = toSync[i];
       if (zdo == null || (!allPrefabs && !filter.Contains(SafePrefab(zdo)))) {
         continue;
       }
-
-      // Suppress: remove from the list BEFORE SendZDOs serializes it. Native never sees it.
-      toSync.RemoveAt(i);
-      Redirect(peer, zdo);
+      selected.Add(zdo);
+      selectedIndexes.Add(i);
     }
+
+    for (int i = selectedIndexes.Count - 1; i >= 0; i--)
+      toSync.RemoveAt(selectedIndexes[i]);
+    foreach (ZDO zdo in selected) Redirect(peer, zdo);
 
     TryFlushQueue();
   }
@@ -292,6 +374,13 @@ public sealed class ZdoRedirectRunner : IDisposable {
     Dictionary<string, object> row = null;
     TelemetryCoordinator coordinator;
     Vector3 position = zdo.GetPosition();
+    PriorityDescriptor priority = ResolvePriorityDescriptor(zdo);
+    Vector3 observerPosition = PeerReferencePosition(peer, position);
+    float distanceMeters = Vector3.Distance(position, observerPosition);
+    float priorityRadius = Mathf.Clamp(PluginConfig.LumberjacksPriorityProbeRadiusMeters.Value, 8.0f, 256.0f);
+    string priorityTier = LumberjacksPriorityClassifier.Classify(
+        priority.ObjectName, priority.ComponentNames, position, observerPosition, priorityRadius,
+        out int priorityRank, out string priorityReason);
     lock (_lock) {
       if (!_running) {
         return;
@@ -335,9 +424,47 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["data_rev"] = zdo.DataRevision,
         ["prefab"] = SafePrefab(zdo),
         ["pos"] = new List<object> { position.x, position.y, position.z },
+        ["priority_tier"] = priorityTier,
+        ["priority_rank"] = priorityRank,
+        ["priority_reason"] = priorityReason,
+        ["distance_meters"] = Math.Round(distanceMeters, 3),
         ["body_b64"] = Convert.ToBase64String(body),
         ["attempt"] = 0
     });
+  }
+
+  PriorityDescriptor ResolvePriorityDescriptor(ZDO zdo) {
+    int prefabHash = SafePrefab(zdo);
+    if (_priorityDescriptors.TryGetValue(prefabHash, out PriorityDescriptor cached)) return cached;
+
+    string objectName = prefabHash.ToString(CultureInfo.InvariantCulture);
+    string[] componentNames = Array.Empty<string>();
+    try {
+      GameObject prefab = ZNetScene.instance?.GetPrefab(prefabHash);
+      if (prefab) {
+        objectName = prefab.name ?? objectName;
+        SortedSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        foreach (Component component in prefab.GetComponents<Component>())
+          if (component) names.Add(component.GetType().Name);
+        componentNames = new string[names.Count];
+        names.CopyTo(componentNames);
+      }
+    } catch {
+      // Unknown/modded prefabs retain the bounded support-piece default.
+    }
+
+    PriorityDescriptor descriptor = new(objectName, componentNames);
+    _priorityDescriptors[prefabHash] = descriptor;
+    return descriptor;
+  }
+
+  static Vector3 PeerReferencePosition(object redirectPeer, Vector3 fallback) {
+    try {
+      if (NetworkPeerField?.GetValue(redirectPeer) is ZNetPeer peer) return peer.m_refPos;
+    } catch {
+      // Delivery remains valid without distance metadata.
+    }
+    return fallback;
   }
 
   // --- Poster ----------------------------------------------------------------------------
@@ -448,6 +575,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
         + "Host: " + uri.Host + ":" + uri.Port.ToString(CultureInfo.InvariantCulture) + "\r\n"
         + "Content-Type: application/json\r\n"
         + "Content-Length: " + bodyBytes.Length.ToString(CultureInfo.InvariantCulture) + "\r\n"
+        + (string.IsNullOrWhiteSpace(PluginConfig.LumberjacksClientAccessKey.Value) ? string.Empty : "X-Lumberjacks-Client-Key: " + PluginConfig.LumberjacksClientAccessKey.Value + "\r\n")
         + "Connection: close\r\n\r\n";
     byte[] headBytes = Encoding.ASCII.GetBytes(head);
 
@@ -501,6 +629,15 @@ public sealed class ZdoRedirectRunner : IDisposable {
     }
   }
 
+  sealed class PriorityDescriptor {
+    public readonly string ObjectName;
+    public readonly string[] ComponentNames;
+    public PriorityDescriptor(string objectName, string[] componentNames) {
+      ObjectName = objectName;
+      ComponentNames = componentNames;
+    }
+  }
+
   Dictionary<string, object> BuildStatusRowLocked(string eventType) {
     return new Dictionary<string, object> {
         ["event"] = eventType,
@@ -514,6 +651,9 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["ack_failures"] = _ackFailures,
         ["posted_ok"] = _postedOk,
         ["post_failed_batches"] = _postFailedBatches,
+        ["primary_window_ready"] = _primaryWindowReady,
+        ["primary_reset_in_flight"] = _primaryResetInFlight != 0,
+        ["primary_reset_error"] = _primaryResetError,
         ["requeued"] = _requeued,
         ["dropped"] = _dropped,
         ["queued"] = _postQueue.Count,

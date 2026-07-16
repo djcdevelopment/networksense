@@ -51,10 +51,13 @@ public static class PluginConfig {
   public static ConfigEntry<string> LumberjacksGatewayUrl { get; private set; }
   public static ConfigEntry<string> LumberjacksCutoverMode { get; private set; }
   public static ConfigEntry<string> LumberjacksEnrollmentManifestId { get; private set; }
+  public static ConfigEntry<string> LumberjacksAuthoritativeWindowId { get; private set; }
+  public static ConfigEntry<string> LumberjacksEnrollmentId { get; private set; }
   public static ConfigEntry<bool> ZdoAuthoritativeConsumerEnabled { get; private set; }
   public static ConfigEntry<bool> LumberjacksTelemetryHeartbeatEnabled { get; private set; }
   public static ConfigEntry<float> LumberjacksTelemetryHeartbeatIntervalSeconds { get; private set; }
   public static ConfigEntry<string> LumberjacksTelemetryKey { get; private set; }
+  public static ConfigEntry<string> LumberjacksClientAccessKey { get; private set; }
   public static ConfigEntry<string> LumberjacksRegionId { get; private set; }
   public static ConfigEntry<int> LumberjacksProbeInputCount { get; private set; }
   public static ConfigEntry<float> LumberjacksProjectionInputHz { get; private set; }
@@ -487,6 +490,14 @@ public static class PluginConfig {
             "",
             "Enrollment manifest revision assigned by the Lumberjacks control plane. Empty means this installation is not enrolled.");
 
+    LumberjacksAuthoritativeWindowId =
+        config.Bind("Lumberjacks", "lumberjacksAuthoritativeWindowId", "",
+            "Shared authoritative queue/window id. Falls back to lumberjacksEnrollmentManifestId for older installations.");
+
+    LumberjacksEnrollmentId =
+        config.Bind("Lumberjacks", "lumberjacksEnrollmentId", "",
+            "Per-player enrollment id issued after Steam invite redemption. This is not the authoritative queue id.");
+
     ZdoAuthoritativeConsumerEnabled = config.Bind(
         "Lumberjacks", "zdoAuthoritativeConsumerEnabled", false,
         "Apply queued Lumberjacks ZDO envelopes through RPC_ZDOData. Requires an explicit authoritative window.");
@@ -502,6 +513,10 @@ public static class PluginConfig {
     LumberjacksTelemetryKey =
         config.Bind("Lumberjacks", "lumberjacksTelemetryKey", "",
             "Optional shared key sent as X-Lumberjacks-Telemetry-Key for heartbeat ingestion.");
+
+    LumberjacksClientAccessKey =
+        config.Bind("Lumberjacks", "lumberjacksClientAccessKey", "",
+            "Optional shared client key sent to authenticated volunteer Gateway endpoints. Keep empty for the private OMEN tunnel.");
 
     LumberjacksRegionId =
         config.Bind(

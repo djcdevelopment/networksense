@@ -58,6 +58,7 @@ public sealed class LumberjacksBridgeProbe {
     };
 
     using ClientWebSocket socket = new();
+    LumberjacksClientAuth.Apply(socket);
 
     using (CancellationTokenSource connectCts = new(ConnectTimeoutMs)) {
       await socket.ConnectAsync(new Uri(gatewayUrl), connectCts.Token).ConfigureAwait(false);

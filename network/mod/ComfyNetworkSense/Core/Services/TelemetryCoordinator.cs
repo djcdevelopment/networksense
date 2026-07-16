@@ -91,7 +91,14 @@ public sealed class TelemetryCoordinator : IDisposable {
         _latestScores = ScoreCalculator.Calculate(_latestClientSample, _latestServerPulse, _mode);
       }
 
-      _logWriter.Write("telemetry-client.jsonl", _latestClientSample.ToDictionary());
+      Dictionary<string, object> clientRow = _latestClientSample.ToDictionary();
+      Dictionary<string, object> replacement = _replacementTelemetryProvider?.Invoke();
+      if (replacement != null) {
+        foreach (KeyValuePair<string, object> pair in replacement) {
+          clientRow[pair.Key] = pair.Value;
+        }
+      }
+      _logWriter.Write("telemetry-client.jsonl", clientRow);
 
       if (_latestClientSample.RegionId != _lastRegionId) {
         WriteEvent("region_change", $"Region {(_lastRegionId == string.Empty ? "start" : _lastRegionId)} -> {_latestClientSample.RegionId}");

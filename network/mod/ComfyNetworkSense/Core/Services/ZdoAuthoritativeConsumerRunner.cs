@@ -16,7 +16,10 @@ using HarmonyLib;
 public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   const int MaxAppliesPerUpdate = 64;
   const int MaxApplyAttempts = 30;
-  const int PollBatchMax = 256;
+  const int PollBatchMax = 1024;
+  const int AckBatchMax = 1024;
+  const int HttpTimeoutMs = 5000;
+  const int MaxResponseBytes = 16 * 1024 * 1024;
 
   readonly ConcurrentQueue<ZdoRedirectEnvelopeCodec.Envelope> _queue = new();
   readonly ConcurrentQueue<long> _ackQueue = new();
@@ -31,16 +34,36 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   string _endpoint;
   string _window;
   string _consumerId;
+  string _state = "stopped";
+  string _lastPollUtc = string.Empty;
+  string _lastApplyUtc = string.Empty;
+  string _lastAckUtc = string.Empty;
+  string _lastTelemetryUtc = string.Empty;
+  string _lastPollError = string.Empty;
+  string _lastApplyError = string.Empty;
+  string _lastAckError = string.Empty;
   string _lastTelemetryError = string.Empty;
   int _polling;
   int _acking;
+  int _connectedPeers;
   float _nextPoll;
+  long _polls;
+  long _pollFailures;
+  long _ackFailures;
+  long _telemetryFailures;
+  long _lastPolledCount;
+  long _lastAppliedSeq;
+  long _lastAcknowledgedSeq;
   long _applied;
   long _superseded;
   long _rejected;
   long _duplicates;
   long _retried;
   long _acknowledged;
+  long _priorityTagged;
+  long _priorityFastLaneApplied;
+  string _lastPriorityTier = string.Empty;
+  int _lastPriorityRank = int.MaxValue;
 
   public bool IsRunning { get; private set; }
   public long Applied => _applied;
@@ -55,31 +78,56 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     if (_rpc == null) return "RPC_ZDOData reflection handle unavailable";
     _endpoint = endpoint.TrimEnd('/'); _window = windowId;
     _consumerId = Guid.NewGuid().ToString("N").Substring(0, 12);
-    IsRunning = true; _nextPoll = 0; return "authoritative consumer armed";
+    IsRunning = true; _nextPoll = 0;
+    lock (_gate) _state = "waiting-for-peer";
+    return "authoritative consumer armed";
   }
 
   public void Update(float now) {
     // Redirect envelopes represent the server-to-client delivery path.  The dedicated
     // server produces them; only an enrolled connected client may consume them.
-    if (!IsRunning || ZNet.instance == null || ZNet.instance.IsServer()
-        || ZNet.instance.GetPeers() == null || ZNet.instance.GetPeers().Count == 0) return;
-    if (now >= _nextPoll && Interlocked.CompareExchange(ref _polling, 1, 0) == 0) {
-      _nextPoll = now + 1f; _ = Task.Run(Poll);
+    if (!IsRunning) return;
+    int peers = ZNet.instance?.GetPeers()?.Count ?? 0;
+    _connectedPeers = peers;
+    if (ZNet.instance == null || ZNet.instance.IsServer() || peers == 0) {
+      lock (_gate) _state = ZNet.instance != null && ZNet.instance.IsServer()
+          ? "server-not-consumer" : "waiting-for-peer";
+      return;
     }
-    if (!_ackQueue.IsEmpty && Interlocked.CompareExchange(ref _acking, 1, 0) == 0)
-      _ = Task.Run(FlushAcks);
-
     PromoteDueRetries(now);
     int processed = 0;
     while (processed++ < MaxAppliesPerUpdate && _queue.TryDequeue(out var envelope))
       Apply(envelope, now);
+
+    lock (_gate) _state = _queue.IsEmpty && _pendingRetries.Count == 0
+        ? "polling" : "draining";
+
+    // Finish and acknowledge one bounded delivery batch before asking for the next.
+    // This removes the old 1 Hz / 256-envelope ceiling and avoids repeatedly polling
+    // the same oldest unacknowledged records while Unity is still applying them.
+    if (ShouldFlushAcks() && Interlocked.CompareExchange(ref _acking, 1, 0) == 0)
+      _ = Task.Run(FlushAcks);
+
+    if (ReadyToPoll() && now >= _nextPoll
+        && Interlocked.CompareExchange(ref _polling, 1, 0) == 0) {
+      _nextPoll = now + (Interlocked.Read(ref _lastPolledCount) == 0 ? 0.5f : 0.05f);
+      _ = Task.Run(Poll);
+    }
   }
 
   void Poll() {
     try {
       string json = SendGet(_endpoint + "/valheim/zdo-redirect/pending/" + _window + "?limit=" + PollBatchMax);
       var response = ZdoRedirectEnvelopeCodec.Parse(json);
-      foreach (var envelope in response.envelopes ?? Array.Empty<ZdoRedirectEnvelopeCodec.Envelope>()) {
+      ZdoRedirectEnvelopeCodec.Envelope[] envelopes =
+          response.envelopes ?? Array.Empty<ZdoRedirectEnvelopeCodec.Envelope>();
+      Interlocked.Increment(ref _polls);
+      Interlocked.Exchange(ref _lastPolledCount, envelopes.Length);
+      lock (_gate) {
+        _lastPollUtc = DateTime.UtcNow.ToString("O");
+        _lastPollError = string.Empty;
+      }
+      foreach (var envelope in envelopes) {
         if (envelope.seq == 0) continue;
         lock (_gate) {
           if (_seen.Contains(envelope.seq)) {
@@ -92,7 +140,13 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
         _queue.Enqueue(envelope);
       }
     } catch (Exception exception) {
+      Interlocked.Increment(ref _pollFailures);
       _retried++;
+      lock (_gate) {
+        _lastPollUtc = DateTime.UtcNow.ToString("O");
+        _lastPollError = exception.GetType().Name + ": " + exception.Message;
+        _state = "poll-error";
+      }
       ComfyNetworkSense.LogWarning("Authoritative consumer poll failed: " + exception.GetType().Name + ": " + exception.Message);
     }
     finally {
@@ -122,6 +176,19 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       }
       if (readback.Superseded) _superseded++;
       else _applied++;
+      if (!string.IsNullOrWhiteSpace(envelope.priority_tier)) {
+        _priorityTagged++;
+        if (envelope.priority_rank <= 4) _priorityFastLaneApplied++;
+        lock (_gate) {
+          _lastPriorityTier = envelope.priority_tier;
+          _lastPriorityRank = envelope.priority_rank;
+        }
+      }
+      Interlocked.Exchange(ref _lastAppliedSeq, envelope.seq);
+      lock (_gate) {
+        _lastApplyUtc = DateTime.UtcNow.ToString("O");
+        _lastApplyError = string.Empty;
+      }
     } catch (Exception exception) {
       Exception root = exception is TargetInvocationException tie && tie.InnerException != null
           ? tie.InnerException : exception;
@@ -142,6 +209,11 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       }
       _retried++;
       if (terminal) _rejected++;
+      lock (_gate) {
+        _lastApplyUtc = DateTime.UtcNow.ToString("O");
+        _lastApplyError = root.GetType().Name + ": " + root.Message;
+        if (terminal) _state = "apply-rejected";
+      }
       if (attempt == 1 || attempt % 5 == 0 || terminal) {
         ComfyNetworkSense.LogWarning(
             $"Authoritative consumer apply {(terminal ? "rejected" : "retry")}: "
@@ -177,13 +249,15 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
         && dataRevision == expected.data_rev
         && (expected.prefab == 0 || prefab == expected.prefab)) return new(false, null);
 
-    // RPC_ZDOData intentionally refuses an obsolete revision. A matching ZDO with
-    // either monotonic revision already ahead is safely reconciled: applying the
-    // envelope would roll state backward, while acknowledging it lets the queue drain.
-    bool samePrefab = expected.prefab == 0 || prefab == expected.prefab;
-    bool newerRevision = dataRevision > (uint)expected.data_rev
-        || ownerRevision > (ushort)expected.owner_rev;
-    if (samePrefab && newerRevision) return new(true, null);
+    // RPC_ZDOData intentionally refuses an obsolete or equal revision. If the local
+    // object is already monotonic in both revision dimensions, its post-call state is
+    // the native receive funnel's decision and the envelope is safely reconciled.
+    // This also handles a prior server epoch reusing a sequence/UID after the ZDO was
+    // destroyed and replaced by a different prefab. A lower local revision is never
+    // acknowledged: it remains a retry/terminal rejection.
+    bool monotonicRevision = dataRevision >= (uint)expected.data_rev
+        && ownerRevision >= (ushort)expected.owner_rev;
+    if (monotonicRevision) return new(true, null);
 
     return new(false, $"readback mismatch uid={expected.uid_user}:{expected.uid_id} "
         + $"owner={owner}/{expected.owner} owner_rev={ownerRevision}/{expected.owner_rev} "
@@ -194,11 +268,26 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     if (_ackQueued.Add(seq)) _ackQueue.Enqueue(seq);
   }
 
+  bool ShouldFlushAcks() {
+    lock (_gate) {
+      if (_ackQueue.IsEmpty) return false;
+      return _ackQueue.Count >= AckBatchMax
+          || (_queue.IsEmpty && _pendingRetries.Count == 0);
+    }
+  }
+
+  bool ReadyToPoll() {
+    lock (_gate) {
+      return _queue.IsEmpty && _pendingRetries.Count == 0 && _ackQueue.IsEmpty
+          && Interlocked.CompareExchange(ref _acking, 0, 0) == 0;
+    }
+  }
+
   void FlushAcks() {
     try {
       while (!_ackQueue.IsEmpty) {
-        List<long> batch = new(256);
-        while (batch.Count < 256 && _ackQueue.TryDequeue(out long seq)) batch.Add(seq);
+        List<long> batch = new(AckBatchMax);
+        while (batch.Count < AckBatchMax && _ackQueue.TryDequeue(out long seq)) batch.Add(seq);
         if (batch.Count == 0) break;
         try {
           string body = "[" + string.Join(",", batch) + "]";
@@ -207,11 +296,22 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
             foreach (long acknowledged in batch) _ackQueued.Remove(acknowledged);
           }
           Interlocked.Add(ref _acknowledged, batch.Count);
+          Interlocked.Exchange(ref _lastAcknowledgedSeq, batch[batch.Count - 1]);
+          lock (_gate) {
+            _lastAckUtc = DateTime.UtcNow.ToString("O");
+            _lastAckError = string.Empty;
+          }
         } catch (Exception exception) {
           lock (_gate) {
             foreach (long failed in batch) _ackQueued.Remove(failed);
           }
+          Interlocked.Increment(ref _ackFailures);
           _retried++;
+          lock (_gate) {
+            _lastAckUtc = DateTime.UtcNow.ToString("O");
+            _lastAckError = exception.GetType().Name + ": " + exception.Message;
+            _state = "ack-error";
+          }
           ComfyNetworkSense.LogWarning("Authoritative consumer ack failed: " + exception.GetType().Name + ": " + exception.Message);
           break;
         }
@@ -236,15 +336,24 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
           ["rejected"] = Interlocked.Read(ref _rejected),
           ["duplicates"] = Interlocked.Read(ref _duplicates),
           ["retried"] = Interlocked.Read(ref _retried),
+          ["priority_tagged"] = Interlocked.Read(ref _priorityTagged),
+          ["priority_fast_lane_applied"] = Interlocked.Read(ref _priorityFastLaneApplied),
           ["pending"] = pending
       };
       SendPost(_endpoint + "/valheim/zdo-redirect/consumer", JsonLineSerializer.Serialize(payload));
-      _lastTelemetryError = string.Empty;
+      lock (_gate) {
+        _lastTelemetryUtc = DateTime.UtcNow.ToString("O");
+        _lastTelemetryError = string.Empty;
+      }
     } catch (Exception exception) {
+      Interlocked.Increment(ref _telemetryFailures);
       string error = exception.GetType().Name + ": " + exception.Message;
       if (!string.Equals(error, _lastTelemetryError, StringComparison.Ordinal))
         ComfyNetworkSense.LogWarning("Authoritative consumer telemetry failed: " + error);
-      _lastTelemetryError = error;
+      lock (_gate) {
+        _lastTelemetryUtc = DateTime.UtcNow.ToString("O");
+        _lastTelemetryError = error;
+      }
     }
   }
 
@@ -255,10 +364,17 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     Uri uri = new(url);
     byte[] bytes = Encoding.UTF8.GetBytes(body ?? string.Empty);
     using TcpClient client = new();
-    client.Connect(uri.Host, uri.Port);
+    IAsyncResult connect = client.BeginConnect(uri.Host, uri.Port, null, null);
+    if (!connect.AsyncWaitHandle.WaitOne(HttpTimeoutMs))
+      throw new TimeoutException("connect timeout to " + uri.Host + ":" + uri.Port);
+    client.EndConnect(connect);
+    client.SendTimeout = HttpTimeoutMs;
+    client.ReceiveTimeout = HttpTimeoutMs;
     using NetworkStream stream = client.GetStream();
     string request = method + " " + uri.PathAndQuery + " HTTP/1.1\r\nHost: " + uri.Host
         + "\r\nContent-Type: application/json\r\nContent-Length: " + bytes.Length
+        + (string.IsNullOrWhiteSpace(PluginConfig.LumberjacksClientAccessKey.Value) ? string.Empty : "\r\nX-Lumberjacks-Client-Key: " + PluginConfig.LumberjacksClientAccessKey.Value)
+        + (string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value) ? string.Empty : "\r\nX-Lumberjacks-Enrollment-Id: " + PluginConfig.LumberjacksEnrollmentId.Value)
         + "\r\nConnection: close\r\n\r\n";
     byte[] header = Encoding.ASCII.GetBytes(request);
     stream.Write(header, 0, header.Length);
@@ -267,8 +383,11 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     byte[] buffer = new byte[8192];
     StringBuilder response = new();
     int read;
-    while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+    while ((read = stream.Read(buffer, 0, buffer.Length)) > 0) {
       response.Append(Encoding.UTF8.GetString(buffer, 0, read));
+      if (response.Length > MaxResponseBytes)
+        throw new InvalidOperationException("HTTP response exceeded " + MaxResponseBytes + " bytes");
+    }
     string raw = response.ToString();
     int split = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
     if (!raw.StartsWith("HTTP/1.1 2", StringComparison.Ordinal))
@@ -298,18 +417,50 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   }
 
   public Dictionary<string, object> Snapshot() {
-    int pending;
-    lock (_gate) pending = _queue.Count + _ackQueue.Count + _pendingRetries.Count + _failed.Count;
-    return new() {
-      ["authoritative_enabled"] = IsRunning,
-      ["applied"] = _applied,
-      ["superseded"] = _superseded,
-      ["rejected"] = _rejected,
-      ["duplicates"] = _duplicates,
-      ["retried"] = _retried,
-      ["acknowledged"] = _acknowledged,
-      ["pending"] = pending
-    };
+    lock (_gate) {
+      int pending = _queue.Count + _ackQueue.Count + _pendingRetries.Count + _failed.Count;
+      return new() {
+        ["authoritative_enabled"] = IsRunning,
+        ["state"] = _state,
+        ["window_id"] = _window ?? string.Empty,
+        ["consumer_id"] = _consumerId ?? string.Empty,
+        ["connected_peers"] = _connectedPeers,
+        ["poll_in_flight"] = _polling != 0,
+        ["ack_in_flight"] = _acking != 0,
+        ["polls"] = Interlocked.Read(ref _polls),
+        ["poll_failures"] = Interlocked.Read(ref _pollFailures),
+        ["last_polled_count"] = Interlocked.Read(ref _lastPolledCount),
+        ["poll_batch_max"] = PollBatchMax,
+        ["ack_batch_max"] = AckBatchMax,
+        ["max_applies_per_update"] = MaxAppliesPerUpdate,
+        ["last_poll_utc"] = _lastPollUtc,
+        ["last_poll_error"] = _lastPollError,
+        ["last_apply_utc"] = _lastApplyUtc,
+        ["last_apply_error"] = _lastApplyError,
+        ["last_applied_seq"] = Interlocked.Read(ref _lastAppliedSeq),
+        ["last_ack_utc"] = _lastAckUtc,
+        ["last_ack_error"] = _lastAckError,
+        ["last_acknowledged_seq"] = Interlocked.Read(ref _lastAcknowledgedSeq),
+        ["last_telemetry_utc"] = _lastTelemetryUtc,
+        ["last_telemetry_error"] = _lastTelemetryError,
+        ["ack_failures"] = Interlocked.Read(ref _ackFailures),
+        ["telemetry_failures"] = Interlocked.Read(ref _telemetryFailures),
+        ["queue_depth"] = _queue.Count,
+        ["retry_depth"] = _pendingRetries.Count,
+        ["failed_depth"] = _failed.Count,
+        ["applied"] = Interlocked.Read(ref _applied),
+        ["superseded"] = Interlocked.Read(ref _superseded),
+        ["rejected"] = Interlocked.Read(ref _rejected),
+        ["duplicates"] = Interlocked.Read(ref _duplicates),
+        ["retried"] = Interlocked.Read(ref _retried),
+        ["priority_tagged"] = Interlocked.Read(ref _priorityTagged),
+        ["priority_fast_lane_applied"] = Interlocked.Read(ref _priorityFastLaneApplied),
+        ["last_priority_tier"] = _lastPriorityTier,
+        ["last_priority_rank"] = _lastPriorityRank,
+        ["acknowledged"] = Interlocked.Read(ref _acknowledged),
+        ["pending"] = pending
+      };
+    }
   }
 
   sealed class PendingRetry {
@@ -330,5 +481,8 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     }
   }
 
-  public void Dispose() { IsRunning = false; }
+  public void Dispose() {
+    IsRunning = false;
+    lock (_gate) _state = "stopped";
+  }
 }

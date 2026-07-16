@@ -21,7 +21,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.27";
+  public const string PluginVersion = "0.5.31";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -51,6 +51,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   bool _netcodeProbeAutoStarted;
   float _netcodeProbeAutoStartAt = -1.0f;
   float _netcodeProbeAutoStopAt = -1.0f;
+  float _nextPrimaryRedirectStartAt;
+  string _lastPrimaryRedirectStartMessage = string.Empty;
 
   enum ShadowRouteMovementKind {
     Stationary,
@@ -104,9 +106,12 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
   void InitializeAuthoritativeConsumer() {
     try {
-      string authoritativeWindow = string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentManifestId.Value)
-          ? Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_ENROLLMENT_MANIFEST_ID")
-          : PluginConfig.LumberjacksEnrollmentManifestId.Value;
+      string authoritativeWindow = PluginConfig.LumberjacksAuthoritativeWindowId.Value;
+      if (string.IsNullOrWhiteSpace(authoritativeWindow)) {
+        authoritativeWindow = string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentManifestId.Value)
+            ? Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_ENROLLMENT_MANIFEST_ID")
+            : PluginConfig.LumberjacksEnrollmentManifestId.Value;
+      }
       LogInfo("Authoritative consumer init: enabled=" + PluginConfig.ZdoAuthoritativeConsumerEnabled.Value
           + ", manifest=" + (authoritativeWindow ?? "")
           + ", gateway=" + PluginConfig.LumberjacksGatewayUrl.Value);
@@ -171,6 +176,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     float deltaTime = Time.unscaledDeltaTime;
+    float now = Time.unscaledTime;
+    _zdoRedirectRunner?.MaintainPrimaryWindow(now);
+    TryEnsurePrimaryRedirect(now);
     _zdoAuthoritativeConsumerRunner?.Update(Time.unscaledTime);
     using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.Update");
     NetworkSensePerfProbe.Active?.UpdateFrame(deltaTime);
@@ -223,6 +231,32 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // works headless on the dedicated server as well as on clients. Intended for private lab
   // runs (e.g. run-autonomous-valheim-lab.ps1) where no console is available to type the
   // command. Observe-only, so it is safe to leave armed.
+  void TryEnsurePrimaryRedirect(float now) {
+    if (_zdoRedirectRunner == null || !PluginConfig.ZdoRedirectEnabled.Value
+        || !string.Equals(TelemetryCoordinator.EffectiveCutoverMode(), "lumberjacks-primary",
+            StringComparison.OrdinalIgnoreCase)) return;
+
+    ZNet znet = ZNet.instance;
+    if (znet == null || !znet.IsServer()) return;
+    if ((znet.GetPeers()?.Count ?? 0) == 0) {
+      _nextPrimaryRedirectStartAt = 0;
+      _lastPrimaryRedirectStartMessage = string.Empty;
+      return;
+    }
+    if (_zdoRedirectRunner.IsRunning || now < _nextPrimaryRedirectStartAt) return;
+
+    _nextPrimaryRedirectStartAt = now + 2.0f;
+    string message = _zdoRedirectRunner.Start(_coordinator, PluginConfig.NetcodeProbeMaxDetailRows.Value);
+    if (_zdoRedirectRunner.IsRunning) {
+      _coordinator?.RecordDevMarker("zdo_redirect primary start (peer-ready, independent of probe delay)");
+      LogInfo("ZDO primary redirect started at peer readiness: " + message);
+      _lastPrimaryRedirectStartMessage = string.Empty;
+    } else if (!string.Equals(message, _lastPrimaryRedirectStartMessage, StringComparison.Ordinal)) {
+      LogWarning("ZDO primary redirect remains fail-safe native: " + message);
+      _lastPrimaryRedirectStartMessage = message;
+    }
+  }
+
   void TryDriveNetcodeProbeAuto() {
     if (!PluginConfig.NetcodeProbeAutoStartEnabled.Value || _coordinator == null || _netcodeProbeRunner == null) {
       return;
@@ -330,7 +364,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     // ZDOMan.CreateSyncList suppresses native send for tagged prefabs and posts the
     // wire-equivalent to the Lumberjacks gateway; auto-disarms at zdoRedirectActiveSeconds for
     // the in-window rollback rehearsal.
-    if (PluginConfig.ZdoRedirectEnabled.Value && _zdoRedirectRunner != null) {
+    if (PluginConfig.ZdoRedirectEnabled.Value && _zdoRedirectRunner != null
+        && !_zdoRedirectRunner.IsRunning) {
       string redirectMessage = _zdoRedirectRunner.Start(_coordinator, maxDetailRows);
       _coordinator.RecordDevMarker("zdo_redirect start (coupled to netcode probe)");
       LogInfo("ZDO redirect auto-started: " + redirectMessage);
