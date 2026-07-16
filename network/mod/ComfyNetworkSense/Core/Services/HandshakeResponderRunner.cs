@@ -3,6 +3,7 @@ namespace ComfyNetworkSense;
 using System.Collections.Generic;
 
 using System;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
@@ -30,6 +31,12 @@ using UnityEngine;
 // state (it runs pre-AddPeer), same class as the I2 pin / I3 redirect.
 public sealed class HandshakeResponderRunner : IDisposable {
   const int HttpTimeoutMs = 2000;
+
+  // Wall-clock ceiling on reading the verdict body, and a cap on its size. Both exist only to
+  // bound a MAIN-THREAD stall (see PostForBody); the socket's per-Read ReceiveTimeout cannot.
+  // A verdict is a few hundred bytes, so 64 KiB is already absurdly generous.
+  const int ResponseDeadlineMs = 2000;
+  const int MaxResponseBytes = 64 * 1024;
 
   static volatile HandshakeResponderRunner _active;
   public static HandshakeResponderRunner Active => _active;
@@ -228,6 +235,12 @@ public sealed class HandshakeResponderRunner : IDisposable {
   // Valheim's server Mono runtime has an empty WebRequest prefix table, so WebRequest.Create throws
   // "URI prefix not recognized" (ADR 0003 / valheim-server-mono-http-trap). Reads until the server
   // closes the connection (Connection: close). Throws on connect timeout / non-2xx so Decide fails open.
+  //
+  // This runs on the SERVER'S MAIN THREAD (Harmony prefix on RPC_PeerInfo), so every bound here is a
+  // bound on how long the whole server can freeze during a join. ReceiveTimeout is per-Read, NOT for
+  // the loop: without ResponseDeadlineMs a peer trickling one byte under each timeout would hold the
+  // main thread forever. The deadline and the byte cap are what make the stall finite (worst case:
+  // HttpTimeoutMs connect + ResponseDeadlineMs read). Do not remove them.
   static string PostForBody(string url, string jsonBody) {
     Uri uri = new(url);
     if (uri.Scheme != "http") {
@@ -260,8 +273,17 @@ public sealed class HandshakeResponderRunner : IDisposable {
     using MemoryStream memory = new();
     byte[] buffer = new byte[1024];
     int read;
+    Stopwatch elapsed = Stopwatch.StartNew();
     while ((read = stream.Read(buffer, 0, buffer.Length)) > 0) {
       memory.Write(buffer, 0, read);
+      if (memory.Length > MaxResponseBytes) {
+        throw new InvalidOperationException(
+            "handshake response exceeded " + MaxResponseBytes + " bytes");
+      }
+      if (elapsed.ElapsedMilliseconds > ResponseDeadlineMs) {
+        throw new TimeoutException(
+            "handshake response exceeded " + ResponseDeadlineMs + " ms total");
+      }
     }
     string raw = Encoding.UTF8.GetString(memory.ToArray());
 
