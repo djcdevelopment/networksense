@@ -44,7 +44,6 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   MethodInfo _rpc;
   string _endpoint;
   string _window;
-  string _consumerId;
   string _state = "stopped";
   string _lastPollUtc = string.Empty;
   string _lastApplyUtc = string.Empty;
@@ -88,7 +87,11 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     _rpc = AccessTools.Method(typeof(ZDOMan), "RPC_ZDOData", new[] { typeof(ZRpc), typeof(ZPackage) });
     if (_rpc == null) return "RPC_ZDOData reflection handle unavailable";
     _endpoint = endpoint.TrimEnd('/'); _window = windowId;
-    _consumerId = Guid.NewGuid().ToString("N").Substring(0, 12);
+    // Deliberately mints NO consumer id. This used to be Guid.NewGuid(), which meant the client
+    // chose the name it was filed under and the Gateway trusted it - a recipient you can select is
+    // not an identity. The Gateway now derives the recipient from the credential presented
+    // (ValheimZdoRedirectEndpoints /consumer), so there is nothing here to send and nothing to
+    // forge. If a future change wants to name this consumer, that name belongs to the server.
     IsRunning = true; _nextPoll = 0;
     lock (_gate) _state = "waiting-for-peer";
     return "authoritative consumer armed";
@@ -338,7 +341,6 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       lock (_gate) pending = _queue.Count + _ackQueue.Count + _pendingRetries.Count + _failed.Count;
       Dictionary<string, object> payload = new() {
           ["window_id"] = _window,
-          ["consumer_id"] = _consumerId,
           ["mod_version"] = ComfyNetworkSense.PluginVersion,
           ["timestamp_utc"] = DateTime.UtcNow.ToString("O"),
           ["applied"] = Interlocked.Read(ref _applied),
@@ -419,7 +421,6 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
         ["authoritative_enabled"] = IsRunning,
         ["state"] = _state,
         ["window_id"] = _window ?? string.Empty,
-        ["consumer_id"] = _consumerId ?? string.Empty,
         ["connected_peers"] = _connectedPeers,
         ["poll_in_flight"] = _polling != 0,
         ["ack_in_flight"] = _acking != 0,
