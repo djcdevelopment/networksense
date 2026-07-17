@@ -4,7 +4,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
-using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -20,6 +19,18 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   const int AckBatchMax = 1024;
   const int HttpTimeoutMs = 5000;
   const int MaxResponseBytes = 16 * 1024 * 1024;
+
+  // Wall-clock ceiling on reading a response. This loop was size-bounded but never time-bounded, so
+  // it carried the same defect the handshake did (M1 risk 10): ReceiveTimeout is per-Read, so a peer
+  // trickling one byte under each timeout resets it forever and holds the read open indefinitely.
+  // Off the main thread it cannot freeze the server, which made it quieter and worse: Poll runs
+  // inside Task.Run and resets _polling in a finally a wedged read never reaches, so the CAS in
+  // Update never admits another poll and the consumer stops polling FOR GOOD, with no error - the
+  // only tell being poll_in_flight stuck true. And because a seat's liveness is inferred from this
+  // very poll/ack traffic, a degraded Gateway would wedge the consumer and then expire the seat it
+  // was meant to protect. Generous next to a healthy poll, so it cannot alter healthy timing; it is
+  // a ceiling, not a schedule.
+  const int ResponseDeadlineMs = 5000;
 
   readonly ConcurrentQueue<ZdoRedirectEnvelopeCodec.Envelope> _queue = new();
   readonly ConcurrentQueue<long> _ackQueue = new();
@@ -363,32 +374,17 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   static string Send(string url, string method, string body) {
     Uri uri = new(url);
     byte[] bytes = Encoding.UTF8.GetBytes(body ?? string.Empty);
-    using TcpClient client = new();
-    IAsyncResult connect = client.BeginConnect(uri.Host, uri.Port, null, null);
-    if (!connect.AsyncWaitHandle.WaitOne(HttpTimeoutMs))
-      throw new TimeoutException("connect timeout to " + uri.Host + ":" + uri.Port);
-    client.EndConnect(connect);
-    client.SendTimeout = HttpTimeoutMs;
-    client.ReceiveTimeout = HttpTimeoutMs;
-    using NetworkStream stream = client.GetStream();
+    // The head stays here, byte-for-byte as before: the credential headers come from PluginConfig
+    // (BepInEx-bound, so it cannot move into BoundedRawHttp) and the port-less Host is what the
+    // Gateway has always been sent. Only the socket and the read loop are shared.
     string request = method + " " + uri.PathAndQuery + " HTTP/1.1\r\nHost: " + uri.Host
         + "\r\nContent-Type: application/json\r\nContent-Length: " + bytes.Length
         + (string.IsNullOrWhiteSpace(PluginConfig.LumberjacksClientAccessKey.Value) ? string.Empty : "\r\nX-Lumberjacks-Client-Key: " + PluginConfig.LumberjacksClientAccessKey.Value)
         + (string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value) ? string.Empty : "\r\nX-Lumberjacks-Enrollment-Id: " + PluginConfig.LumberjacksEnrollmentId.Value)
         + "\r\nConnection: close\r\n\r\n";
     byte[] header = Encoding.ASCII.GetBytes(request);
-    stream.Write(header, 0, header.Length);
-    if (bytes.Length > 0) stream.Write(bytes, 0, bytes.Length);
-    stream.Flush();
-    byte[] buffer = new byte[8192];
-    StringBuilder response = new();
-    int read;
-    while ((read = stream.Read(buffer, 0, buffer.Length)) > 0) {
-      response.Append(Encoding.UTF8.GetString(buffer, 0, read));
-      if (response.Length > MaxResponseBytes)
-        throw new InvalidOperationException("HTTP response exceeded " + MaxResponseBytes + " bytes");
-    }
-    string raw = response.ToString();
+    string raw = BoundedRawHttp.SendBounded(
+        uri, header, bytes, HttpTimeoutMs, ResponseDeadlineMs, MaxResponseBytes);
     int split = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
     if (!raw.StartsWith("HTTP/1.1 2", StringComparison.Ordinal))
       throw new InvalidOperationException("HTTP request failed: " + (raw.Split('\n')[0] ?? ""));

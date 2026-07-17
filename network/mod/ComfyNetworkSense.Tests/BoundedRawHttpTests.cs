@@ -110,6 +110,57 @@ public class BoundedRawHttpTests {
     Assert.Contains("http status", thrown.Message);
   }
 
+  // The consumer (ZdoAuthoritativeConsumerRunner) calls SendBounded directly rather than
+  // PostForBody: it sends GET as well as POST, credential headers off PluginConfig, and a port-less
+  // Host, and it decodes chunked framing itself. It shares the read loop and nothing else, so this
+  // drives the loop through the consumer's own shape - a GET with a caller-built head, raw response
+  // returned unparsed.
+  [Fact]
+  public void SendBounded_ReturnsRawResponseForACallerBuiltGet() {
+    using TestServer server = new((stream, ct) => {
+      byte[] response = Encoding.UTF8.GetBytes(
+          "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]");
+      stream.Write(response, 0, response.Length);
+    });
+
+    Uri uri = new(server.Url);
+    byte[] head = Encoding.ASCII.GetBytes(
+        "GET " + uri.PathAndQuery + " HTTP/1.1\r\nHost: " + uri.Host
+        + "\r\nX-Lumberjacks-Client-Key: test-key\r\nConnection: close\r\n\r\n");
+
+    string raw = BoundedRawHttp.SendBounded(uri, head, new byte[0], 2000, 2000, 64 * 1024);
+
+    // Raw: the consumer wants the status line and headers, because it decides about chunking itself.
+    Assert.StartsWith("HTTP/1.1 200 OK", raw);
+    Assert.EndsWith("[]", raw);
+  }
+
+  // A body arriving in pieces that split a multi-byte UTF-8 sequence must still decode. The loop
+  // buffers bytes and decodes once at the end; decoding per read - as the consumer's own loop used
+  // to - corrupts any character straddling a read boundary.
+  [Fact]
+  public void SendBounded_DecodesMultiByteUtf8SplitAcrossReads() {
+    byte[] payload = Encoding.UTF8.GetBytes("näïve—ünïcode");
+    using TestServer server = new((stream, ct) => {
+      byte[] head = Encoding.ASCII.GetBytes(
+          "HTTP/1.1 200 OK\r\nContent-Length: " + payload.Length + "\r\nConnection: close\r\n\r\n");
+      stream.Write(head, 0, head.Length);
+      // One byte at a time, so multi-byte sequences are guaranteed to straddle reads.
+      foreach (byte b in payload) {
+        stream.WriteByte(b);
+        stream.Flush();
+      }
+    });
+
+    Uri uri = new(server.Url);
+    byte[] reqHead = Encoding.ASCII.GetBytes(
+        "GET " + uri.PathAndQuery + " HTTP/1.1\r\nHost: " + uri.Host + "\r\nConnection: close\r\n\r\n");
+
+    string raw = BoundedRawHttp.SendBounded(uri, reqHead, new byte[0], 2000, 5000, 64 * 1024);
+
+    Assert.EndsWith("näïve—ünïcode", raw);
+  }
+
   [Fact]
   public void NonHttpScheme_IsRefusedBeforeAnySocketWork() {
     NotSupportedException thrown = Assert.Throws<NotSupportedException>(() =>
