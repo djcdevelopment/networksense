@@ -2,8 +2,13 @@ namespace ComfyNetworkSense.Tests;
 
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 
@@ -161,12 +166,130 @@ public class BoundedRawHttpTests {
     Assert.EndsWith("näïve—ünïcode", raw);
   }
 
+  // https is now a supported scheme, so it is no longer the example of an unsupported one.
   [Fact]
-  public void NonHttpScheme_IsRefusedBeforeAnySocketWork() {
+  public void UnsupportedScheme_IsRefusedBeforeAnySocketWork() {
     NotSupportedException thrown = Assert.Throws<NotSupportedException>(() =>
-        BoundedRawHttp.PostForBody("https://127.0.0.1:1/x", "{}", 2000, 2000, 64 * 1024));
+        BoundedRawHttp.PostForBody("ftp://127.0.0.1:1/x", "{}", 2000, 2000, 64 * 1024));
 
-    Assert.Contains("must be http", thrown.Message);
+    Assert.Contains("must be http or https", thrown.Message);
+  }
+
+  // THE TLS TEST THAT MATTERS. M1's gate is certificate-VALIDATING TLS, and the only way to show
+  // validation is really on is to present a certificate that must not pass. A self-signed cert the
+  // machine does not trust is exactly that. Soften CertificateIsValid to `=> true` and this test
+  // fails - which is the whole reason it exists, because `=> true` is what a frustrated debugger
+  // reaches for.
+  [Fact]
+  public void Https_RefusesAnUntrustedCertificate() {
+    using X509Certificate2 cert = SelfSignedLoopbackCert();
+    using TlsTestServer server = new(cert);
+
+    Uri uri = new(server.Url);
+    byte[] head = Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\nHost: " + uri.Host + "\r\nConnection: close\r\n\r\n");
+
+    Exception thrown = Record.Exception(() =>
+        BoundedRawHttp.SendBounded(uri, head, new byte[0], 3000, 3000, 64 * 1024));
+
+    // The TYPE is load-bearing, and an earlier version of this test got that wrong by asserting only
+    // "something threw". Mutation caught it: with TLS never engaged at all (secure hard-coded false)
+    // the plaintext socket still breaks against a TLS server, so "something threw" passed while the
+    // client had no TLS whatsoever. AuthenticationException means the handshake ran and the peer was
+    // REFUSED - the actual claim - and it fails under both "validator softened to true" and "TLS
+    // never engaged".
+    Assert.IsAssignableFrom<AuthenticationException>(thrown);
+  }
+
+  // Proves the refusal above is about TRUST, not about https being broken end to end: the identical
+  // server and cert succeed the moment the cert is trusted for this call. Without this, a TLS client
+  // that simply never works would pass the test above and look correct.
+  [Fact]
+  public void Https_CompletesWhenTheCertificateIsTrusted() {
+    using X509Certificate2 cert = SelfSignedLoopbackCert();
+    using TlsTestServer server = new(cert);
+
+    Uri uri = new(server.Url);
+    string body = TrustingTlsRoundTrip(uri, cert);
+
+    Assert.Contains("{\"accept\":true}", body);
+  }
+
+  static X509Certificate2 SelfSignedLoopbackCert() {
+    using RSA key = RSA.Create(2048);
+    CertificateRequest request = new("CN=127.0.0.1", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+    SubjectAlternativeNameBuilder san = new();
+    san.AddIpAddress(IPAddress.Loopback);
+    request.CertificateExtensions.Add(san.Build());
+    X509Certificate2 cert = request.CreateSelfSigned(
+        DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+    // Round-trip through PFX so the private key is usable by SslStream on Windows.
+    return new X509Certificate2(cert.Export(X509ContentType.Pfx, "p"), "p",
+        X509KeyStorageFlags.Exportable);
+  }
+
+  // Mirrors SendBounded's TLS handshake but pins THIS cert as trusted, which is what makes it a
+  // control rather than a second copy of the code under test.
+  static string TrustingTlsRoundTrip(Uri uri, X509Certificate2 expected) {
+    using TcpClient client = new();
+    client.Connect(uri.Host, uri.Port);
+    using NetworkStream network = client.GetStream();
+    using SslStream tls = new(network, false,
+        (s, cert, chain, errors) => cert != null && cert.GetCertHashString() == expected.GetCertHashString());
+    tls.AuthenticateAsClient(uri.Host, null, SslProtocols.Tls12, false);
+    byte[] head = Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\nHost: " + uri.Host + "\r\nConnection: close\r\n\r\n");
+    tls.Write(head, 0, head.Length);
+    tls.Flush();
+    using MemoryStream memory = new();
+    byte[] buffer = new byte[1024];
+    int read;
+    while ((read = tls.Read(buffer, 0, buffer.Length)) > 0) memory.Write(buffer, 0, read);
+    return Encoding.UTF8.GetString(memory.ToArray());
+  }
+
+  // A TLS server on loopback that serves one connection with the supplied certificate.
+  sealed class TlsTestServer : IDisposable {
+    readonly TcpListener _listener;
+    readonly Thread _thread;
+    readonly CancellationTokenSource _cancel = new();
+
+    public int Port { get; }
+    public string Url => "https://127.0.0.1:" + Port + "/";
+
+    public TlsTestServer(X509Certificate2 certificate) {
+      _listener = new TcpListener(IPAddress.Loopback, 0);
+      _listener.Start();
+      Port = ((IPEndPoint) _listener.LocalEndpoint).Port;
+      _thread = new Thread(() => {
+        try {
+          while (!_cancel.IsCancellationRequested) {
+            if (!_listener.Pending()) { Thread.Sleep(5); continue; }
+            using TcpClient client = _listener.AcceptTcpClient();
+            using NetworkStream network = client.GetStream();
+            using SslStream tls = new(network, false);
+            // Throws when the client rejects our cert - which is the expected path for the
+            // untrusted-cert test, so it must not fault anything.
+            tls.AuthenticateAsServer(certificate, false, SslProtocols.Tls12, false);
+            byte[] request = new byte[4096];
+            tls.Read(request, 0, request.Length);
+            byte[] response = Encoding.UTF8.GetBytes(
+                "HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"accept\":true}");
+            tls.Write(response, 0, response.Length);
+            tls.Flush();
+            return;
+          }
+        } catch (Exception) {
+          // A client that refuses the cert aborts the handshake. Normal here, never a failure.
+        }
+      }) { IsBackground = true };
+      _thread.Start();
+    }
+
+    public void Dispose() {
+      _cancel.Cancel();
+      try { _listener.Stop(); } catch (Exception) { }
+      _thread.Join(2000);
+      _cancel.Dispose();
+    }
   }
 
   // Serves exactly one connection, then stops. Reads the request head first so the client's write

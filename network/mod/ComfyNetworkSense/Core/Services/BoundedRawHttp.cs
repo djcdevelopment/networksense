@@ -4,7 +4,10 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
 // Raw-socket HTTP POST that reads the response body, with hard bounds on the read.
@@ -69,8 +72,9 @@ static class BoundedRawHttp {
   public static string SendBounded(
       Uri uri, byte[] headBytes, byte[] bodyBytes,
       int connectTimeoutMs, int responseDeadlineMs, int maxResponseBytes) {
-    if (uri.Scheme != "http") {
-      throw new NotSupportedException("endpoint must be http (got '" + uri.Scheme + "')");
+    bool secure = uri.Scheme == "https";
+    if (!secure && uri.Scheme != "http") {
+      throw new NotSupportedException("endpoint must be http or https (got '" + uri.Scheme + "')");
     }
 
     using TcpClient client = new();
@@ -82,7 +86,17 @@ static class BoundedRawHttp {
     client.SendTimeout = connectTimeoutMs;
     client.ReceiveTimeout = connectTimeoutMs;
 
-    using NetworkStream stream = client.GetStream();
+    using NetworkStream network = client.GetStream();
+    using SslStream tls = secure ? new SslStream(network, leaveInnerStreamOpen: true, CertificateIsValid) : null;
+    Stream stream = network;
+    if (secure) {
+      // Throws on any validation failure, which is the point: M1's gate is certificate-VALIDATING
+      // TLS, so an unverifiable peer must fail the request rather than downgrade to a warning.
+      // Tls12 explicitly, because net48 defaults to whatever the machine's ServicePointManager
+      // happens to be set to and Valheim's Mono is not a machine we configure.
+      tls.AuthenticateAsClient(uri.Host, null, SslProtocols.Tls12, checkCertificateRevocation: false);
+      stream = tls;
+    }
     stream.Write(headBytes, 0, headBytes.Length);
     stream.Write(bodyBytes, 0, bodyBytes.Length);
     stream.Flush();
@@ -107,4 +121,18 @@ static class BoundedRawHttp {
     // corrupts it. Buffering bytes and decoding once cannot.
     return Encoding.UTF8.GetString(memory.ToArray());
   }
+
+  // Accepts ONLY a chain the platform already trusts, with a name matching the host we dialled.
+  // Deliberately not a lambda returning true: the entire value of TLS here is that a volunteer's
+  // link to the Gateway cannot be silently intercepted, and `=> true` is how that value gets thrown
+  // away by someone debugging a cert problem at 2am. If a cert legitimately will not validate, fix
+  // the cert or the trust store - do not soften this.
+  //
+  // Revocation is NOT checked (checkCertificateRevocation: false). M1's gate is a validating chain
+  // and a matching name; OCSP/CRL lookups add a network round-trip on a path that already blocks the
+  // caller, and Mono's revocation support is not something to depend on. A revoked-but-unexpired cert
+  // would therefore pass. That is a known, bounded gap, not an oversight.
+  static bool CertificateIsValid(
+      object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) =>
+      errors == SslPolicyErrors.None;
 }
