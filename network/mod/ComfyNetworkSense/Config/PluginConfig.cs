@@ -97,6 +97,7 @@ public static class PluginConfig {
   public static ConfigEntry<float> ZdoInjectionPollSeconds { get; private set; }
   public static ConfigEntry<float> ZdoInjectionActiveSeconds { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderEnabled { get; private set; }
+  public static ConfigEntry<bool> HandshakeResponderStrictMode { get; private set; }
   public static ConfigEntry<string> HandshakeResponderEndpoint { get; private set; }
   public static ConfigEntry<string> HandshakeResponderWindowId { get; private set; }
   public static ConfigEntry<float> HandshakeResponderPollSeconds { get; private set; }
@@ -838,7 +839,22 @@ public static class PluginConfig {
             "handshakeResponderEndpoint",
             "http://127.0.0.1:4000",
             "Lumberjacks gateway base URL the am4 responder polls for the emulated server context "
-            + "(needPassword/salt/ban/full/password/dup). Empty refuses to arm.");
+            + "(needPassword/salt/ban/full/password/dup). Empty refuses to arm. https is supported "
+            + "and certificate-validated; an unverifiable certificate fails the request.");
+
+    HandshakeResponderStrictMode =
+        config.Bind(
+            "Netcode",
+            "handshakeResponderStrictMode",
+            false,
+            "M1 strict admission. OFF (default) = fail-OPEN: if the gateway is unreachable or its "
+            + "verdict is unparseable, the player is passed through to vanilla, so the responder can "
+            + "never lock anyone out on its own fault. ON = fail-CLOSED: those same faults REJECT the "
+            + "join (ErrorConnectFailed), because an authority that cannot be consulted must not be "
+            + "assumed to say yes. ON means a down gateway closes the server to everyone - that is "
+            + "the intended trade, and it is why this ships OFF and is flipped deliberately, with "
+            + "handshakeResponderEnabled=false as the way back out. Leaving this OFF is also an "
+            + "explicit, labelled operator mode: native recovery.");
 
     HandshakeResponderWindowId =
         config.Bind(

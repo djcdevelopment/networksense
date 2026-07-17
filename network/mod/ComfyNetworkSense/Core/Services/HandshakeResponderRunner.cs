@@ -172,7 +172,14 @@ public sealed class HandshakeResponderRunner : IDisposable {
         + "\"player_name\":\"" + JsonEscape(playerName) + "\","
         + "\"host_name\":\"" + JsonEscape(hostName) + "\","
         + "\"password_hash\":\"\","
-        + "\"ticket_valid\":" + (ticketValid ? "true" : "false")
+        + "\"ticket_valid\":" + (ticketValid ? "true" : "false") + ","
+        // The MOD'S OWN identity, not the joining client's. version/net_version above describe the
+        // player connecting; these describe the build answering. Additive fields are safe on this
+        // wire (the verdict is regex-matched, not deserialized), and a Gateway that does not know
+        // them ignores them. Absence is meaningful: a build older than this field sends neither, so
+        // the Gateway can spot a stale mod without the mod's cooperation.
+        + "\"mod_version\":\"" + JsonEscape(ComfyNetworkSense.PluginVersion) + "\","
+        + "\"mod_release_id\":\"" + JsonEscape(ComfyNetworkSense.ReleaseId) + "\""
         + "}";
 
     string responseBody;
@@ -181,12 +188,9 @@ public sealed class HandshakeResponderRunner : IDisposable {
     } catch (Exception exception) {
       lock (_lock) {
         _decisions++;
-        _failOpen++;
         _lastError = "peerinfo: " + exception.GetType().Name + ": " + exception.Message;
       }
-      ZLog.LogWarning("[ComfyNetworkSense][handshake] FAIL-OPEN (endpoint error) uid=" + uid
-          + " player=" + playerName + " host=" + hostName + " : " + _lastError);
-      return HandshakeDecision.PassThrough("endpoint_error");
+      return OnAuthorityFault("endpoint_error", "endpoint error", uid, playerName, hostName, _lastError);
     }
 
     bool accept = Regex.IsMatch(responseBody, "\"accept\"\\s*:\\s*true");
@@ -208,12 +212,9 @@ public sealed class HandshakeResponderRunner : IDisposable {
       // A 200 body with neither accept:true nor an error_code is not a verdict we can trust.
       lock (_lock) {
         _decisions++;
-        _failOpen++;
-        _lastError = "unparseable verdict";
+        _lastError = "unparseable verdict: " + Trim(responseBody, 200);
       }
-      ZLog.LogWarning("[ComfyNetworkSense][handshake] FAIL-OPEN (unparseable verdict) uid=" + uid
-          + " body=" + Trim(responseBody, 200));
-      return HandshakeDecision.PassThrough("unparseable_verdict");
+      return OnAuthorityFault("unparseable_verdict", "unparseable verdict", uid, playerName, hostName, _lastError);
     }
 
     int code = int.Parse(codeMatch.Groups[1].Value, CultureInfo.InvariantCulture);
@@ -226,6 +227,44 @@ public sealed class HandshakeResponderRunner : IDisposable {
         + " uid=" + uid + " player=" + playerName + " host=" + hostName + " password_present=" + passwordPresent
         + " code=" + code + " check=" + failedCheck + " -> Invoke(Error," + code + "), skip vanilla.");
     return HandshakeDecision.Reject(code, failedCheck);
+  }
+
+  // The ONE place that decides what "the authority did not answer" means. Both fault paths - a dead
+  // endpoint and a 200 whose body is not a verdict - come here, because they are the same event
+  // wearing different clothes: we did not get a decision we can trust.
+  //
+  // Fail-OPEN (default) passes the player to vanilla, so the responder can never lock anyone out on
+  // its own fault. Fail-CLOSED rejects, because an authority that cannot be consulted must not be
+  // assumed to have said yes - that is the entire content of M1 strict admission.
+  //
+  // ErrorConnectFailed, not ErrorBanned: this is not the player's fault and telling them they are
+  // banned would be a lie they cannot act on. "Failed to connect" is true, and retrying is the right
+  // response, because the Gateway may well come back.
+  //
+  // The stall bound in BoundedRawHttp is a PREREQUISITE for this method existing, not a nicety: this
+  // call blocks the server's main thread, so fail-closed on an unbounded stall would freeze the
+  // server AND reject everyone - strictly worse than the fail-open it replaces.
+  HandshakeDecision OnAuthorityFault(
+      string reason, string label, long uid, string playerName, string hostName, string detail) {
+    bool strict = PluginConfig.HandshakeResponderStrictMode.Value;
+    lock (_lock) {
+      if (strict) {
+        _rejected++;
+      } else {
+        _failOpen++;
+      }
+    }
+    if (!strict) {
+      ZLog.LogWarning("[ComfyNetworkSense][handshake] FAIL-OPEN (" + label + ") uid=" + uid
+          + " player=" + playerName + " host=" + hostName + " : " + detail);
+      return HandshakeDecision.PassThrough(reason);
+    }
+    ZLog.LogWarning("[ComfyNetworkSense][handshake] FAIL-CLOSED (" + label + ") uid=" + uid
+        + " player=" + playerName + " host=" + hostName
+        + " -> Invoke(Error," + (int) ValheimConnectionStatus.ErrorConnectFailed
+        + "), skip vanilla. strict_authority_unavailable : " + detail);
+    return HandshakeDecision.Reject(
+        (int) ValheimConnectionStatus.ErrorConnectFailed, "strict_authority_unavailable");
   }
 
   // The transport lives in BoundedRawHttp, which is deliberately Unity-free so a test assembly can
@@ -279,6 +318,26 @@ public sealed class HandshakeResponderRunner : IDisposable {
       StopInternal("handshake_dispose");
     }
   }
+}
+
+// Mirrored from the decompiled ZNet.ConnectionStatus (assembly_valheim 0.221.12,
+// ZNet.decompiled.cs:23-38) - the same table Lumberjacks mirrors in ValheimHandshakeService.cs.
+// Kept here so a reject reads as its meaning rather than as a bare int: per the handshake contract,
+// no int means no reject, and the int is the ONLY part of a verdict the player ever sees.
+public enum ValheimConnectionStatus {
+  None = 0,
+  Connecting = 1,
+  Connected = 2,
+  ErrorVersion = 3,
+  ErrorDisconnected = 4,
+  ErrorConnectFailed = 5,
+  ErrorPassword = 6,
+  ErrorAlreadyConnected = 7,
+  ErrorBanned = 8,
+  ErrorFull = 9,
+  ErrorPlatformExcluded = 10,
+  ErrorCrossplayPrivilege = 11,
+  ErrorKicked = 12,
 }
 
 // The verdict the RPC_PeerInfo prefix enforces. PassThrough => let vanilla handle the client.

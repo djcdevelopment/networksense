@@ -23,6 +23,21 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginName = "ComfyNetworkSense";
   public const string PluginVersion = "0.5.31";
 
+  // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
+  // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
+  // enforce one (M1 risk 9): a stale mod fails OPEN on a reject, so an authority that believes it is
+  // rejecting while the mod waves players through is worse than no gate at all.
+  //
+  // It is a COMPATIBILITY signal, not an authenticated one - a volunteer can edit this constant and
+  // claim anything, and nothing here stops that. What it catches is drift, and it catches the case
+  // that matters without any cooperation from the mod: a build predating this field sends no release
+  // identity, so absence IS the staleness signal.
+  //
+  // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
+  // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
+  // assurance for its cost. "dev" means an uncut local build, which is never a release.
+  public const string ReleaseId = "dev";
+
   public static ComfyNetworkSense Instance { get; private set; }
 
   static ManualLogSource _logger;
