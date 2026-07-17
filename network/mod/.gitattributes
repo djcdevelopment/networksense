@@ -1,0 +1,21 @@
+# The mod DLL is identity-pinned by SHA-256 in every release manifest, and the C# compiler folds a
+# source checksum into the assembly's debug directory. So the exact source BYTES decide the shipped
+# artifact's identity - not just its text. Deterministic/PathMap/ContinuousIntegrationBuild pin the
+# path and the compiler's own nondeterminism; nothing pinned the bytes until this file.
+#
+# Left unpinned, a checkout's line endings silently become part of the release hash. Proven
+# 2026-07-17: the frozen, DEPLOYED 0.5.31 DLL (94a3843e...) rebuilds bit-for-bit from its manifest
+# commit b32bb5e ONLY with an all-LF tree. Git stored CRLF, so a clean checkout of that same commit
+# built 70372350... instead - meaning the artifact running on P7 could not be reproduced from the
+# repository at all. The manifest's "two clean-checkout builds produced the same hash" held only
+# because both builds shared one contaminated working tree; they agreed with each other, not with git.
+#
+# LF, and not CRLF, because LF is what every shipped artifact was in fact built from. Pinning CRLF
+# would have made the deployed DLL permanently unreproducible in exchange for a tidier diff.
+#
+# eol=lf rather than the -text used for hash-bound evidence in fieldlab/: -text freezes whatever
+# bytes happen to be committed and needs discipline forever, while eol=lf normalises on the way in,
+# so a CRLF file cannot re-poison a release hash by being added on a Windows box.
+*.cs text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
