@@ -3,10 +3,7 @@ namespace ComfyNetworkSense;
 using System.Collections.Generic;
 
 using System;
-using System.Diagnostics;
 using System.Globalization;
-using System.IO;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -231,71 +228,12 @@ public sealed class HandshakeResponderRunner : IDisposable {
     return HandshakeDecision.Reject(code, failedCheck);
   }
 
-  // Raw-socket HTTP POST that READS THE RESPONSE BODY (unlike the redirect fire-and-forget POST):
-  // Valheim's server Mono runtime has an empty WebRequest prefix table, so WebRequest.Create throws
-  // "URI prefix not recognized" (ADR 0003 / valheim-server-mono-http-trap). Reads until the server
-  // closes the connection (Connection: close). Throws on connect timeout / non-2xx so Decide fails open.
-  //
-  // This runs on the SERVER'S MAIN THREAD (Harmony prefix on RPC_PeerInfo), so every bound here is a
-  // bound on how long the whole server can freeze during a join. ReceiveTimeout is per-Read, NOT for
-  // the loop: without ResponseDeadlineMs a peer trickling one byte under each timeout would hold the
-  // main thread forever. The deadline and the byte cap are what make the stall finite (worst case:
-  // HttpTimeoutMs connect + ResponseDeadlineMs read). Do not remove them.
-  static string PostForBody(string url, string jsonBody) {
-    Uri uri = new(url);
-    if (uri.Scheme != "http") {
-      throw new NotSupportedException("handshake endpoint must be http (got '" + uri.Scheme + "')");
-    }
-    byte[] bodyBytes = Encoding.UTF8.GetBytes(jsonBody);
-    string head =
-        "POST " + uri.PathAndQuery + " HTTP/1.1\r\n"
-        + "Host: " + uri.Host + ":" + uri.Port.ToString(CultureInfo.InvariantCulture) + "\r\n"
-        + "Content-Type: application/json\r\n"
-        + "Accept: application/json\r\n"
-        + "Content-Length: " + bodyBytes.Length.ToString(CultureInfo.InvariantCulture) + "\r\n"
-        + "Connection: close\r\n\r\n";
-    byte[] headBytes = Encoding.ASCII.GetBytes(head);
-
-    using TcpClient client = new();
-    IAsyncResult connect = client.BeginConnect(uri.Host, uri.Port, null, null);
-    if (!connect.AsyncWaitHandle.WaitOne(HttpTimeoutMs)) {
-      throw new TimeoutException("connect timeout to " + uri.Host + ":" + uri.Port);
-    }
-    client.EndConnect(connect);
-    client.SendTimeout = HttpTimeoutMs;
-    client.ReceiveTimeout = HttpTimeoutMs;
-
-    using NetworkStream stream = client.GetStream();
-    stream.Write(headBytes, 0, headBytes.Length);
-    stream.Write(bodyBytes, 0, bodyBytes.Length);
-    stream.Flush();
-
-    using MemoryStream memory = new();
-    byte[] buffer = new byte[1024];
-    int read;
-    Stopwatch elapsed = Stopwatch.StartNew();
-    while ((read = stream.Read(buffer, 0, buffer.Length)) > 0) {
-      memory.Write(buffer, 0, read);
-      if (memory.Length > MaxResponseBytes) {
-        throw new InvalidOperationException(
-            "handshake response exceeded " + MaxResponseBytes + " bytes");
-      }
-      if (elapsed.ElapsedMilliseconds > ResponseDeadlineMs) {
-        throw new TimeoutException(
-            "handshake response exceeded " + ResponseDeadlineMs + " ms total");
-      }
-    }
-    string raw = Encoding.UTF8.GetString(memory.ToArray());
-
-    string statusLine = raw.Length == 0 ? string.Empty : raw.Split('\n')[0].Trim();
-    string[] parts = statusLine.Split(' ');
-    if (parts.Length < 2 || parts[1].Length == 0 || parts[1][0] != '2') {
-      throw new Exception("http status: " + (statusLine.Length == 0 ? "(no response)" : statusLine));
-    }
-    int split = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
-    // Regex on the raw body tolerates a single-chunk transfer-encoding frame around small JSON.
-    return split >= 0 ? raw.Substring(split + 4) : raw;
-  }
+  // The transport lives in BoundedRawHttp, which is deliberately Unity-free so a test assembly can
+  // drive the bounds below without Valheim's assemblies. The numbers stay here because they are this
+  // caller's policy: this call happens on the SERVER'S MAIN THREAD (Harmony prefix on RPC_PeerInfo),
+  // so they are the bound on how long the whole server can freeze during a join.
+  static string PostForBody(string url, string jsonBody) =>
+      BoundedRawHttp.PostForBody(url, jsonBody, HttpTimeoutMs, ResponseDeadlineMs, MaxResponseBytes);
 
   static string Flt(float value) => value.ToString("R", CultureInfo.InvariantCulture);
 
