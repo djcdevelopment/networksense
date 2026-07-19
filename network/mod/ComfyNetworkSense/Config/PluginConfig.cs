@@ -88,6 +88,7 @@ public static class PluginConfig {
   public static ConfigEntry<string> ZdoRedirectEndpoint { get; private set; }
   public static ConfigEntry<string> ZdoRedirectWindowId { get; private set; }
   public static ConfigEntry<float> ZdoRedirectActiveSeconds { get; private set; }
+  public static ConfigEntry<int> ZdoRedirectMaxPriorityRank { get; private set; }
   public static ConfigEntry<bool> ZdoInjectionEnabled { get; private set; }
   public static ConfigEntry<string> ZdoInjectionPrefabs { get; private set; }
   public static ConfigEntry<string> ZdoInjectionEndpoint { get; private set; }
@@ -759,6 +760,17 @@ public static class PluginConfig {
             + "redirect auto-disarms mid-capture, so the still-running probe records native sends "
             + "of the tagged prefab RESUMING — the in-window rollback rehearsal (P4 step 11), "
             + "hands-free. 0 = suppress for the whole probe window.");
+
+    ZdoRedirectMaxPriorityRank =
+        config.Bind(
+            "Netcode",
+            "zdoRedirectMaxPriorityRank",
+            6,
+            "Final Importance gate for the Lumberjacks network boundary. A candidate survives "
+            + "only when LumberjacksPriorityClassifier assigns a rank at or below this value. "
+            + "Rejected candidates remain in Valheim's native send list and never enter the "
+            + "Gateway payload. 6 preserves the prior all-tier behavior; 4 admits the proven "
+            + "interactive/structural/storage lanes while leaving support/decorative work native.");
 
     ZdoInjectionEnabled =
         config.Bind(

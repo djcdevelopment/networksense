@@ -18,6 +18,11 @@ public static class ZdoRedirectEnvelopeCodec {
 
   [Serializable]
   public sealed class Envelope {
+    public string correlation_id;
+    public string created_utc;
+    public string recipient;
+    public string importance_class;
+    public string idempotency_key;
     public long seq;
     public long uid_user;
     public long uid_id;
@@ -45,10 +50,17 @@ public static class ZdoRedirectEnvelopeCodec {
           uid_id = ReadLong(item, "uid_id"), owner = ReadLong(item, "owner"),
           owner_rev = (int)ReadLong(item, "owner_rev"), data_rev = (int)ReadLong(item, "data_rev"),
           prefab = (int)ReadLong(item, "prefab"), body_b64 = ReadString(item, "body_b64"),
+          correlation_id = ReadOptionalString(item, "correlation_id"),
+          created_utc = ReadOptionalString(item, "created_utc"),
+          recipient = ReadOptionalString(item, "recipient"),
+          importance_class = ReadOptionalString(item, "importance_class"),
+          idempotency_key = ReadOptionalString(item, "idempotency_key"),
           pos = ReadPosition(item), priority_tier = ReadOptionalString(item, "priority_tier"),
           priority_rank = (int)ReadOptionalLong(item, "priority_rank", int.MaxValue),
           distance_meters = ReadOptionalFloat(item, "distance_meters", float.MaxValue)
       };
+      if (string.IsNullOrWhiteSpace(envelope.priority_tier))
+        envelope.priority_tier = envelope.importance_class;
       envelopes.Add(envelope);
     }
     PendingResponse response = new() {

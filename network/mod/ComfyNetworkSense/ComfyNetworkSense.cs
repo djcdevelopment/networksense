@@ -36,7 +36,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "dev";
+  public const string ReleaseId = "m4-integration-20260719-r1";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -117,6 +117,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     LogInfo("Telemetry scaffold ready.");
+    LogInfo("Lumberjacks contract release=" + ReleaseId
+        + " schema_version=" + ZdoIntegrationContract.SchemaVersion
+        + " operation=" + ZdoIntegrationContract.Operation);
   }
 
   void InitializeAuthoritativeConsumer() {

@@ -22,6 +22,7 @@
        that file must be Unity-free too - otherwise fix the design, not this csproj. -->
   <ItemGroup>
     <Compile Include="..\ComfyNetworkSense\Core\Services\BoundedRawHttp.cs" Link="BoundedRawHttp.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoIntegrationContract.cs" Link="ZdoIntegrationContract.cs" />
   </ItemGroup>
 
 </Project>

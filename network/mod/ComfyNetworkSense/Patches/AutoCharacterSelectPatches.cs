@@ -74,15 +74,38 @@ public static class AutoCharacterSelectPatches {
     ComfyNetworkSense.LogInfo($"Auto-join armed; waiting {delay:0.##}s before driving character select.");
     yield return new WaitForSeconds(delay);
 
-    // Jump straight to the character-select screen regardless of where the menu currently sits.
-    Invoke(_showCharacterSelection, fejd, "ShowCharacterSelection");
-
     float poll = Mathf.Max(0.25f, PluginConfig.AutoJoinPollIntervalSeconds.Value);
     float deadline = Time.realtimeSinceStartup + Mathf.Max(5.0f, PluginConfig.AutoJoinTimeoutSeconds.Value);
 
+    if (!PlayFabManager.IsLoggedIn) {
+      ComfyNetworkSense.LogInfo("Auto-join waiting for PlayFab authentication to complete.");
+    }
+    while (!PlayFabManager.IsLoggedIn && Time.realtimeSinceStartup < deadline) {
+      yield return new WaitForSeconds(poll);
+    }
+    if (!PlayFabManager.IsLoggedIn) {
+      ComfyNetworkSense.LogWarning("Auto-join aborted: PlayFab authentication did not complete.");
+      yield break;
+    }
+    ComfyNetworkSense.LogInfo("Auto-join observed PlayFab authentication ready.");
+
     IList profiles = GetProfiles(fejd);
+    bool launchArgsOwnCharacterSelection = HasConnectLaunchArg();
+    if ((profiles == null || profiles.Count == 0) && !launchArgsOwnCharacterSelection) {
+      // Launch args can already have opened character select while PlayFab authentication is still
+      // completing. Re-entering ShowCharacterSelection in that state can crash the Mono runtime.
+      Invoke(_showCharacterSelection, fejd, "ShowCharacterSelection");
+      profiles = GetProfiles(fejd);
+    } else if ((profiles == null || profiles.Count == 0) && launchArgsOwnCharacterSelection) {
+      ComfyNetworkSense.LogInfo(
+          "Auto-join waiting for launch-argument character selection to finish authentication.");
+    } else {
+      ComfyNetworkSense.LogInfo("Auto-join found loaded character profiles; character select is already ready.");
+    }
     while ((profiles == null || profiles.Count == 0) && Time.realtimeSinceStartup < deadline) {
-      Invoke(_updateCharacterList, fejd, "UpdateCharacterList");
+      if (!launchArgsOwnCharacterSelection) {
+        Invoke(_updateCharacterList, fejd, "UpdateCharacterList");
+      }
       yield return new WaitForSeconds(poll);
       profiles = GetProfiles(fejd);
     }
@@ -194,6 +217,19 @@ public static class AutoCharacterSelectPatches {
       return enabled;
     }
     return PluginConfig.AutoJoinEnabled.Value;
+  }
+
+  static bool HasConnectLaunchArg() {
+    try {
+      foreach (string argument in Environment.GetCommandLineArgs()) {
+        if (string.Equals(argument, "+connect", StringComparison.OrdinalIgnoreCase)) {
+          return true;
+        }
+      }
+    } catch {
+      // Fall through to the existing menu-driving behavior if command-line inspection is unavailable.
+    }
+    return false;
   }
 
   static bool TryDeriveHostIndex(out int index) {

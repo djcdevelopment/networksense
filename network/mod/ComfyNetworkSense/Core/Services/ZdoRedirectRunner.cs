@@ -100,9 +100,12 @@ public sealed class ZdoRedirectRunner : IDisposable {
   bool _allPrefabs;
   string _windowId = string.Empty;
   string _endpoint = string.Empty;
+  string _sourceInstance = string.Empty;
 
   long _seq;
   long _suppressed;
+  long _importanceAllowed;
+  long _importanceRejected;
   long _ackFailures;
   long _postedOk;
   long _postFailedBatches;
@@ -215,6 +218,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
       _prefabFilter = filter;
       _allPrefabs = allPrefabs;
       _endpoint = PluginConfig.ZdoRedirectEndpoint.Value.TrimEnd('/');
+      _sourceInstance = coordinator?.SessionId ?? "unknown";
       string configuredWindow = PluginConfig.ZdoRedirectWindowId.Value;
       _windowId = string.IsNullOrWhiteSpace(configuredWindow)
           ? "i3-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture)
@@ -223,6 +227,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
       _stopAtTime = activeSeconds > 0.0f ? Time.time + activeSeconds : -1.0f;
       _seq = 0;
       _suppressed = 0;
+      _importanceAllowed = 0;
+      _importanceRejected = 0;
       _ackFailures = 0;
       _postedOk = 0;
       _postFailedBatches = 0;
@@ -319,25 +325,39 @@ public sealed class ZdoRedirectRunner : IDisposable {
     // CreateSyncList has already passed through Valheim's ServerSortSendZDOS priority
     // ordering. Remove from the source list backwards for index safety, but redirect in
     // the original forward order; the old loop emitted the lowest-priority tail first.
-    List<ZDO> selected = new();
     List<int> selectedIndexes = new();
     for (int i = 0; i < toSync.Count; i++) {
       ZDO zdo = toSync[i];
       if (zdo == null || (!allPrefabs && !filter.Contains(SafePrefab(zdo)))) {
         continue;
       }
-      selected.Add(zdo);
+
+      ClassifiedZdo candidate = ClassifyCandidate(peer, zdo);
+      RecordImportanceDecision(candidate, "importance_candidate");
+      if (!ZdoIntegrationContract.ImportanceAllows(
+              candidate.PriorityRank, PluginConfig.ZdoRedirectMaxPriorityRank.Value)) {
+        lock (_lock) _importanceRejected++;
+        RecordImportanceDecision(candidate, "importance_rejected");
+        continue;
+      }
+
+      lock (_lock) _importanceAllowed++;
+      RecordImportanceDecision(candidate, "importance_allowed");
       selectedIndexes.Add(i);
+      // Emit the matching redirect record before classifying the rest of a potentially enormous
+      // initial sync list. Otherwise candidate/allow rows can fill the bounded telemetry queue
+      // before any submission row is observable, even though the wire queue receives the item.
+      Redirect(peer, candidate);
     }
 
     for (int i = selectedIndexes.Count - 1; i >= 0; i--)
       toSync.RemoveAt(selectedIndexes[i]);
-    foreach (ZDO zdo in selected) Redirect(peer, zdo);
 
     TryFlushQueue();
   }
 
-  void Redirect(object peer, ZDO zdo) {
+  void Redirect(object peer, ClassifiedZdo candidate) {
+    ZDO zdo = candidate.Zdo;
     // Replicate the native ack (ZDOMan:767+780) so vanilla re-offers only on revision change.
     // Note: native would only ack items that fit the tick's byte budget; we ack at selection
     // time, which is the countable "redirected at the moment native would have considered it"
@@ -373,14 +393,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
     long seq;
     Dictionary<string, object> row = null;
     TelemetryCoordinator coordinator;
-    Vector3 position = zdo.GetPosition();
-    PriorityDescriptor priority = ResolvePriorityDescriptor(zdo);
-    Vector3 observerPosition = PeerReferencePosition(peer, position);
-    float distanceMeters = Vector3.Distance(position, observerPosition);
-    float priorityRadius = Mathf.Clamp(PluginConfig.LumberjacksPriorityProbeRadiusMeters.Value, 8.0f, 256.0f);
-    string priorityTier = LumberjacksPriorityClassifier.Classify(
-        priority.ObjectName, priority.ComponentNames, position, observerPosition, priorityRadius,
-        out int priorityRank, out string priorityReason);
+    Vector3 position = candidate.Position;
     lock (_lock) {
       if (!_running) {
         return;
@@ -392,6 +405,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
         _rowsWritten++;
         row = new Dictionary<string, object> {
             ["event"] = "redirect",
+            ["correlation_id"] = candidate.CorrelationId,
             ["seq"] = seq,
             ["uid"] = zdo.m_uid.ToString(),
             ["owner"] = zdo.GetOwner().ToString(CultureInfo.InvariantCulture),
@@ -416,6 +430,11 @@ public sealed class ZdoRedirectRunner : IDisposable {
     }
 
     _postQueue.Enqueue(new Dictionary<string, object> {
+        ["correlation_id"] = candidate.CorrelationId,
+        ["created_utc"] = candidate.CreatedUtc,
+        ["recipient"] = ZdoIntegrationContract.LegacyRecipient,
+        ["importance_class"] = candidate.PriorityTier,
+        ["idempotency_key"] = candidate.CorrelationId,
         ["seq"] = seq,
         ["uid_user"] = zdo.m_uid.UserID,
         ["uid_id"] = zdo.m_uid.ID,
@@ -424,12 +443,59 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["data_rev"] = zdo.DataRevision,
         ["prefab"] = SafePrefab(zdo),
         ["pos"] = new List<object> { position.x, position.y, position.z },
-        ["priority_tier"] = priorityTier,
-        ["priority_rank"] = priorityRank,
-        ["priority_reason"] = priorityReason,
-        ["distance_meters"] = Math.Round(distanceMeters, 3),
+        ["priority_rank"] = candidate.PriorityRank,
+        ["priority_reason"] = candidate.PriorityReason,
+        ["distance_meters"] = Math.Round(candidate.DistanceMeters, 3),
         ["body_b64"] = Convert.ToBase64String(body),
         ["attempt"] = 0
+    });
+  }
+
+  ClassifiedZdo ClassifyCandidate(object peer, ZDO zdo) {
+    Vector3 position = zdo.GetPosition();
+    PriorityDescriptor priority = ResolvePriorityDescriptor(zdo);
+    Vector3 observerPosition = PeerReferencePosition(peer, position);
+    float distanceMeters = Vector3.Distance(position, observerPosition);
+    float priorityRadius = Mathf.Clamp(
+        PluginConfig.LumberjacksPriorityProbeRadiusMeters.Value, 8.0f, 256.0f);
+    string priorityTier = LumberjacksPriorityClassifier.Classify(
+        priority.ObjectName, priority.ComponentNames, position, observerPosition, priorityRadius,
+        out int priorityRank, out string priorityReason);
+    return new ClassifiedZdo(
+        zdo,
+        position,
+        distanceMeters,
+        priorityTier,
+        priorityRank,
+        priorityReason,
+        Guid.NewGuid().ToString("N"),
+        DateTime.UtcNow.ToString("o"));
+  }
+
+  void RecordImportanceDecision(ClassifiedZdo candidate, string eventType) {
+    TelemetryCoordinator coordinator;
+    lock (_lock) {
+      if (_rowsWritten >= _maxRows) {
+        _capped = true;
+        return;
+      }
+      _rowsWritten++;
+      coordinator = _coordinator;
+    }
+    coordinator?.RecordZdoRedirect(new Dictionary<string, object> {
+        ["event"] = eventType,
+        ["correlation_id"] = candidate.CorrelationId,
+        ["created_utc"] = candidate.CreatedUtc,
+        ["uid"] = candidate.Zdo.m_uid.ToString(),
+        ["prefab"] = SafePrefab(candidate.Zdo),
+        ["importance_class"] = candidate.PriorityTier,
+        ["priority_rank"] = candidate.PriorityRank,
+        ["priority_reason"] = candidate.PriorityReason,
+        ["distance_meters"] = Math.Round(candidate.DistanceMeters, 3),
+        ["max_priority_rank"] = PluginConfig.ZdoRedirectMaxPriorityRank.Value,
+        ["network_eligible"] = eventType == "importance_allowed",
+        ["window_id"] = _windowId,
+        ["mod_release"] = ComfyNetworkSense.ReleaseId
     });
   }
 
@@ -515,10 +581,19 @@ public sealed class ZdoRedirectRunner : IDisposable {
 
   void PostBatch(string endpoint, string windowId, List<Dictionary<string, object>> batch) {
     try {
+      List<Dictionary<string, object>> wirePayload = new(batch.Count);
+      foreach (Dictionary<string, object> queued in batch) {
+        Dictionary<string, object> item = new(queued);
+        item.Remove("attempt");
+        wirePayload.Add(item);
+      }
       Dictionary<string, object> bodyValues = new() {
-          ["source"] = "am4-server",
+          ["schema_version"] = ZdoIntegrationContract.SchemaVersion,
+          ["source_instance"] = _sourceInstance,
+          ["mod_release"] = ComfyNetworkSense.ReleaseId,
+          ["operation"] = ZdoIntegrationContract.Operation,
           ["window_id"] = windowId,
-          ["envelopes"] = batch
+          ["payload"] = wirePayload
       };
       string body = JsonLineSerializer.Serialize(bodyValues);
 
@@ -638,6 +713,36 @@ public sealed class ZdoRedirectRunner : IDisposable {
     }
   }
 
+  sealed class ClassifiedZdo {
+    public readonly ZDO Zdo;
+    public readonly Vector3 Position;
+    public readonly float DistanceMeters;
+    public readonly string PriorityTier;
+    public readonly int PriorityRank;
+    public readonly string PriorityReason;
+    public readonly string CorrelationId;
+    public readonly string CreatedUtc;
+
+    public ClassifiedZdo(
+        ZDO zdo,
+        Vector3 position,
+        float distanceMeters,
+        string priorityTier,
+        int priorityRank,
+        string priorityReason,
+        string correlationId,
+        string createdUtc) {
+      Zdo = zdo;
+      Position = position;
+      DistanceMeters = distanceMeters;
+      PriorityTier = priorityTier;
+      PriorityRank = priorityRank;
+      PriorityReason = priorityReason;
+      CorrelationId = correlationId;
+      CreatedUtc = createdUtc;
+    }
+  }
+
   Dictionary<string, object> BuildStatusRowLocked(string eventType) {
     return new Dictionary<string, object> {
         ["event"] = eventType,
@@ -648,6 +753,9 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["endpoint"] = _endpoint,
         ["seq"] = _seq,
         ["suppressed"] = _suppressed,
+        ["importance_allowed"] = _importanceAllowed,
+        ["importance_rejected"] = _importanceRejected,
+        ["max_priority_rank"] = PluginConfig.ZdoRedirectMaxPriorityRank.Value,
         ["ack_failures"] = _ackFailures,
         ["posted_ok"] = _postedOk,
         ["post_failed_batches"] = _postFailedBatches,
@@ -665,14 +773,18 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["reflection_ok"] = ReflectionReady,
         ["last_error"] = _lastError,
         ["claim"] = ScopeClaim(),
-        ["build_version"] = ComfyNetworkSense.PluginVersion
+        ["build_version"] = ComfyNetworkSense.PluginVersion,
+        ["mod_release"] = ComfyNetworkSense.ReleaseId,
+        ["schema_version"] = ZdoIntegrationContract.SchemaVersion,
+        ["source_instance"] = _sourceInstance
     };
   }
 
   string StatusLineLocked() {
     return
         $"ZDO redirect: status={_status}, window={_windowId}, seq={_seq}, "
-        + $"suppressed={_suppressed}, postedOk={_postedOk}, queued={_postQueue.Count}, "
+        + $"suppressed={_suppressed}, importanceAllowed={_importanceAllowed}, "
+        + $"importanceRejected={_importanceRejected}, postedOk={_postedOk}, queued={_postQueue.Count}, "
         + $"requeued={_requeued}, dropped={_dropped}, ackFailures={_ackFailures}, "
         + $"rows={_rowsWritten}{(_capped ? "(capped)" : string.Empty)}, error={_lastError}";
   }

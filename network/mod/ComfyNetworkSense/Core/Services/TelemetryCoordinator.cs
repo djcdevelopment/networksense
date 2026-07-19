@@ -48,6 +48,8 @@ public sealed class TelemetryCoordinator : IDisposable {
     NetworkSensePerfProbe.SetActive(_perfProbe);
   }
 
+  public string SessionId => _sessionId;
+
   public void Update(float deltaTime) {
     using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("TelemetryCoordinator.Update");
 
@@ -464,7 +466,8 @@ public sealed class TelemetryCoordinator : IDisposable {
 
     string eventName = values.TryGetValue("event", out object eventValue) ? Convert.ToString(eventValue) : "status";
     // Per-suppression rows are the bulk of the stream; only surface lifecycle events.
-    if (string.Equals(eventName, "redirect", StringComparison.OrdinalIgnoreCase)) {
+    if (string.Equals(eventName, "redirect", StringComparison.OrdinalIgnoreCase)
+        || eventName.StartsWith("importance_", StringComparison.OrdinalIgnoreCase)) {
       return;
     }
 

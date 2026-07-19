@@ -74,6 +74,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   long _priorityFastLaneApplied;
   string _lastPriorityTier = string.Empty;
   int _lastPriorityRank = int.MaxValue;
+  string _lastCorrelationId = string.Empty;
+  string _lastOperationResult = string.Empty;
+  string _firstCorrelationId = string.Empty;
+  string _firstOperationResult = string.Empty;
 
   public bool IsRunning { get; private set; }
   public long Applied => _applied;
@@ -202,7 +206,17 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
       lock (_gate) {
         _lastApplyUtc = DateTime.UtcNow.ToString("O");
         _lastApplyError = string.Empty;
+        _lastCorrelationId = envelope.correlation_id ?? string.Empty;
+        _lastOperationResult = readback.Superseded ? "superseded" : "applied";
+        if (string.IsNullOrWhiteSpace(_firstCorrelationId)) {
+          _firstCorrelationId = _lastCorrelationId;
+          _firstOperationResult = _lastOperationResult;
+        }
       }
+      ComfyNetworkSense.LogInfo(
+          "Authoritative consumer processed correlation_id=" + (envelope.correlation_id ?? string.Empty)
+          + " result=" + (readback.Superseded ? "superseded" : "applied")
+          + " seq=" + envelope.seq);
     } catch (Exception exception) {
       Exception root = exception is TargetInvocationException tie && tie.InnerException != null
           ? tie.InnerException : exception;
@@ -351,6 +365,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
           ["retried"] = Interlocked.Read(ref _retried),
           ["priority_tagged"] = Interlocked.Read(ref _priorityTagged),
           ["priority_fast_lane_applied"] = Interlocked.Read(ref _priorityFastLaneApplied),
+          ["last_correlation_id"] = _lastCorrelationId,
+          ["last_operation_result"] = _lastOperationResult,
+          ["first_correlation_id"] = _firstCorrelationId,
+          ["first_operation_result"] = _firstOperationResult,
           ["pending"] = pending
       };
       SendPost(_endpoint + "/valheim/zdo-redirect/consumer", JsonLineSerializer.Serialize(payload));
@@ -454,6 +472,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
         ["priority_fast_lane_applied"] = Interlocked.Read(ref _priorityFastLaneApplied),
         ["last_priority_tier"] = _lastPriorityTier,
         ["last_priority_rank"] = _lastPriorityRank,
+        ["last_correlation_id"] = _lastCorrelationId,
+        ["last_operation_result"] = _lastOperationResult,
+        ["first_correlation_id"] = _firstCorrelationId,
+        ["first_operation_result"] = _firstOperationResult,
         ["acknowledged"] = Interlocked.Read(ref _acknowledged),
         ["pending"] = pending
       };
