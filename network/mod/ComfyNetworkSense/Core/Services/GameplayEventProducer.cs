@@ -30,7 +30,11 @@ public sealed class GameplayEventProducer : IDisposable {
   /// <summary>Always-set (arm-independent) instance so the static server-side RPC handler can POST.</summary>
   static GameplayEventProducer _live;
 
+  const double RecentHitSeconds = 15.0;
+  const int LastHitMaxEntries = 256;
+
   readonly GameplayEventClassifier _classifier = new();
+  readonly Dictionary<int, LastHit> _lastHit = new();
   TelemetryCoordinator _coordinator;
   ZRoutedRpc _registeredRpc;
   int _sent;
@@ -85,22 +89,70 @@ public sealed class GameplayEventProducer : IDisposable {
         + " attacker=" + (attacker == null ? "null" : attacker.m_name)
         + " attackerIsPlayer=" + attackerIsPlayer + " died=" + died);
 
-    if (targetIsPlayer) {
+    // IsDead() is not yet true at a Damage/RPC_Damage postfix, so we do NOT decide the kill here.
+    // Instead remember the last player-attributed hit; the killing blow is emitted from OnDeath.
+    if (targetIsPlayer || !attackerIsPlayer) {
       return;
     }
 
+    int id = creature.GetInstanceID();
+    _lastHit[id] = new LastHit {
+      PlayerId = attacker is Player player ? player.GetPlayerID() : 0L,
+      Creature = NormalizeCreatureName(creature),
+      Weapon = hit.m_skill.ToString(),
+      Ranged = hit.m_ranged,
+      TimeSeconds = Time.realtimeSinceStartup,
+    };
+    PruneLastHit();
+  }
+
+  /// <summary>
+  /// Client-side death hook (from <see cref="GameplayEventPatches"/> on <c>Character.OnDeath</c>).
+  /// Fires exactly once when the creature dies, on its owner — the reliable kill signal. Emits a
+  /// killing_blow attributed to the most recent player hit on that creature.
+  /// </summary>
+  public void OnCreatureDied(Character creature) {
+    if (creature == null || creature.IsPlayer()) {
+      return;
+    }
+
+    int id = creature.GetInstanceID();
+    bool tracked = _lastHit.TryGetValue(id, out LastHit hit);
+    ComfyNetworkSense.LogInfo("[gp] death target=" + creature.m_name + " playerKill=" + tracked);
+    if (!tracked) {
+      return;
+    }
+
+    _lastHit.Remove(id);
     double now = Time.realtimeSinceStartup;
-    GameplayEventKind kind = _classifier.ClassifyCreatureDamage(
-        creature.GetInstanceID(), attackerIsPlayer, died, now);
+    if (now - hit.TimeSeconds > RecentHitSeconds) {
+      return;
+    }
+
+    GameplayEventKind kind = _classifier.ClassifyCreatureDamage(id, attackerIsPlayer: true, creatureDied: true, now);
     if (kind != GameplayEventKind.KillingBlow) {
       return;
     }
 
-    string creatureCategory = NormalizeCreatureName(creature);
-    string weapon = hit.m_skill.ToString();
-    long playerId = attacker is Player player ? player.GetPlayerID() : 0L;
+    SendToServer(GameplayEventTypes.KillingBlow, hit.Creature, hit.Weapon, hit.Ranged, hit.PlayerId);
+  }
 
-    SendToServer(GameplayEventTypes.KillingBlow, creatureCategory, weapon, hit.m_ranged, playerId);
+  void PruneLastHit() {
+    if (_lastHit.Count < LastHitMaxEntries) {
+      return;
+    }
+
+    double now = Time.realtimeSinceStartup;
+    List<int> stale = new();
+    foreach (KeyValuePair<int, LastHit> entry in _lastHit) {
+      if (now - entry.Value.TimeSeconds > RecentHitSeconds) {
+        stale.Add(entry.Key);
+      }
+    }
+
+    foreach (int key in stale) {
+      _lastHit.Remove(key);
+    }
   }
 
   /// <summary>Relay one gameplay event to the server via the routed RPC (client→server).</summary>
@@ -220,6 +272,15 @@ public sealed class GameplayEventProducer : IDisposable {
       _live = null;
     }
   }
+}
+
+/// <summary>The most recent player-attributed hit on a creature, carried from the damage hook to OnDeath.</summary>
+public struct LastHit {
+  public long PlayerId;
+  public string Creature;
+  public string Weapon;
+  public bool Ranged;
+  public double TimeSeconds;
 }
 
 /// <summary>Canonical gameplay event-type strings, mirroring the gateway's Game.Contracts.Events.EventType.</summary>

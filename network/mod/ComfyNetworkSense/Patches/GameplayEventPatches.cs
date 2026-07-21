@@ -18,6 +18,7 @@ public static class GameplayEventPatches {
   public static void Apply(Harmony harmony) {
     PatchOne(harmony, "RPC_Damage", new[] { typeof(long), typeof(HitData) }, nameof(RpcDamagePostfix));
     PatchOne(harmony, "Damage", new[] { typeof(HitData) }, nameof(DamagePostfix));
+    PatchOne(harmony, "OnDeath", Type.EmptyTypes, nameof(OnDeathPostfix));
   }
 
   static void PatchOne(Harmony harmony, string methodName, Type[] argTypes, string postfixName) {
@@ -48,9 +49,16 @@ public static class GameplayEventPatches {
   static void DamagePostfix(Character __instance, HitData hit) {
     try {
       // On the client the player owns the creature it melees, so the local Character.Damage path
-      // is what fires (not RPC_Damage). Both feed the same classifier, which dedups per creature
-      // death, so a kill that trips both hooks still emits exactly one killing_blow.
+      // is what fires (not RPC_Damage). Both record the last hit; the kill is emitted from OnDeath.
       GameplayEventProducer.Active?.OnCreatureDamaged(__instance, hit, "damage");
+    } catch {
+    }
+  }
+
+  static void OnDeathPostfix(Character __instance) {
+    try {
+      // The reliable kill signal — IsDead() is not yet true at a Damage postfix (proven live).
+      GameplayEventProducer.Active?.OnCreatureDied(__instance);
     } catch {
     }
   }
