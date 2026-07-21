@@ -356,6 +356,29 @@ public sealed class ZdoRedirectRunner : IDisposable {
     TryFlushQueue();
   }
 
+  // The destination peer's identity as the SERVER derives it: the socket host name, which is a
+  // bare SteamID64 and the same value vanilla feeds VerifySessionTicket (ZNet.decompiled.cs:833,
+  // 882) and the Lumberjacks roster gate keys on. Deliberately NOT the ZDOID owner or m_uid --
+  // that is a client-supplied ZDOMan.GetSessionID() and not a SteamID at all.
+  //
+  // We stamp an identity, never a partition. The Gateway owns the map from SteamID to its own
+  // opaque recipient id; the mod cannot know it and must not guess, which is why this stays a
+  // plain host string. That also makes this change safe to deploy on its own: while
+  // ValheimQueue:ProducerEmitsRecipients is false the Gateway pins ingest to `legacy` regardless
+  // of what we stamp, so the mod can ship first and the cutover stays a single flag flip.
+  //
+  // Unresolvable peer degrades to the legacy subject rather than throwing or inventing a label:
+  // a recipient-less envelope belongs where a consumer can still reach it.
+  static string RecipientFor(object peer) {
+    try {
+      ZNetPeer netPeer = NetworkPeerField?.GetValue(peer) as ZNetPeer;
+      string host = netPeer?.m_socket?.GetHostName();
+      return string.IsNullOrEmpty(host) ? ZdoIntegrationContract.LegacyRecipient : host;
+    } catch (Exception) {
+      return ZdoIntegrationContract.LegacyRecipient;
+    }
+  }
+
   void Redirect(object peer, ClassifiedZdo candidate) {
     ZDO zdo = candidate.Zdo;
     // Replicate the native ack (ZDOMan:767+780) so vanilla re-offers only on revision change.
@@ -432,7 +455,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
     _postQueue.Enqueue(new Dictionary<string, object> {
         ["correlation_id"] = candidate.CorrelationId,
         ["created_utc"] = candidate.CreatedUtc,
-        ["recipient"] = ZdoIntegrationContract.LegacyRecipient,
+        ["recipient"] = RecipientFor(peer),
         ["importance_class"] = candidate.PriorityTier,
         ["idempotency_key"] = candidate.CorrelationId,
         ["seq"] = seq,
