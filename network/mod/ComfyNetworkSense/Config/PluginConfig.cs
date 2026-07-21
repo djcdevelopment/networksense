@@ -63,6 +63,7 @@ public static class PluginConfig {
   public static ConfigEntry<string> ZdoRedirectWindowId { get; private set; }
   public static ConfigEntry<float> ZdoRedirectActiveSeconds { get; private set; }
   public static ConfigEntry<int> ZdoRedirectMaxPriorityRank { get; private set; }
+  public static ConfigEntry<string> ZdoLandmarkReach { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderEnabled { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderStrictMode { get; private set; }
   public static ConfigEntry<string> HandshakeResponderEndpoint { get; private set; }
@@ -548,6 +549,19 @@ public static class PluginConfig {
             + "Rejected candidates remain in Valheim's native send list and never enter the "
             + "Gateway payload. 6 preserves the prior all-tier behavior; 4 admits the proven "
             + "interactive/structural/storage lanes while leaving support/decorative work native.");
+
+    ZdoLandmarkReach =
+        config.Bind(
+            "Netcode",
+            "zdoLandmarkReach",
+            "",
+            "Landmark reach map: comma-separated 'prefabName=reachMeters' entries granting an object "
+            + "long-range PRESENCE (landmark-reach-design.md). A landmark is admitted at the redirect "
+            + "boundary when the observer is within its reach EVEN IF its priority rank exceeds "
+            + "zdoRedirectMaxPriorityRank — the parallel reliable-lane exemption. Blank = no landmarks "
+            + "(rank gate alone decides). Names matched by stable hash, same as zdoRedirectPrefabs; "
+            + "entries with a missing or non-positive reach are ignored. A landmark is static, so this "
+            + "adds no per-tick datagram cost — it only widens what redirect admits, once, at arrival.");
 
     HandshakeResponderEnabled =
         config.Bind(

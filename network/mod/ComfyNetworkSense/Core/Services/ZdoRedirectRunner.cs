@@ -98,6 +98,12 @@ public sealed class ZdoRedirectRunner : IDisposable {
   int _maxRows = DefaultMaxRows;
   HashSet<int> _prefabFilter;
   bool _allPrefabs;
+
+  // Landmark reach: prefab stable-hash -> reach in meters, parsed from ZdoLandmarkReach on arm.
+  // Null or absent => the prefab is not a landmark (reach 0). A landmark is admitted at redirect
+  // time when the observer is within its reach even if its rank exceeds the max — the parallel
+  // reliable-lane exemption in ZdoIntegrationContract.Admits. Static, so it adds no per-tick cost.
+  Dictionary<int, float> _landmarkReach;
   string _windowId = string.Empty;
   string _endpoint = string.Empty;
   string _sourceInstance = string.Empty;
@@ -217,6 +223,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
       _maxRows = Mathf.Clamp(maxRowsOverride ?? DefaultMaxRows, 0, 200000);
       _prefabFilter = filter;
       _allPrefabs = allPrefabs;
+      _landmarkReach = BuildLandmarkReach(PluginConfig.ZdoLandmarkReach.Value);
       _endpoint = PluginConfig.ZdoRedirectEndpoint.Value.TrimEnd('/');
       _sourceInstance = coordinator?.SessionId ?? "unknown";
       string configuredWindow = PluginConfig.ZdoRedirectWindowId.Value;
@@ -334,8 +341,13 @@ public sealed class ZdoRedirectRunner : IDisposable {
 
       ClassifiedZdo candidate = ClassifyCandidate(peer, zdo);
       RecordImportanceDecision(candidate, "importance_candidate");
-      if (!ZdoIntegrationContract.ImportanceAllows(
-              candidate.PriorityRank, PluginConfig.ZdoRedirectMaxPriorityRank.Value)) {
+      // Admit if the rank gate allows OR this is a landmark within its reach of the observer. The
+      // landmark exemption is the reliable-lane presence path (landmark-reach-design.md): a static
+      // marked object reaches clients a hard interest cut would never announce it to, at no per-tick
+      // cost. Non-landmarks (reach 0) fall back to exactly the old rank-only decision.
+      if (!ZdoIntegrationContract.Admits(
+              candidate.PriorityRank, PluginConfig.ZdoRedirectMaxPriorityRank.Value,
+              candidate.DistanceMeters, candidate.LandmarkReachMeters)) {
         lock (_lock) _importanceRejected++;
         RecordImportanceDecision(candidate, "importance_rejected");
         continue;
@@ -484,6 +496,10 @@ public sealed class ZdoRedirectRunner : IDisposable {
     string priorityTier = LumberjacksPriorityClassifier.Classify(
         priority.ObjectName, priority.ComponentNames, position, observerPosition, priorityRadius,
         out int priorityRank, out string priorityReason);
+    float landmarkReach =
+        _landmarkReach != null && _landmarkReach.TryGetValue(SafePrefab(zdo), out float reach)
+            ? reach
+            : 0.0f;
     return new ClassifiedZdo(
         zdo,
         position,
@@ -491,6 +507,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
         priorityTier,
         priorityRank,
         priorityReason,
+        landmarkReach,
         Guid.NewGuid().ToString("N"),
         DateTime.UtcNow.ToString("o"));
   }
@@ -515,6 +532,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["priority_rank"] = candidate.PriorityRank,
         ["priority_reason"] = candidate.PriorityReason,
         ["distance_meters"] = Math.Round(candidate.DistanceMeters, 3),
+        ["landmark_reach_meters"] = Math.Round(candidate.LandmarkReachMeters, 3),
         ["max_priority_rank"] = PluginConfig.ZdoRedirectMaxPriorityRank.Value,
         ["network_eligible"] = eventType == "importance_allowed",
         ["window_id"] = _windowId,
@@ -719,6 +737,36 @@ public sealed class ZdoRedirectRunner : IDisposable {
     return set.Count > 0 ? set : null;
   }
 
+  // Parse ZdoLandmarkReach — a CSV of `prefabName=reachMeters` entries — into a stable-hash -> reach
+  // map, keyed the same way BuildPrefabFilter keys the allowlist so the two agree on prefab identity.
+  // Entries with a missing/non-positive/unparseable reach are skipped (a landmark must grant a real
+  // distance); returns null when nothing valid is configured.
+  static Dictionary<int, float> BuildLandmarkReach(string csv) {
+    if (string.IsNullOrWhiteSpace(csv)) {
+      return null;
+    }
+    Dictionary<int, float> map = new();
+    foreach (string part in csv.Split(',')) {
+      string entry = part.Trim();
+      if (entry.Length == 0) {
+        continue;
+      }
+      int eq = entry.IndexOf('=');
+      if (eq <= 0 || eq >= entry.Length - 1) {
+        continue;
+      }
+      string name = entry.Substring(0, eq).Trim();
+      string reachText = entry.Substring(eq + 1).Trim();
+      if (name.Length == 0
+          || !float.TryParse(reachText, NumberStyles.Float, CultureInfo.InvariantCulture, out float reach)
+          || reach <= 0.0f) {
+        continue;
+      }
+      map[name.GetStableHashCode()] = reach;
+    }
+    return map.Count > 0 ? map : null;
+  }
+
   static int SafePrefab(ZDO zdo) {
     try {
       return zdo.GetPrefab();
@@ -743,6 +791,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
     public readonly string PriorityTier;
     public readonly int PriorityRank;
     public readonly string PriorityReason;
+    public readonly float LandmarkReachMeters;
     public readonly string CorrelationId;
     public readonly string CreatedUtc;
 
@@ -753,6 +802,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
         string priorityTier,
         int priorityRank,
         string priorityReason,
+        float landmarkReachMeters,
         string correlationId,
         string createdUtc) {
       Zdo = zdo;
@@ -761,6 +811,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
       PriorityTier = priorityTier;
       PriorityRank = priorityRank;
       PriorityReason = priorityReason;
+      LandmarkReachMeters = landmarkReachMeters;
       CorrelationId = correlationId;
       CreatedUtc = createdUtc;
     }
