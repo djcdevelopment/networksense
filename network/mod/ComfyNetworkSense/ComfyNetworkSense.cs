@@ -43,7 +43,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   static ManualLogSource _logger;
   static readonly ConcurrentQueue<string> _mainThreadMessages = new();
   TelemetryCoordinator _coordinator;
-  MatrixCheckinRunner _matrixCheckinRunner;
   LumberjacksBridgeProbe _lumberjacksBridgeProbe;
   LumberjacksProjectionRunner _lumberjacksProjectionRunner;
   LumberjacksShadowAuthorityRunner _lumberjacksShadowAuthorityRunner;
@@ -59,9 +58,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   HandshakeResponderRunner _handshakeResponderRunner;
   Harmony _harmony;
   bool _routeRunning;
-  bool _autoRehearsalArmed;
-  bool _autoRehearsalStarted;
-  float _autoRehearsalStartAt = -1.0f;
   bool _netcodeProbeAutoArmed;
   bool _netcodeProbeAutoStarted;
   float _netcodeProbeAutoStartAt = -1.0f;
@@ -104,17 +100,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
-    AutoCharacterSelectPatches.Apply(_harmony);
     RegisterConsoleCommands();
-
-    // Matrix check-in poller: off by default; only starts for lab/swarm clients that opt in via
-    // COMFY_MATRIX_CHECKIN or the [Matrix] config section. It waits internally for a local player.
-    if (MatrixCheckinRunner.IsEnabled()) {
-      _matrixCheckinRunner = new();
-      _matrixCheckinRunner.Start(this, _coordinator);
-    } else {
-      LogInfo("Matrix check-in disabled (set COMFY_MATRIX_CHECKIN=1 or [Matrix] matrixCheckinEnabled to enable).");
-    }
 
     LogInfo("Telemetry scaffold ready.");
     LogInfo("Lumberjacks contract release=" + ReleaseId
@@ -235,10 +221,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _handshakeResponderRunner?.Update(deltaTime, _coordinator);
     }
 
-    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryStartAutoRehearsal")) {
-      TryStartAutoRehearsal();
-    }
-
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryDriveNetcodeProbeAuto")) {
       TryDriveNetcodeProbeAuto();
     }
@@ -349,7 +331,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     _netcodeProbeAutoStarted = true;
-    TryCoupleAutoRehearsalToNetcodeProbe();
     int maxDetailRows = PluginConfig.NetcodeProbeMaxDetailRows.Value;
     string message = _netcodeProbeRunner.Start(_coordinator, maxDetailRows);
     float autoStopSeconds = PluginConfig.NetcodeProbeAutoStopSeconds.Value;
@@ -408,8 +389,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   }
 
   void OnDestroy() {
-    _matrixCheckinRunner?.Stop();
-    _matrixCheckinRunner = null;
     _lumberjacksBridgeProbe = null;
     _lumberjacksProjectionRunner?.Dispose();
     _lumberjacksProjectionRunner = null;
@@ -1150,7 +1129,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   object RehearsalCommand(Terminal.ConsoleEventArgs args) {
     string fileName = args.Length >= 2 ? args[1] : "teleport-route.tsv";
     string profile = args.Length >= 3 ? args[2] : "host_full";
-    if (!TryStartRehearsal(fileName, profile, initiatedByAuto: false, out string message)) {
+    if (!TryStartRehearsal(fileName, profile, out string message)) {
       MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
       LogWarning(message);
       return false;
@@ -1161,7 +1140,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     return message;
   }
 
-  bool TryStartRehearsal(string fileName, string profile, bool initiatedByAuto, out string message) {
+  bool TryStartRehearsal(string fileName, string profile, out string message) {
     if (_routeRunning) {
       message = "NetworkSense route is already running.";
       return false;
@@ -1175,100 +1154,13 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       return false;
     }
 
-    if (!initiatedByAuto) {
-      RunCommand(_coordinator.ReloadConfig);
-    }
-
+    RunCommand(_coordinator.ReloadConfig);
     CheckMcpGateway();
     _coordinator.RecordDevMarker($"route_rehearsal {profile} start");
-    if (initiatedByAuto) {
-      _coordinator.RecordDevMarker($"auto_rehearsal start profile={profile} file={fileName}");
-    }
 
-    StartCoroutine(RunTeleportRoute(stops, routePath, profile, exportOnComplete: true, autoRehearsal: initiatedByAuto));
+    StartCoroutine(RunTeleportRoute(stops, routePath, profile, exportOnComplete: true));
     message = $"NetworkSense rehearsal started: {stops.Count} stops from {fileName}, profile={profile}.";
     return true;
-  }
-
-  void TryStartAutoRehearsal() {
-    if (!PluginConfig.AutoRehearsalEnabled.Value || _coordinator == null || _routeRunning) {
-      return;
-    }
-
-    if (_autoRehearsalStarted && PluginConfig.AutoRehearsalRunOncePerSession.Value) {
-      return;
-    }
-
-    Player player = Player.m_localPlayer;
-    if (player == null) {
-      _autoRehearsalArmed = false;
-      _autoRehearsalStartAt = -1.0f;
-      return;
-    }
-
-    if (!_autoRehearsalArmed) {
-      float delay = Math.Max(0.0f, PluginConfig.AutoRehearsalDelaySeconds.Value);
-      _autoRehearsalStartAt = Time.time + delay;
-      _autoRehearsalArmed = true;
-      _coordinator.RecordDevMarker(
-          $"auto_rehearsal armed profile={PluginConfig.AutoRehearsalProfile.Value} file={PluginConfig.AutoRehearsalRouteFile.Value} delay={delay:0.##}");
-      return;
-    }
-
-    if (_autoRehearsalStartAt >= 0.0f && Time.time < _autoRehearsalStartAt) {
-      return;
-    }
-
-    _autoRehearsalStarted = true;
-    if (!TryStartRehearsal(
-        PluginConfig.AutoRehearsalRouteFile.Value,
-        PluginConfig.AutoRehearsalProfile.Value,
-        initiatedByAuto: true,
-        out string message)) {
-      _coordinator.RecordDevMarker($"auto_rehearsal blocked {message}");
-      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
-      LogWarning(message);
-      return;
-    }
-
-    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
-    LogInfo(message);
-  }
-
-  // P1 step 7: optionally couple the auto-rehearsal route walk to the netcode probe auto-start,
-  // so captured ZDO traffic exists without a human hand-walking the route. Client-side only Ã¢â‚¬â€
-  // RunTeleportRoute needs a local player, so this is skipped headless (the dedicated server keeps
-  // the probe running solo). Reuses the same TryStartRehearsal kickoff and _autoRehearsalStarted
-  // run-once guard as TryStartAutoRehearsal. Off by default.
-  void TryCoupleAutoRehearsalToNetcodeProbe() {
-    if (!PluginConfig.CoupleAutoRehearsalToNetcodeProbe.Value) {
-      return;
-    }
-
-    if (_autoRehearsalStarted && PluginConfig.AutoRehearsalRunOncePerSession.Value) {
-      return;
-    }
-
-    Player player = Player.m_localPlayer;
-    if (player == null) {
-      return;
-    }
-
-    _autoRehearsalStarted = true;
-    if (!TryStartRehearsal(
-        PluginConfig.AutoRehearsalRouteFile.Value,
-        PluginConfig.AutoRehearsalProfile.Value,
-        initiatedByAuto: true,
-        out string message)) {
-      _coordinator.RecordDevMarker($"auto_rehearsal blocked {message}");
-      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
-      LogWarning(message);
-      return;
-    }
-
-    _coordinator.RecordDevMarker("auto_rehearsal coupled_to_netcode_probe");
-    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
-    LogInfo(message);
   }
 
   static string JoinArgs(Terminal.ConsoleEventArgs args, int startIndex) {
@@ -1472,8 +1364,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       List<RouteStop> stops,
       string routePath,
       string rehearsalProfile = null,
-      bool exportOnComplete = false,
-      bool autoRehearsal = false) {
+      bool exportOnComplete = false) {
     _routeRunning = true;
     bool aborted = false;
     NetworkSensePerfProbe.SetRouteState("route", "", "start");
@@ -1539,10 +1430,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     if (!string.IsNullOrWhiteSpace(rehearsalProfile)) {
       _coordinator.RecordDevMarker($"route_rehearsal {rehearsalProfile} {(aborted ? "abort" : "end")}");
-    }
-
-    if (autoRehearsal) {
-      _coordinator.RecordDevMarker(aborted ? "auto_rehearsal abort" : "auto_rehearsal end");
     }
 
     if (exportOnComplete) {

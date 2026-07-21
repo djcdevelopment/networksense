@@ -37,11 +37,12 @@ In-game Valheim console commands:
 
 Automation config keys under `[Automation]`:
 
-- `autoRehearsalEnabled`: when `true`, run a private-lab route rehearsal after the local player is available.
-- `autoRehearsalRouteFile`: route file under `BepInEx/config/comfy-network-sense`, default `teleport-route.tsv`.
-- `autoRehearsalProfile`: resource profile label recorded in markers.
-- `autoRehearsalDelaySeconds`: delay after player availability before the route starts.
-- `autoRehearsalRunOncePerSession`: prevents repeated runs in the same client session.
+- `routeGodFlySafeguard`: when `true`, applies god/fly during a route walk so post-teleport
+  falls cannot kill the character mid-route. No-op headless.
+
+The `autoRehearsal*` keys that used to sit here were removed with the swarm harness — see
+[SWARM-HARNESS-REMOVED.md](SWARM-HARNESS-REMOVED.md). Run `network_sense_rehearsal` by hand
+instead; it takes the same route file and profile as arguments.
 
 Portal fix config keys under `[PortalFix]`:
 

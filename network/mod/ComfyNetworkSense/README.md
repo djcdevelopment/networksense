@@ -248,53 +248,14 @@ network_sense_mcp_note <text>
 network_sense_mcp_mark <label>
 ```
 
-For unattended private lab clients, set:
+Run a route walk with `network_sense_rehearsal [route-file] [profile]`, which
+defaults to `teleport-route.tsv` and `host_full`. It reloads config, records a
+`route_rehearsal <profile> start` marker, walks the route, and exports the
+session when it completes.
 
-```ini
-[Automation]
-autoRehearsalEnabled = true
-autoRehearsalRouteFile = teleport-route.tsv
-autoRehearsalProfile = host_full
-autoRehearsalDelaySeconds = 20
-autoRehearsalRunOncePerSession = true
-```
-
-After the local player is available, the mod records `auto_rehearsal armed`,
-runs `network_sense_rehearsal` internally, and exports the session when the
-route completes.
-
-### Auto-Join (swarm clients)
-
-Solo baselines log `rtt_ms = 0`, `jitter_ms = 0`, `bytes_in = 0` because the
-client is at the menu, never connected. Auto-join closes that gap: it drives the
-FejdStartup character-select screen, picks a character, and calls
-`OnCharacterStart`, so a spawned client connects to the server named in its
-launch args (`+connect valheim-server:2456`) and starts producing real
-connected-multiplayer samples.
-
-It is off by default. Enable it per lab client with the `COMFY_AUTOJOIN`
-environment variable (set for all swarm containers by
-`valheim-lab.compose.yml`), or via config:
-
-```ini
-[AutoJoin]
-autoJoinEnabled = true
-autoJoinCharacterName =
-autoJoinCharacterIndex = 0
-autoJoinDeriveFromHostname = true
-autoJoinCreateIfMissing = true
-autoJoinNewCharacterName = comfyplayer
-autoJoinInitialDelaySeconds = 8
-autoJoinTimeoutSeconds = 120
-```
-
-Character selection precedence: a name (`COMFY_AUTOJOIN_CHARACTER` or config) is
-matched first; then an explicit index (`COMFY_AUTOJOIN_INDEX`); then, when
-`autoJoinDeriveFromHostname` is set, the trailing number in the hostname
-(`valheim-client-02` -> index 1). Deriving from the hostname lets every client in
-a swarm share one config yet still grab a distinct character. If no profiles
-exist, one is created. Names do not matter for telemetry — only that each client
-connects as a distinct, valid character.
+The unattended wrapper that used to run this automatically, along with auto-join
+and the matrix check-in poller, was removed with the swarm harness — see
+[SWARM-HARNESS-REMOVED.md](SWARM-HARNESS-REMOVED.md).
 
 Legacy mode aliases still work for convenience:
 
