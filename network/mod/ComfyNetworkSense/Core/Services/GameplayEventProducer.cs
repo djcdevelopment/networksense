@@ -36,6 +36,7 @@ public sealed class GameplayEventProducer : IDisposable {
   const int LastHitMaxEntries = 256;
 
   readonly GameplayEventClassifier _classifier = new();
+  readonly QuestTriggerEvaluator _questEvaluator = new();
   readonly Dictionary<int, LastHit> _lastHit = new();
   TelemetryCoordinator _coordinator;
   ZRoutedRpc _registeredRpc;
@@ -152,6 +153,19 @@ public sealed class GameplayEventProducer : IDisposable {
     // The kill, plus a weapon-usage event (detail = the weapon skill) for the alpha weapon stream.
     SendToServer(GameplayEventTypes.KillingBlow, hit.Creature, hit.Creature, hit.Weapon, hit.Ranged, hit.PlayerId);
     SendToServer(GameplayEventTypes.WeaponUsed, hit.Weapon, hit.Creature, hit.Weapon, hit.Ranged, hit.PlayerId);
+
+    // Quest evaluator (arm-gated separately): does this kill complete any tracked quest? A match
+    // relays a quest_completed over the same RPC seam. The quest name is the public-safe detail;
+    // quest_id/guild/command ride the payload to the durable EventLog only.
+    if (PluginConfig.QuestEvaluatorEnabled.Value) {
+      IReadOnlyList<QuestCompletion> completions =
+          _questEvaluator.OnCreatureKilled(QuestViewLoader.Quests, hit.Creature, hit.Weapon, hit.Ranged, now);
+      foreach (QuestCompletion completion in completions) {
+        SendToServer(GameplayEventTypes.QuestCompleted, completion.Name, hit.Creature, hit.Weapon, hit.Ranged,
+            hit.PlayerId, completion.QuestId, completion.Guild, completion.Category, completion.BotCommand);
+        ComfyNetworkSense.LogInfo("[gp] quest complete: " + completion.QuestId + " (" + completion.Name + ")");
+      }
+    }
   }
 
   void PruneLastHit() {
@@ -172,8 +186,10 @@ public sealed class GameplayEventProducer : IDisposable {
     }
   }
 
-  /// <summary>Relay one gameplay event to the server via the routed RPC (client→server).</summary>
-  void SendToServer(string eventType, string detail, string creature, string weapon, bool ranged, long playerId) {
+  /// <summary>Relay one gameplay event to the server via the routed RPC (client→server). The trailing
+  /// quest fields are empty for combat events and set only for a quest_completed.</summary>
+  void SendToServer(string eventType, string detail, string creature, string weapon, bool ranged, long playerId,
+      string questId = "", string questGuild = "", string questCategory = "", string questCommand = "") {
     ZRoutedRpc rpc = ZRoutedRpc.instance;
     if (rpc == null) {
       return;
@@ -186,6 +202,10 @@ public sealed class GameplayEventProducer : IDisposable {
     package.Write(weapon ?? string.Empty);
     package.Write(ranged);
     package.Write(playerId);
+    package.Write(questId ?? string.Empty);
+    package.Write(questGuild ?? string.Empty);
+    package.Write(questCategory ?? string.Empty);
+    package.Write(questCommand ?? string.Empty);
 
     // Target 0 (Everybody): a client's RouteRPC always routes to the server, which handles a
     // target==0 packet (NETCODE-MAP Funnel 4). The server then relays to all clients, whose
@@ -218,17 +238,37 @@ public sealed class GameplayEventProducer : IDisposable {
       string weapon = package.ReadString();
       bool ranged = package.ReadBool();
       long playerId = package.ReadLong();
+      string questId = package.ReadString();
+      string questGuild = package.ReadString();
+      string questCategory = package.ReadString();
+      string questCommand = package.ReadString();
 
       producer._received++;
       ComfyNetworkSense.LogInfo("[gp] server received " + eventType + " detail=" + detail
           + " player=" + playerId + " from peer=" + sender);
-      producer.PostToGateway(eventType, detail, creature, weapon, ranged, playerId);
+      producer.PostToGateway(eventType, detail, creature, weapon, ranged, playerId,
+          questId, questGuild, questCategory, questCommand);
     } catch {
       // Telemetry is observational; never let a malformed relay disturb the server.
     }
   }
 
-  void PostToGateway(string eventType, string detail, string creature, string weapon, bool ranged, long playerId) {
+  void PostToGateway(string eventType, string detail, string creature, string weapon, bool ranged, long playerId,
+      string questId = "", string questGuild = "", string questCategory = "", string questCommand = "") {
+    Dictionary<string, object> payload = new() {
+        ["creature"] = creature,
+        ["weapon"] = weapon,
+        ["ranged"] = ranged
+    };
+
+    // Quest fields ride the payload to the durable EventLog only (not the public feed's detail).
+    if (!string.IsNullOrEmpty(questId)) {
+      payload["quest_id"] = questId;
+      payload["guild"] = questGuild;
+      payload["category"] = questCategory;
+      payload["bot_command"] = questCommand;
+    }
+
     Dictionary<string, object> body = new() {
         ["event_type"] = eventType,
         ["occurred_at_utc"] = DateTime.UtcNow.ToString("o"),
@@ -236,11 +276,7 @@ public sealed class GameplayEventProducer : IDisposable {
         ["region_id"] = null,
         ["actor_id"] = playerId == 0L ? null : playerId.ToString(),
         ["detail"] = detail,
-        ["payload"] = new Dictionary<string, object> {
-            ["creature"] = creature,
-            ["weapon"] = weapon,
-            ["ranged"] = ranged
-        }
+        ["payload"] = payload
     };
 
     _coordinator?.RecordGameplayEvent(new Dictionary<string, object>(body));
@@ -307,4 +343,5 @@ public static class GameplayEventTypes {
   public const string FirstHit = "first_hit";
   public const string KillingBlow = "killing_blow";
   public const string WeaponUsed = "weapon_used";
+  public const string QuestCompleted = "quest_completed";
 }
