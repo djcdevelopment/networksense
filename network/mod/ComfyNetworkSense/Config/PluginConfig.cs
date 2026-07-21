@@ -69,6 +69,7 @@ public static class PluginConfig {
   public static ConfigEntry<string> ZdoLandmarkReach { get; private set; }
   public static ConfigEntry<bool> GameplayEventProducerEnabled { get; private set; }
   public static ConfigEntry<bool> GameplayEventVerboseLogging { get; private set; }
+  public static ConfigEntry<bool> QuestEvaluatorEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoBandShapingEnabled { get; private set; }
   public static ConfigEntry<float> ZdoInnerRadiusMeters { get; private set; }
   public static ConfigEntry<float> ZdoOuterRadiusMeters { get; private set; }
@@ -622,6 +623,19 @@ public static class PluginConfig {
             + "lifecycle lines are logged (RPC registered, event sent, server received). ON = also log "
             + "every damage hook and death the producer sees — a firehose during combat, useful only "
             + "when debugging why an event did or didn't emit. Hot-reloadable.");
+
+    QuestEvaluatorEnabled =
+        config.Bind(
+            "Gameplay",
+            "questEvaluatorEnabled",
+            false,
+            "Quest evaluator (community-telemetry quest track, consumes the gameplay-event seam). OFF "
+            + "(default) = tracked quests loaded from quest-view.json are never matched and no "
+            + "quest_completed events emit; the gameplay producer is unaffected. ON = classified "
+            + "gameplay events (first_hit / killing_blow) are matched against the player's quest-view.json "
+            + "and a match relays a quest_completed event to the server over the same routed RPC. The "
+            + "quest-view.json itself always loads (independent of this flag); this only gates matching. "
+            + "Hot-reloadable.");
 
     ZdoBandShapingEnabled =
         config.Bind(

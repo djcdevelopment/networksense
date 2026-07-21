@@ -101,11 +101,30 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     PanelInputPatches.Apply(_harmony);
     GameplayEventPatches.Apply(_harmony);
     RegisterConsoleCommands();
+    LoadQuestView();
 
     LogInfo("Telemetry scaffold ready.");
     LogInfo("Lumberjacks contract release=" + ReleaseId
         + " schema_version=" + ZdoIntegrationContract.SchemaVersion
         + " operation=" + ZdoIntegrationContract.Operation);
+  }
+
+  // Loads the player's quest-view.json (quest-evaluator track). The file always loads — matching is
+  // separately gated by questEvaluatorEnabled — so a bad file surfaces at startup, not first kill.
+  // A missing file is normal (no quests tracked) and logs nothing alarming.
+  internal static string QuestViewPath => Path.Combine(Paths.ConfigPath, "comfy-network-sense", "quest-view.json");
+
+  void LoadQuestView() {
+    string path = QuestViewPath;
+    if (QuestViewLoader.Load(path)) {
+      if (QuestViewLoader.Quests.Count > 0) {
+        LogInfo("Quest view loaded: " + QuestViewLoader.Quests.Count + " tracked quest(s)"
+            + (string.IsNullOrEmpty(QuestViewLoader.PlayerName) ? "" : " for " + QuestViewLoader.PlayerName)
+            + " from " + path);
+      }
+    } else {
+      LogWarning("Quest view failed to load (" + QuestViewLoader.LastError + "); no quests tracked. File: " + path);
+    }
   }
 
   void InitializeAuthoritativeConsumer() {
