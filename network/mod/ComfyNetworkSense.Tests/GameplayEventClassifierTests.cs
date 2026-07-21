@@ -5,67 +5,69 @@ namespace ComfyNetworkSense.Tests;
 
 public class GameplayEventClassifierTests {
   [Fact]
-  public void PlayerKillingBlow_EmitsKillingBlow() {
+  public void FirstHitOnACreature_EmitsFirstHit() {
     var classifier = new GameplayEventClassifier();
-
-    var kind = classifier.ClassifyCreatureDamage(
-        creatureInstanceId: 1, attackerIsPlayer: true, creatureDied: true, nowSeconds: 10.0);
-
-    Assert.Equal(GameplayEventKind.KillingBlow, kind);
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(1, 10.0));
   }
 
   [Fact]
-  public void NonFatalHit_EmitsNothing() {
-    var classifier = new GameplayEventClassifier();
+  public void SubsequentHitsWithinWindow_EmitNothing() {
+    var classifier = new GameplayEventClassifier(windowSeconds: 30.0);
 
-    var kind = classifier.ClassifyCreatureDamage(
-        creatureInstanceId: 1, attackerIsPlayer: true, creatureDied: false, nowSeconds: 10.0);
-
-    Assert.Equal(GameplayEventKind.None, kind);
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(1, 10.0));
+    Assert.Equal(GameplayEventKind.None, classifier.RegisterHit(1, 11.0));
+    Assert.Equal(GameplayEventKind.None, classifier.RegisterHit(1, 25.0));
   }
 
   [Fact]
-  public void EnvironmentKill_NotAttributedToPlayer_EmitsNothing() {
+  public void HitAfterWindow_EmitsFirstHitAgain() {
+    // Instance ids get recycled after a creature despawns; past the window a hit is a new engagement.
+    var classifier = new GameplayEventClassifier(windowSeconds: 30.0);
+
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(1, 10.0));
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(1, 50.0));
+  }
+
+  [Fact]
+  public void Death_EmitsKillingBlow() {
     var classifier = new GameplayEventClassifier();
-
-    var kind = classifier.ClassifyCreatureDamage(
-        creatureInstanceId: 1, attackerIsPlayer: false, creatureDied: true, nowSeconds: 10.0);
-
-    Assert.Equal(GameplayEventKind.None, kind);
+    Assert.Equal(GameplayEventKind.KillingBlow, classifier.RegisterDeath(1, 10.0));
   }
 
   [Fact]
   public void DuplicateDeathWithinWindow_EmitsOnce() {
-    var classifier = new GameplayEventClassifier(dedupSeconds: 2.0);
+    var classifier = new GameplayEventClassifier(windowSeconds: 30.0);
 
-    var first = classifier.ClassifyCreatureDamage(1, attackerIsPlayer: true, creatureDied: true, nowSeconds: 10.0);
-    var second = classifier.ClassifyCreatureDamage(1, attackerIsPlayer: true, creatureDied: true, nowSeconds: 10.5);
-
-    Assert.Equal(GameplayEventKind.KillingBlow, first);
-    Assert.Equal(GameplayEventKind.None, second);
+    Assert.Equal(GameplayEventKind.KillingBlow, classifier.RegisterDeath(1, 10.0));
+    Assert.Equal(GameplayEventKind.None, classifier.RegisterDeath(1, 10.5));
   }
 
   [Fact]
-  public void SameCreatureIdAfterWindow_EmitsAgain() {
-    // Instance ids can be reused by the engine after a creature despawns; once the dedup window has
-    // elapsed a fresh kill on that id is a real, distinct killing blow.
-    var classifier = new GameplayEventClassifier(dedupSeconds: 2.0);
+  public void DeathClearsFirstHit_SoAReusedIdEngagesAgain() {
+    var classifier = new GameplayEventClassifier(windowSeconds: 30.0);
 
-    var first = classifier.ClassifyCreatureDamage(1, attackerIsPlayer: true, creatureDied: true, nowSeconds: 10.0);
-    var later = classifier.ClassifyCreatureDamage(1, attackerIsPlayer: true, creatureDied: true, nowSeconds: 20.0);
-
-    Assert.Equal(GameplayEventKind.KillingBlow, first);
-    Assert.Equal(GameplayEventKind.KillingBlow, later);
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(1, 10.0));
+    Assert.Equal(GameplayEventKind.KillingBlow, classifier.RegisterDeath(1, 11.0));
+    // Same id reused shortly after death (a new creature) -> a fresh first_hit, not suppressed.
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(1, 12.0));
   }
 
   [Fact]
-  public void DistinctCreatures_EachEmit() {
+  public void DistinctCreatures_EachEngageAndDie() {
     var classifier = new GameplayEventClassifier();
 
-    var a = classifier.ClassifyCreatureDamage(1, attackerIsPlayer: true, creatureDied: true, nowSeconds: 10.0);
-    var b = classifier.ClassifyCreatureDamage(2, attackerIsPlayer: true, creatureDied: true, nowSeconds: 10.0);
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(1, 10.0));
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(2, 10.0));
+    Assert.Equal(GameplayEventKind.KillingBlow, classifier.RegisterDeath(1, 12.0));
+    Assert.Equal(GameplayEventKind.KillingBlow, classifier.RegisterDeath(2, 12.0));
+  }
 
-    Assert.Equal(GameplayEventKind.KillingBlow, a);
-    Assert.Equal(GameplayEventKind.KillingBlow, b);
+  [Fact]
+  public void FullSequence_FirstHitThenKillingBlow() {
+    var classifier = new GameplayEventClassifier();
+
+    Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(7, 10.0));
+    Assert.Equal(GameplayEventKind.None, classifier.RegisterHit(7, 10.5));  // more hits
+    Assert.Equal(GameplayEventKind.KillingBlow, classifier.RegisterDeath(7, 11.0));
   }
 }

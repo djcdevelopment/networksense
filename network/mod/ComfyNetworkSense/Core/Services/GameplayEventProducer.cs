@@ -96,14 +96,24 @@ public sealed class GameplayEventProducer : IDisposable {
     }
 
     int id = creature.GetInstanceID();
+    double now = Time.realtimeSinceStartup;
+    string creatureName = NormalizeCreatureName(creature);
+    string weapon = hit.m_skill.ToString();
+    long playerId = attacker is Player player ? player.GetPlayerID() : 0L;
+
     _lastHit[id] = new LastHit {
-      PlayerId = attacker is Player player ? player.GetPlayerID() : 0L,
-      Creature = NormalizeCreatureName(creature),
-      Weapon = hit.m_skill.ToString(),
+      PlayerId = playerId,
+      Creature = creatureName,
+      Weapon = weapon,
       Ranged = hit.m_ranged,
-      TimeSeconds = Time.realtimeSinceStartup,
+      TimeSeconds = now,
     };
     PruneLastHit();
+
+    // first_hit: the first player-attributed hit on this creature (combat engaged).
+    if (_classifier.RegisterHit(id, now) == GameplayEventKind.FirstHit) {
+      SendToServer(GameplayEventTypes.FirstHit, creatureName, creatureName, weapon, hit.m_ranged, playerId);
+    }
   }
 
   /// <summary>
@@ -129,12 +139,13 @@ public sealed class GameplayEventProducer : IDisposable {
       return;
     }
 
-    GameplayEventKind kind = _classifier.ClassifyCreatureDamage(id, attackerIsPlayer: true, creatureDied: true, now);
-    if (kind != GameplayEventKind.KillingBlow) {
+    if (_classifier.RegisterDeath(id, now) != GameplayEventKind.KillingBlow) {
       return;
     }
 
-    SendToServer(GameplayEventTypes.KillingBlow, hit.Creature, hit.Weapon, hit.Ranged, hit.PlayerId);
+    // The kill, plus a weapon-usage event (detail = the weapon skill) for the alpha weapon stream.
+    SendToServer(GameplayEventTypes.KillingBlow, hit.Creature, hit.Creature, hit.Weapon, hit.Ranged, hit.PlayerId);
+    SendToServer(GameplayEventTypes.WeaponUsed, hit.Weapon, hit.Creature, hit.Weapon, hit.Ranged, hit.PlayerId);
   }
 
   void PruneLastHit() {
@@ -156,7 +167,7 @@ public sealed class GameplayEventProducer : IDisposable {
   }
 
   /// <summary>Relay one gameplay event to the server via the routed RPC (client→server).</summary>
-  void SendToServer(string eventType, string creature, string weapon, bool ranged, long playerId) {
+  void SendToServer(string eventType, string detail, string creature, string weapon, bool ranged, long playerId) {
     ZRoutedRpc rpc = ZRoutedRpc.instance;
     if (rpc == null) {
       return;
@@ -164,6 +175,7 @@ public sealed class GameplayEventProducer : IDisposable {
 
     ZPackage package = new();
     package.Write(eventType);
+    package.Write(detail ?? string.Empty);
     package.Write(creature ?? string.Empty);
     package.Write(weapon ?? string.Empty);
     package.Write(ranged);
@@ -175,7 +187,7 @@ public sealed class GameplayEventProducer : IDisposable {
     // kill is handled locally the same way. (GetServerPeerID is not a public ZRoutedRpc member.)
     rpc.InvokeRoutedRPC(0L, GameplayEventRpc, new object[] { package });
     _sent++;
-    ComfyNetworkSense.LogInfo("[gp] sent " + eventType + " creature=" + creature + " -> server");
+    ComfyNetworkSense.LogInfo("[gp] sent " + eventType + " detail=" + detail + " -> server");
   }
 
   /// <summary>
@@ -195,28 +207,29 @@ public sealed class GameplayEventProducer : IDisposable {
       }
 
       string eventType = package.ReadString();
+      string detail = package.ReadString();
       string creature = package.ReadString();
       string weapon = package.ReadString();
       bool ranged = package.ReadBool();
       long playerId = package.ReadLong();
 
       producer._received++;
-      ComfyNetworkSense.LogInfo("[gp] server received " + eventType + " creature=" + creature
+      ComfyNetworkSense.LogInfo("[gp] server received " + eventType + " detail=" + detail
           + " player=" + playerId + " from peer=" + sender);
-      producer.PostToGateway(eventType, creature, weapon, ranged, playerId);
+      producer.PostToGateway(eventType, detail, creature, weapon, ranged, playerId);
     } catch {
       // Telemetry is observational; never let a malformed relay disturb the server.
     }
   }
 
-  void PostToGateway(string eventType, string creature, string weapon, bool ranged, long playerId) {
+  void PostToGateway(string eventType, string detail, string creature, string weapon, bool ranged, long playerId) {
     Dictionary<string, object> body = new() {
         ["event_type"] = eventType,
         ["occurred_at_utc"] = DateTime.UtcNow.ToString("o"),
         ["world_id"] = "valheim-era16",
         ["region_id"] = null,
         ["actor_id"] = playerId == 0L ? null : playerId.ToString(),
-        ["detail"] = creature,
+        ["detail"] = detail,
         ["payload"] = new Dictionary<string, object> {
             ["creature"] = creature,
             ["weapon"] = weapon,
