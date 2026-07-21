@@ -29,6 +29,9 @@ public static class PluginConfig {
   public static ConfigEntry<float> PortalConnectionCacheLogIntervalSeconds { get; private set; }
   public static ConfigEntry<bool> SpawnerConnectionCacheEnabled { get; private set; }
   public static ConfigEntry<bool> RouteGodFlySafeguard { get; private set; }
+  public static ConfigEntry<bool> AutoPortOnJoinEnabled { get; private set; }
+  public static ConfigEntry<float> AutoPortDelaySeconds { get; private set; }
+  public static ConfigEntry<float> AutoPortHeightMeters { get; private set; }
   public static ConfigEntry<string> LumberjacksGatewayUrl { get; private set; }
   public static ConfigEntry<string> LumberjacksCutoverMode { get; private set; }
   public static ConfigEntry<string> LumberjacksEnrollmentManifestId { get; private set; }
@@ -308,6 +311,34 @@ public static class PluginConfig {
             "routeGodFlySafeguard",
             true,
             "Before any teleport route or rehearsal walk starts, enable god mode + debug-fly on the local player so post-teleport falls cannot kill the character mid-walk. Calls the Player API directly rather than the 'god'/'fly' console commands, which are cheat-gated (IsCheatsEnabled() returns ZNet.IsServer(), false on a client joined to a dedicated server) and would be rejected client-side. No-op headless.");
+
+    AutoPortOnJoinEnabled =
+        config.Bind(
+            "Automation",
+            "autoPortOnJoinEnabled",
+            false,
+            "CLIENT opt-in test harness: when true, on joining a server this client waits "
+            + "autoPortDelaySeconds, then teleports itself to the world's densest ZDO region (the "
+            + "server computes it and pushes the coordinate), with god + debug-fly enabled, "
+            + "autoPortHeightMeters off the ground. Replaces the removed swarm-harness auto-port. "
+            + "OFF by default and per-client, so it only ever moves the operator who opted in — a "
+            + "real joining player with the default config is never teleported. No-op headless.");
+
+    AutoPortDelaySeconds =
+        config.Bind(
+            "Automation",
+            "autoPortDelaySeconds",
+            20.0f,
+            "Seconds after join before the auto-port fires (autoPortOnJoinEnabled). Gives the world "
+            + "and local player time to finish loading so the teleport lands cleanly.");
+
+    AutoPortHeightMeters =
+        config.Bind(
+            "Automation",
+            "autoPortHeightMeters",
+            40.0f,
+            "Height in meters above the densest region's ground the auto-port drops you at "
+            + "(autoPortOnJoinEnabled) — airborne with debug-fly so you don't land stuck in trees/builds.");
 
     LumberjacksGatewayUrl =
         config.Bind(

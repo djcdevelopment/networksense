@@ -58,6 +58,13 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   float _nextPrimaryRedirectStartAt;
   string _lastPrimaryRedirectStartMessage = string.Empty;
 
+  // Auto-port test harness (autoPortOnJoinEnabled). Server-side: push the densest-region coordinate
+  // to each newly-joined peer once. Client-side: HandleAutoPort receives it and, if opted in, runs
+  // the delayed god/fly + teleport coroutine.
+  public const string AutoPortRpc = "ComfyNetworkSense_AutoPort";
+  ZRoutedRpc _autoPortRegisteredRpc;
+  readonly System.Collections.Generic.HashSet<long> _autoPortPushedPeers = new();
+
   enum ShadowRouteMovementKind {
     Stationary,
     Circle,
@@ -171,6 +178,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     float now = Time.unscaledTime;
     _zdoRedirectRunner?.MaintainPrimaryWindow(now);
     TryEnsurePrimaryRedirect(now);
+    TickAutoPort(now);
     _zdoAuthoritativeConsumerRunner?.Update(Time.unscaledTime);
     using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("ComfyNetworkSense.Update");
     NetworkSensePerfProbe.Active?.UpdateFrame(deltaTime);
@@ -238,6 +246,95 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       LogWarning("ZDO primary redirect remains fail-safe native: " + message);
       _lastPrimaryRedirectStartMessage = message;
     }
+  }
+
+  // Auto-port harness: register the RPC handler once ZRoutedRpc is up, then (server only) push the
+  // densest-ZDO coordinate to each peer exactly once. The client acts on it in HandleAutoPort, gated
+  // on its own autoPortOnJoinEnabled — so only an opted-in operator is ever moved. The density scan
+  // is cached (AutoPortDensity), so a join costs at most one scan every few minutes.
+  void TickAutoPort(float now) {
+    ZRoutedRpc rpc = ZRoutedRpc.instance;
+    if (rpc == null) {
+      return;
+    }
+    if (_autoPortRegisteredRpc != rpc) {
+      rpc.Register(AutoPortRpc, new Action<long, ZPackage>(HandleAutoPort));
+      _autoPortRegisteredRpc = rpc;
+    }
+
+    ZNet znet = ZNet.instance;
+    if (znet == null || !znet.IsServer()) {
+      return;
+    }
+    List<ZNetPeer> peers = znet.GetPeers();
+    if (peers == null) {
+      return;
+    }
+
+    _autoPortPushedPeers.RemoveWhere(uid => !peers.Exists(p => p != null && p.m_uid == uid));
+    foreach (ZNetPeer peer in peers) {
+      if (peer == null || _autoPortPushedPeers.Contains(peer.m_uid)) {
+        continue;
+      }
+      _autoPortPushedPeers.Add(peer.m_uid);
+      if (!AutoPortDensity.TryDensestCenter(now, out Vector3 center, out int count)) {
+        continue;
+      }
+      ZPackage package = new();
+      package.Write(center.x);
+      package.Write(center.y);
+      package.Write(center.z);
+      rpc.InvokeRoutedRPC(peer.m_uid, AutoPortRpc, new object[] { package });
+      _coordinator?.RecordDevMarker(
+          $"autoport push peer={peer.m_uid} densest=({center.x:0},{center.y:0},{center.z:0}) zdos={count}");
+    }
+  }
+
+  // Client receipt of the densest coordinate. Opt-in only; kicks the delayed god/fly + teleport.
+  public static void HandleAutoPort(long sender, ZPackage package) {
+    if (!PluginConfig.AutoPortOnJoinEnabled.Value || package == null || Instance == null) {
+      return;
+    }
+    Vector3 center = new(package.ReadSingle(), package.ReadSingle(), package.ReadSingle());
+    Instance.StartCoroutine(Instance.AutoPortCoroutine(center));
+  }
+
+  IEnumerator AutoPortCoroutine(Vector3 densestCenter) {
+    yield return new WaitForSeconds(Mathf.Max(0.0f, PluginConfig.AutoPortDelaySeconds.Value));
+
+    // The join may still be settling; wait (bounded) for the local player before teleporting.
+    float waited = 0.0f;
+    while (Player.m_localPlayer == null && waited < 30.0f) {
+      waited += 0.5f;
+      yield return new WaitForSeconds(0.5f);
+    }
+    Player player = Player.m_localPlayer;
+    if (player == null) {
+      LogWarning("autoport: no local player after wait; skipping.");
+      yield break;
+    }
+
+    try {
+      if (!player.InGodMode()) {
+        player.SetGodMode(true);
+      }
+      if (!player.InDebugFlyMode()) {
+        player.ToggleDebugFly();
+      }
+    } catch (Exception exception) {
+      LogWarning($"autoport god/fly failed: {exception.Message}");
+    }
+
+    Vector3 target = new(
+        densestCenter.x,
+        densestCenter.y + PluginConfig.AutoPortHeightMeters.Value,
+        densestCenter.z);
+    bool moved = TryTeleport(player, target);
+    string message =
+        $"autoport {(moved ? "->" : "FAILED ->")} ({target.x:0},{target.y:0},{target.z:0}) god={player.InGodMode()} fly={player.InDebugFlyMode()}";
+    _coordinator?.RecordDevMarker(message);
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+    LogInfo(message);
   }
 
   void OnGUI() {
