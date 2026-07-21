@@ -64,6 +64,10 @@ public static class PluginConfig {
   public static ConfigEntry<float> ZdoRedirectActiveSeconds { get; private set; }
   public static ConfigEntry<int> ZdoRedirectMaxPriorityRank { get; private set; }
   public static ConfigEntry<string> ZdoLandmarkReach { get; private set; }
+  public static ConfigEntry<bool> ZdoBandShapingEnabled { get; private set; }
+  public static ConfigEntry<float> ZdoInnerRadiusMeters { get; private set; }
+  public static ConfigEntry<float> ZdoOuterRadiusMeters { get; private set; }
+  public static ConfigEntry<float> ZdoThinHz { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderEnabled { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderStrictMode { get; private set; }
   public static ConfigEntry<string> HandshakeResponderEndpoint { get; private set; }
@@ -562,6 +566,47 @@ public static class PluginConfig {
             + "(rank gate alone decides). Names matched by stable hash, same as zdoRedirectPrefabs; "
             + "entries with a missing or non-positive reach are ignored. A landmark is static, so this "
             + "adds no per-tick datagram cost — it only widens what redirect admits, once, at arrival.");
+
+    ZdoBandShapingEnabled =
+        config.Bind(
+            "Netcode",
+            "zdoBandShapingEnabled",
+            false,
+            "Master switch for distance-band AoI rate-shaping of the ZDO redirect (aoi-baseline-"
+            + "20260721). OFF (default) = today's behaviour: every admitted ZDO is redirected on every "
+            + "sync pass. ON = shape by the observing peer's distance: near (0..inner) full rate, mid "
+            + "(inner..outer) thinned to zdoThinHz, far (>outer) dropped, landmarks (zdoLandmarkReach) "
+            + "always emitted. Hot-reloadable — flip it off to revert an armed redirect to 1:1 live.");
+
+    ZdoInnerRadiusMeters =
+        config.Bind(
+            "Netcode",
+            "zdoInnerRadiusMeters",
+            30.0f,
+            "Inner band edge in meters (zdoBandShapingEnabled). Objects at or within this distance of "
+            + "the observing peer are redirected every pass — where the player actually interacts. The "
+            + "baseline showed the full-rate band is the whole cost, and area goes as r², so ~30m "
+            + "removes most of the objects a 50m band carried.");
+
+    ZdoOuterRadiusMeters =
+        config.Bind(
+            "Netcode",
+            "zdoOuterRadiusMeters",
+            64.0f,
+            "Outer band edge in meters (zdoBandShapingEnabled). Objects beyond this are DROPPED (not "
+            + "emitted, re-evaluated as the peer moves). Defaults to 64 = Valheim's zone size "
+            + "(nearbyRadiusMeters/buildScanRadiusMeters), so a dropped object is outside the loaded, "
+            + "active zone — both systems agree nothing is needed there.");
+
+    ZdoThinHz =
+        config.Bind(
+            "Netcode",
+            "zdoThinHz",
+            5.0f,
+            "Mid-band (inner..outer) emit rate in Hz (zdoBandShapingEnabled). The mid band is thinned "
+            + "to at most this many redirects/second per (peer, object) — 20Hz→5Hz takes most of the "
+            + "bandwidth saving with none of the staleness risk of dropping, since the object is still "
+            + "inside the active zone. <=0 disables thinning (mid emits every pass).");
 
     HandshakeResponderEnabled =
         config.Bind(

@@ -104,6 +104,15 @@ public sealed class ZdoRedirectRunner : IDisposable {
   // time when the observer is within its reach even if its rank exceeds the max — the parallel
   // reliable-lane exemption in ZdoIntegrationContract.Admits. Static, so it adds no per-tick cost.
   Dictionary<int, float> _landmarkReach;
+
+  // Mid-band thinning state: (recipient host, zdo uid) -> last emit Time.time. Consulted by
+  // ZdoBandPolicy to hold a mid-band ZDO until zdoThinHz elapses. Touched only from Process (server
+  // main thread, single-threaded per CreateSyncList pass), so no lock. Bounded by a coarse clear at
+  // LastEmitMaxEntries rather than a per-peer disconnect prune — that finer cleanup is a v.5 item;
+  // a clear only costs one extra emit per mid-band object. Cleared on arm.
+  readonly Dictionary<string, float> _lastEmit = new();
+  const int LastEmitMaxEntries = 50000;
+
   string _windowId = string.Empty;
   string _endpoint = string.Empty;
   string _sourceInstance = string.Empty;
@@ -112,6 +121,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
   long _suppressed;
   long _importanceAllowed;
   long _importanceRejected;
+  long _bandDropped;   // far-band ZDOs suppressed from native but not emitted (zdoBandShaping)
+  long _bandHeld;      // mid-band ZDOs held this pass by the thin rate (increment 2)
   long _ackFailures;
   long _postedOk;
   long _postFailedBatches;
@@ -236,6 +247,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
       _suppressed = 0;
       _importanceAllowed = 0;
       _importanceRejected = 0;
+      _bandDropped = 0;
+      _bandHeld = 0;
       _ackFailures = 0;
       _postedOk = 0;
       _postFailedBatches = 0;
@@ -244,6 +257,7 @@ public sealed class ZdoRedirectRunner : IDisposable {
       _rowsWritten = 0;
       _capped = false;
       _priorityDescriptors.Clear();
+      _lastEmit.Clear();
     }
 
     _active = this;
@@ -329,6 +343,10 @@ public sealed class ZdoRedirectRunner : IDisposable {
       return;
     }
 
+    // The observing peer's recipient identity (SteamID host) — the mid-band thin clock is keyed on
+    // (recipient, zdo uid). Computed once per pass, only when band-shaping is armed.
+    string recipient = PluginConfig.ZdoBandShapingEnabled.Value ? RecipientFor(peer) : null;
+
     // CreateSyncList has already passed through Valheim's ServerSortSendZDOS priority
     // ordering. Remove from the source list backwards for index safety, but redirect in
     // the original forward order; the old loop emitted the lowest-priority tail first.
@@ -355,11 +373,47 @@ public sealed class ZdoRedirectRunner : IDisposable {
 
       lock (_lock) _importanceAllowed++;
       RecordImportanceDecision(candidate, "importance_allowed");
+
+      // Every path below removes the ZDO from toSync (selectedIndexes) so native never sends it.
+      // Band-shaping then splits EMIT (redirect to the gateway) from SUPPRESS-only (ack, no emit).
+      // Suppress-only must NOT touch the gate seq/_suppressed counters — those count EMITTED
+      // redirects and the gate reads gateway distinct_seq against them, so a suppressed-but-unemitted
+      // ZDO that bumped seq would read as false loss.
       selectedIndexes.Add(i);
-      // Emit the matching redirect record before classifying the rest of a potentially enormous
-      // initial sync list. Otherwise candidate/allow rows can fill the bounded telemetry queue
-      // before any submission row is observable, even though the wire queue receives the item.
-      Redirect(peer, candidate);
+      if (!PluginConfig.ZdoBandShapingEnabled.Value) {
+        // Emit the matching redirect record before classifying the rest of a potentially enormous
+        // initial sync list, so candidate/allow rows don't fill the bounded telemetry queue before
+        // any submission row is observable.
+        Redirect(peer, candidate);
+        continue;
+      }
+
+      // Mid-band thinning consults the per-(recipient, uid) last-emit clock; near always emits, far
+      // drops, landmarks always emit (ZdoBandPolicy). A first sighting has no entry (-1) and emits.
+      string emitKey = recipient + "|" + zdo.m_uid.ToString();
+      float lastEmit = _lastEmit.TryGetValue(emitKey, out float t) ? t : -1.0f;
+      ZdoBandAction band = ZdoBandPolicy.Classify(
+          candidate.DistanceMeters,
+          PluginConfig.ZdoInnerRadiusMeters.Value,
+          PluginConfig.ZdoOuterRadiusMeters.Value,
+          candidate.LandmarkReachMeters,
+          Time.time,
+          lastEmit,
+          ThinIntervalSeconds());
+      if (ZdoBandPolicy.Emits(band)) {
+        Redirect(peer, candidate);
+        if (band == ZdoBandAction.EmitThinned) {
+          // Reset the mid-band clock only on an actual thinned emit (near/landmark don't gate on it).
+          if (_lastEmit.Count >= LastEmitMaxEntries) _lastEmit.Clear();
+          _lastEmit[emitKey] = Time.time;
+        }
+      } else {
+        SuppressNative(peer, zdo);   // Drop / HoldThinned: remove+ack, do NOT emit
+        lock (_lock) {
+          if (band == ZdoBandAction.Drop) _bandDropped++; else _bandHeld++;
+        }
+      }
+      RecordBandDecision(candidate, band);
     }
 
     for (int i = selectedIndexes.Count - 1; i >= 0; i--)
@@ -391,13 +445,13 @@ public sealed class ZdoRedirectRunner : IDisposable {
     }
   }
 
-  void Redirect(object peer, ClassifiedZdo candidate) {
-    ZDO zdo = candidate.Zdo;
-    // Replicate the native ack (ZDOMan:767+780) so vanilla re-offers only on revision change.
-    // Note: native would only ack items that fit the tick's byte budget; we ack at selection
-    // time, which is the countable "redirected at the moment native would have considered it"
-    // semantic the gate is defined against.
-    bool acked = true;
+  // The SUPPRESS half of a redirect, split out from Redirect so band-shaping can suppress a far or
+  // held ZDO from Valheim's native send WITHOUT emitting it to the gateway. Replicates the native ack
+  // (ZDOMan:767+780) — writes peer.m_zdos[uid] and drops it from m_forceSend — so vanilla re-offers
+  // this ZDO only when its revision changes, never as a per-tick storm. Removing a ZDO from toSync
+  // WITHOUT this ack is the duplicate-storm failure mode, so every band action that removes from
+  // toSync MUST call this. Returns whether the ack succeeded (false increments _ackFailures).
+  bool SuppressNative(object peer, ZDO zdo) {
     try {
       object infoBox = PeerInfoCtor.Invoke(
           new object[] { zdo.DataRevision, zdo.OwnerRevision, Time.time });
@@ -405,13 +459,23 @@ public sealed class ZdoRedirectRunner : IDisposable {
       ZdosSetItem.Invoke(zdosDictionary, new[] { (object) zdo.m_uid, infoBox });
       HashSet<ZDOID> forceSend = (HashSet<ZDOID>) ForceSendField.GetValue(peer);
       forceSend.Remove(zdo.m_uid);
+      return true;
     } catch (Exception exception) {
-      acked = false;
       lock (_lock) {
         _ackFailures++;
         _lastError = "ack: " + exception.GetType().Name + ": " + exception.Message;
       }
+      return false;
     }
+  }
+
+  void Redirect(object peer, ClassifiedZdo candidate) {
+    ZDO zdo = candidate.Zdo;
+    // Replicate the native ack (ZDOMan:767+780) so vanilla re-offers only on revision change.
+    // Note: native would only ack items that fit the tick's byte budget; we ack at selection
+    // time, which is the countable "redirected at the moment native would have considered it"
+    // semantic the gate is defined against.
+    bool acked = SuppressNative(peer, zdo);
 
     byte[] body;
     try {
@@ -535,6 +599,42 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["landmark_reach_meters"] = Math.Round(candidate.LandmarkReachMeters, 3),
         ["max_priority_rank"] = PluginConfig.ZdoRedirectMaxPriorityRank.Value,
         ["network_eligible"] = eventType == "importance_allowed",
+        ["window_id"] = _windowId,
+        ["mod_release"] = ComfyNetworkSense.ReleaseId
+    });
+  }
+
+  // Mid-band emit interval in seconds from the configured Hz; <=0 disables thinning (mid emits every
+  // pass). Increment 2 feeds this to ZdoBandPolicy.Classify alongside the per-(peer,uid) last-emit.
+  static float ThinIntervalSeconds() {
+    float hz = PluginConfig.ZdoThinHz.Value;
+    return hz > 0.0f ? 1.0f / hz : 0.0f;
+  }
+
+  // One row per band decision on an ADMITTED ZDO, so redirect-send.jsonl shows the AoI shaping
+  // directly (valheim_tail_zdo_redirect). network_eligible mirrors whether the band actually emitted.
+  void RecordBandDecision(ClassifiedZdo candidate, ZdoBandAction band) {
+    TelemetryCoordinator coordinator;
+    lock (_lock) {
+      if (_rowsWritten >= _maxRows) {
+        _capped = true;
+        return;
+      }
+      _rowsWritten++;
+      coordinator = _coordinator;
+    }
+    coordinator?.RecordZdoRedirect(new Dictionary<string, object> {
+        ["event"] = "band_decision",
+        ["band"] = band.ToString(),
+        ["correlation_id"] = candidate.CorrelationId,
+        ["uid"] = candidate.Zdo.m_uid.ToString(),
+        ["prefab"] = SafePrefab(candidate.Zdo),
+        ["importance_class"] = candidate.PriorityTier,
+        ["distance_meters"] = Math.Round(candidate.DistanceMeters, 3),
+        ["landmark_reach_meters"] = Math.Round(candidate.LandmarkReachMeters, 3),
+        ["inner_radius"] = PluginConfig.ZdoInnerRadiusMeters.Value,
+        ["outer_radius"] = PluginConfig.ZdoOuterRadiusMeters.Value,
+        ["network_eligible"] = ZdoBandPolicy.Emits(band),
         ["window_id"] = _windowId,
         ["mod_release"] = ComfyNetworkSense.ReleaseId
     });
@@ -829,6 +929,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["suppressed"] = _suppressed,
         ["importance_allowed"] = _importanceAllowed,
         ["importance_rejected"] = _importanceRejected,
+        ["band_dropped"] = _bandDropped,
+        ["band_held"] = _bandHeld,
         ["max_priority_rank"] = PluginConfig.ZdoRedirectMaxPriorityRank.Value,
         ["ack_failures"] = _ackFailures,
         ["posted_ok"] = _postedOk,
