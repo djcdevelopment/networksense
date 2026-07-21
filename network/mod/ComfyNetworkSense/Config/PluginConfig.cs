@@ -568,8 +568,10 @@ public static class PluginConfig {
             + "the Lumberjacks gateway instead. Writes no persisted ZDO state (send path is "
             + "runtime bookkeeping only). Non-tagged ZDOs sync normally (the negative control). "
             + "REFUSES to arm with an empty prefab allowlist. off = vanilla behaviour, zero cost. "
-            + "Intended for private lab runs on the dedicated server; coupled to the "
-            + "netcode-probe window.");
+            + "THIS IS THE LIVE SERVING PATH in lumberjacks-primary mode, not a lab experiment - the "
+            + "description said 'intended for private lab runs' long after it began carrying "
+            + "production traffic. It still defaults OFF deliberately: off IS the standing rollback, "
+            + "so a mod dropped into any server changes nothing until armed.");
 
     ZdoRedirectPrefabs =
         config.Bind(
@@ -603,8 +605,12 @@ public static class PluginConfig {
         config.Bind(
             "Netcode",
             "zdoRedirectActiveSeconds",
-            90.0f,
-            "Suppression sub-window in seconds. Set SHORTER than the netcode-probe window and the "
+            0.0f,
+            "0 = no cap, which is the production posture (infra/gcp/p7/README.md pins it). Defaulted "
+            + "to 90 until 2026-07-21, which meant a VM configured from defaults would silently "
+            + "auto-disarm the redirect 90s into a session and resume native sync - the safe value "
+            + "lived only in a runbook. The finite window is now opt-in. "
+            + "Suppression sub-window in seconds. Set SHORTER than the netcode-probe window and the "
             + "redirect auto-disarms mid-capture, so the still-running probe records native sends "
             + "of the tagged prefab RESUMING — the in-window rollback rehearsal (P4 step 11), "
             + "hands-free. 0 = suppress for the whole probe window.");
@@ -735,9 +741,11 @@ public static class PluginConfig {
         config.Bind(
             "Netcode",
             "handshakeResponderActiveSeconds",
-            90.0f,
-            "Handshake responder sub-window seconds; shorter than the probe window gives an "
-            + "in-window rollback rehearsal. 0 runs until the probe stops.");
+            0.0f,
+            "0 runs until the probe stops - no cap, the production posture. Defaulted to 90 until "
+            + "2026-07-21, which meant new players joining after the 90s mark hit native Valheim "
+            + "admission instead of the Lumberjacks responder. A shorter window still gives the "
+            + "in-window rollback rehearsal, but it is now opt-in rather than the default.");
 
     WriteTelemetryLogs =
         config.Bind(
