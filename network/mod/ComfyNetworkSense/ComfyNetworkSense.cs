@@ -227,7 +227,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   }
 
   // Config-driven auto-start for the rung I1 netcode probe. Unlike the auto-rehearsal, this
-  // does NOT wait for a local player Ã¢â‚¬â€ it fires as soon as a network peer is connected, so it
+  // does NOT wait for a local player — it fires as soon as a network peer is connected, so it
   // works headless on the dedicated server as well as on clients. Intended for private lab
   // runs (e.g. run-autonomous-valheim-lab.ps1) where no console is available to type the
   // command. Observe-only, so it is safe to leave armed.
@@ -287,7 +287,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         }
 
         // P4/I3 ZDO redirect (behaviour-changing) is coupled to the same window: disarm in
-        // lockstep (it usually auto-disarmed already at zdoRedirectActiveSeconds Ã¢â‚¬â€ the in-window
+        // lockstep (it usually auto-disarmed already at zdoRedirectActiveSeconds — the in-window
         // rollback rehearsal).
         if (_zdoRedirectRunner != null && _zdoRedirectRunner.IsRunning) {
           if (string.Equals(TelemetryCoordinator.EffectiveCutoverMode(), "lumberjacks-primary",
@@ -341,7 +341,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     // P3/I2 ownership-churn observer, coupled to the probe capture window. Rollback-gated and
     // observe-only (server-side postfix on ZDO.SetOwner/SetOwnerInternal); off by default. Started
-    // BEFORE the pin so its prefix is registered first Ã¢â‚¬â€ a pin-blocked change then reads as a no-op
+    // BEFORE the pin so its prefix is registered first — a pin-blocked change then reads as a no-op
     // to the observer (correct) rather than a spurious transition.
     if (PluginConfig.OwnershipObserveEnabled.Value && _ownershipObserveRunner != null) {
       string ownershipMessage = _ownershipObserveRunner.Start(_coordinator, maxDetailRows);
@@ -1327,7 +1327,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
   // Enable god mode + debug-fly on the local player before a teleport walk begins, so a fall after
   // any teleport can't kill the character mid-route (a death aborts the walk and drags Derek back
-  // into the loop Ã¢â‚¬â€ the exact KVM regression the hands-free rig exists to prevent). We call the
+  // into the loop — the exact KVM regression the hands-free rig exists to prevent). We call the
   // Player API directly rather than issuing the 'god'/'fly' console commands: those are cheat-gated
   // (Terminal.IsCheatsEnabled() returns ZNet.IsServer(), which is false on a client joined to the
   // dedicated am4 server) and 'fly' is onlyServer, so the console strings would be rejected
