@@ -36,7 +36,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m4-integration-20260719-r1";
+  public const string ReleaseId = "m5-recipients-20260720-r1";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -245,7 +245,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   }
 
   // Config-driven auto-start for the rung I1 netcode probe. Unlike the auto-rehearsal, this
-  // does NOT wait for a local player — it fires as soon as a network peer is connected, so it
+  // does NOT wait for a local player Ã¢â‚¬â€ it fires as soon as a network peer is connected, so it
   // works headless on the dedicated server as well as on clients. Intended for private lab
   // runs (e.g. run-autonomous-valheim-lab.ps1) where no console is available to type the
   // command. Observe-only, so it is safe to leave armed.
@@ -305,7 +305,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         }
 
         // P4/I3 ZDO redirect (behaviour-changing) is coupled to the same window: disarm in
-        // lockstep (it usually auto-disarmed already at zdoRedirectActiveSeconds — the in-window
+        // lockstep (it usually auto-disarmed already at zdoRedirectActiveSeconds Ã¢â‚¬â€ the in-window
         // rollback rehearsal).
         if (_zdoRedirectRunner != null && _zdoRedirectRunner.IsRunning) {
           if (string.Equals(TelemetryCoordinator.EffectiveCutoverMode(), "lumberjacks-primary",
@@ -360,7 +360,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     // P3/I2 ownership-churn observer, coupled to the probe capture window. Rollback-gated and
     // observe-only (server-side postfix on ZDO.SetOwner/SetOwnerInternal); off by default. Started
-    // BEFORE the pin so its prefix is registered first — a pin-blocked change then reads as a no-op
+    // BEFORE the pin so its prefix is registered first Ã¢â‚¬â€ a pin-blocked change then reads as a no-op
     // to the observer (correct) rather than a spurious transition.
     if (PluginConfig.OwnershipObserveEnabled.Value && _ownershipObserveRunner != null) {
       string ownershipMessage = _ownershipObserveRunner.Start(_coordinator, maxDetailRows);
@@ -1236,7 +1236,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   }
 
   // P1 step 7: optionally couple the auto-rehearsal route walk to the netcode probe auto-start,
-  // so captured ZDO traffic exists without a human hand-walking the route. Client-side only —
+  // so captured ZDO traffic exists without a human hand-walking the route. Client-side only Ã¢â‚¬â€
   // RunTeleportRoute needs a local player, so this is skipped headless (the dedicated server keeps
   // the probe running solo). Reuses the same TryStartRehearsal kickoff and _autoRehearsalStarted
   // run-once guard as TryStartAutoRehearsal. Off by default.
@@ -1435,7 +1435,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
   // Enable god mode + debug-fly on the local player before a teleport walk begins, so a fall after
   // any teleport can't kill the character mid-route (a death aborts the walk and drags Derek back
-  // into the loop — the exact KVM regression the hands-free rig exists to prevent). We call the
+  // into the loop Ã¢â‚¬â€ the exact KVM regression the hands-free rig exists to prevent). We call the
   // Player API directly rather than issuing the 'god'/'fly' console commands: those are cheat-gated
   // (Terminal.IsCheatsEnabled() returns ZNet.IsServer(), which is false on a client joined to the
   // dedicated am4 server) and 'fly' is onlyServer, so the console strings would be rejected
