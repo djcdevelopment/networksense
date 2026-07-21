@@ -2,8 +2,10 @@ namespace ComfyNetworkSense;
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Text;
 using System.Threading.Tasks;
 
 using BepInEx;
@@ -621,28 +623,34 @@ public sealed class TelemetryCoordinator : IDisposable {
     _ravenState.LastError = string.Empty;
     _ravenState.LastUpdatedUtc = DateTime.UtcNow.ToString("o");
 
-    _ = Task.Run(async () => {
+    _ = Task.Run(() => {
       string responseText = string.Empty;
       string error = string.Empty;
 
       try {
-        HttpWebRequest request = (HttpWebRequest) WebRequest.Create("http://127.0.0.1:8720/valheim/apply-profile");
-        request.Method = "POST";
-        request.ContentType = "application/json";
-        request.Timeout = 5000;
-        request.ReadWriteTimeout = 5000;
-        request.Headers.Add("X-Comfy-Key", "valheim-mod-local");
+        // Raw-socket POST via the shared bounded helper (ADR 0003): WebRequest.Create throws under
+        // the server's stripped Mono. The X-Comfy-Key header is local plugin state, so the head is
+        // built here and only the socket + bounded read are shared — the caller-builds-head split the
+        // consumer runner uses. SendBounded throws on connect timeout, over-size, or too-slow body.
+        Uri uri = new("http://127.0.0.1:8720/valheim/apply-profile");
+        byte[] body = Encoding.UTF8.GetBytes($"{{\"profile\":\"{profile}\"}}");
+        string head = "POST " + uri.PathAndQuery + " HTTP/1.1\r\n"
+            + "Host: " + uri.Host + ":" + uri.Port.ToString(CultureInfo.InvariantCulture) + "\r\n"
+            + "Content-Type: application/json\r\n"
+            + "X-Comfy-Key: valheim-mod-local\r\n"
+            + "Content-Length: " + body.Length.ToString(CultureInfo.InvariantCulture) + "\r\n"
+            + "Connection: close\r\n\r\n";
+        byte[] headBytes = Encoding.ASCII.GetBytes(head);
 
-        string body = $"{{\"profile\":\"{profile}\"}}";
-        using (Stream requestStream = await request.GetRequestStreamAsync().ConfigureAwait(false)) {
-          using StreamWriter writer = new(requestStream);
-          await writer.WriteAsync(body).ConfigureAwait(false);
+        const int connectTimeoutMs = 5000, responseDeadlineMs = 5000, maxResponseBytes = 64 * 1024;
+        string raw = BoundedRawHttp.SendBounded(
+            uri, headBytes, body, connectTimeoutMs, responseDeadlineMs, maxResponseBytes);
+        if (!raw.StartsWith("HTTP/1.1 2", StringComparison.Ordinal)) {
+          throw new Exception(
+              "http status: " + (raw.Length == 0 ? "(no response)" : raw.Split('\n')[0].Trim()));
         }
-
-        using WebResponse response = await request.GetResponseAsync().ConfigureAwait(false);
-        using Stream stream = response.GetResponseStream();
-        using StreamReader reader = new(stream);
-        responseText = await reader.ReadToEndAsync().ConfigureAwait(false);
+        int split = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        responseText = split >= 0 ? raw.Substring(split + 4) : string.Empty;
       } catch (Exception exception) {
         error = $"{exception.GetType().Name}: {exception.Message}";
       }

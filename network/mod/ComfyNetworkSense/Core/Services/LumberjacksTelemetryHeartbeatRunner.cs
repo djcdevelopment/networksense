@@ -3,7 +3,6 @@ namespace ComfyNetworkSense;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -72,24 +71,15 @@ public sealed class LumberjacksTelemetryHeartbeatRunner : IDisposable {
         + (string.IsNullOrWhiteSpace(key) ? string.Empty : "X-Lumberjacks-Telemetry-Key: " + key + "\r\n")
         + "Connection: close\r\n\r\n";
 
-    using TcpClient client = new();
-    IAsyncResult connect = client.BeginConnect(uri.Host, uri.Port, null, null);
-    if (!connect.AsyncWaitHandle.WaitOne(5000)) {
-      throw new TimeoutException("connect timeout to " + uri.Host + ":" + uri.Port);
-    }
-    client.EndConnect(connect);
-    client.SendTimeout = 5000;
-    client.ReceiveTimeout = 5000;
-
-    using NetworkStream stream = client.GetStream();
     byte[] headerBytes = Encoding.ASCII.GetBytes(headers);
-    stream.Write(headerBytes, 0, headerBytes.Length);
-    stream.Write(body, 0, body.Length);
-    stream.Flush();
-
-    byte[] response = new byte[256];
-    int read = stream.Read(response, 0, response.Length);
-    string status = read > 0 ? Encoding.ASCII.GetString(response, 0, read).Split('\n')[0].Trim() : string.Empty;
+    // Socket + bounded read shared via BoundedRawHttp (ADR 0003) instead of a bespoke copy of it;
+    // the head above — with its credential header out of PluginConfig — stays here, the same
+    // caller-builds-head split the consumer and handshake runners use. SendBounded throws on connect
+    // timeout, an over-size body, or one slower than the deadline.
+    const int connectTimeoutMs = 5000, responseDeadlineMs = 5000, maxResponseBytes = 64 * 1024;
+    string raw = BoundedRawHttp.SendBounded(
+        uri, headerBytes, body, connectTimeoutMs, responseDeadlineMs, maxResponseBytes);
+    string status = raw.Length == 0 ? string.Empty : raw.Split('\n')[0].Trim();
     string[] parts = status.Split(' ');
     if (parts.Length < 2 || parts[1].Length == 0 || parts[1][0] != '2') {
       throw new Exception("http status: " + (status.Length == 0 ? "(no response)" : status));

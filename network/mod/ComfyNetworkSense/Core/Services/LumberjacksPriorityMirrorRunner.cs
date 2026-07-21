@@ -234,20 +234,15 @@ public sealed class LumberjacksPriorityMirrorRunner : IDisposable {
 
   void PostEvent(string eventLogUrl, Dictionary<string, object> eventPayload) {
     try {
-      HttpWebRequest request = (HttpWebRequest) WebRequest.Create(eventLogUrl + "/events");
-      request.Method = "POST";
-      request.ContentType = "application/json";
-      request.Timeout = 5000;
-      request.ReadWriteTimeout = 5000;
-
+      // Raw-socket POST via the shared bounded helper (ADR 0003): WebRequest.Create throws
+      // "URI prefix not recognized" under Valheim's stripped server Mono, so this could not run
+      // server-side. No auth header here, so PostForBody's default head suffices; it throws on
+      // connect timeout, a non-2xx status, or an over-size/too-slow body — the same failure surface
+      // GetResponse() gave this catch.
+      const int connectTimeoutMs = 5000, responseDeadlineMs = 5000, maxResponseBytes = 64 * 1024;
       string body = JsonLineSerializer.Serialize(eventPayload);
-      using (Stream requestStream = request.GetRequestStream()) {
-        using StreamWriter writer = new(requestStream);
-        writer.Write(body);
-      }
-
-      using WebResponse response = request.GetResponse();
-      _ = response;
+      _ = BoundedRawHttp.PostForBody(
+          eventLogUrl + "/events", body, connectTimeoutMs, responseDeadlineMs, maxResponseBytes);
       lock (_lock) {
         _postedOk++;
         _queuedPosts = Math.Max(0, _queuedPosts - 1);
