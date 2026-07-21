@@ -355,6 +355,18 @@ public sealed class TelemetryCoordinator : IDisposable {
     return message;
   }
 
+  public void RecordGameplayEvent(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId
+    };
+    _logWriter.Write("gameplay-events.jsonl", row);
+
+    string eventType = values.TryGetValue("event_type", out object value) ? Convert.ToString(value) : "unknown";
+    string detail = values.TryGetValue("detail", out object detailValue) ? Convert.ToString(detailValue) : string.Empty;
+    WriteEvent("gameplay_event", $"Gameplay {eventType}: {detail}");
+  }
+
   public void RecordLumberjacksBridgeProbe(IDictionary<string, object> values) {
     Dictionary<string, object> row = new(values) {
         ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),

@@ -51,6 +51,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
   NetcodeProbeRunner _netcodeProbeRunner;
   ZdoRedirectRunner _zdoRedirectRunner;
+  GameplayEventProducer _gameplayEventProducer;
   ZdoAuthoritativeConsumerRunner _zdoAuthoritativeConsumerRunner;
   HandshakeResponderRunner _handshakeResponderRunner;
   Harmony _harmony;
@@ -91,12 +92,14 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = new();
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
+    _gameplayEventProducer = new();
     _handshakeResponderRunner = new();
     _zdoAuthoritativeConsumerRunner = new();
     InitializeAuthoritativeConsumer();
 
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
+    GameplayEventPatches.Apply(_harmony);
     RegisterConsoleCommands();
 
     LogInfo("Telemetry scaffold ready.");
@@ -214,6 +217,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     // before any netcode-probe window) and stays armed until config-off + restart.
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.HandshakeResponderRunner.Update")) {
       _handshakeResponderRunner?.Update(deltaTime, _coordinator);
+    }
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.GameplayEventProducer.Update")) {
+      _gameplayEventProducer?.Update(deltaTime, _coordinator);
     }
 
   }
@@ -361,6 +368,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _netcodeProbeRunner = null;
     _zdoRedirectRunner?.Dispose();
     _zdoRedirectRunner = null;
+    _gameplayEventProducer?.Dispose();
+    _gameplayEventProducer = null;
     _handshakeResponderRunner?.Dispose();
     _handshakeResponderRunner = null;
     _coordinator?.Dispose();

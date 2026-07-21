@@ -67,6 +67,7 @@ public static class PluginConfig {
   public static ConfigEntry<float> ZdoRedirectActiveSeconds { get; private set; }
   public static ConfigEntry<int> ZdoRedirectMaxPriorityRank { get; private set; }
   public static ConfigEntry<string> ZdoLandmarkReach { get; private set; }
+  public static ConfigEntry<bool> GameplayEventProducerEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoBandShapingEnabled { get; private set; }
   public static ConfigEntry<float> ZdoInnerRadiusMeters { get; private set; }
   public static ConfigEntry<float> ZdoOuterRadiusMeters { get; private set; }
@@ -597,6 +598,17 @@ public static class PluginConfig {
             + "(rank gate alone decides). Names matched by stable hash, same as zdoRedirectPrefabs; "
             + "entries with a missing or non-positive reach are ignored. A landmark is static, so this "
             + "adds no per-tick datagram cost — it only widens what redirect admits, once, at arrival.");
+
+    GameplayEventProducerEnabled =
+        config.Bind(
+            "Gameplay",
+            "gameplayEventProducerEnabled",
+            false,
+            "Server-side gameplay-event telemetry (community-telemetry gameplay seam). OFF (default) "
+            + "= no combat hook emits; the Character.RPC_Damage postfix is a no-op and combat is "
+            + "byte-for-byte untouched. ON = observe creature killing blows (attributed to the acting "
+            + "player) and POST killing_blow events to the gateway (POST /valheim/events), which drives "
+            + "the public /api/v0/telemetry/events feed and the durable EventLog. Hot-reloadable.");
 
     ZdoBandShapingEnabled =
         config.Bind(
