@@ -86,7 +86,7 @@ Important areas:
 The gateway is separate from the mod and lives at:
 
 ```text
-C:\work\comfy\network\mcp
+C:\work\baseline\network\mcp
 ```
 
 It is intentionally a dev-only side channel. The mod uses simple localhost HTTP
@@ -105,12 +105,12 @@ Prerequisites:
 
 - Valheim installed with BepInEx.
 - .NET SDK capable of building `net48`.
-- Project root at `C:\work\comfy`.
+- Project root at `C:\work\baseline`.
 
 Build from the mod project:
 
 ```powershell
-cd C:\work\comfy\network\mod\ComfyNetworkSense
+cd C:\work\baseline\network\mod\ComfyNetworkSense
 dotnet build .\ComfyNetworkSense.csproj -c Release
 ```
 
@@ -134,7 +134,7 @@ Restart Valheim after each DLL rebuild.
 Start the local gateway:
 
 ```powershell
-C:\work\comfy\network\mcp\etc\start-comfy-gateway.cmd
+C:\work\baseline\network\mcp\etc\start-comfy-gateway.cmd
 ```
 
 Default endpoints:
@@ -162,15 +162,15 @@ Invoke-WebRequest http://127.0.0.1:8720/healthz -Headers @{ "X-Comfy-Key" = "val
 Build the plugin:
 
 ```powershell
-cd C:\work\comfy\network\mod\ComfyNetworkSense
+cd C:\work\baseline\network\mod\ComfyNetworkSense
 dotnet build .\ComfyNetworkSense.csproj -c Release
 ```
 
 Run MCP tests:
 
 ```powershell
-cd C:\work\comfy
-$env:PYTHONPATH = "C:\work\comfy\network\mcp"
+cd C:\work\baseline
+$env:PYTHONPATH = "C:\work\baseline\network\mcp"
 C:\work\commandcenter\fleet-worker-node\.venv-omen\Scripts\python.exe -m unittest discover -s network\mcp\tests
 ```
 
@@ -409,7 +409,7 @@ Useful HUD config keys:
 
 ### Raven/MCP Is Offline
 
-- Start `C:\work\comfy\network\mcp\etc\start-comfy-gateway.cmd`.
+- Start `C:\work\baseline\network\mcp\etc\start-comfy-gateway.cmd`.
 - Run `network_sense_mcp_status`.
 - Check `http://127.0.0.1:8720/healthz`.
 - Confirm the gateway is on port `8720`, not an older process on another port.
