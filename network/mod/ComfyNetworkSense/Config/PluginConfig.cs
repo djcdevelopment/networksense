@@ -68,6 +68,7 @@ public static class PluginConfig {
   public static ConfigEntry<int> ZdoRedirectMaxPriorityRank { get; private set; }
   public static ConfigEntry<string> ZdoLandmarkReach { get; private set; }
   public static ConfigEntry<bool> GameplayEventProducerEnabled { get; private set; }
+  public static ConfigEntry<bool> GameplayEventVerboseLogging { get; private set; }
   public static ConfigEntry<bool> ZdoBandShapingEnabled { get; private set; }
   public static ConfigEntry<float> ZdoInnerRadiusMeters { get; private set; }
   public static ConfigEntry<float> ZdoOuterRadiusMeters { get; private set; }
@@ -604,11 +605,23 @@ public static class PluginConfig {
             "Gameplay",
             "gameplayEventProducerEnabled",
             false,
-            "Server-side gameplay-event telemetry (community-telemetry gameplay seam). OFF (default) "
-            + "= no combat hook emits; the Character.RPC_Damage postfix is a no-op and combat is "
-            + "byte-for-byte untouched. ON = observe creature killing blows (attributed to the acting "
-            + "player) and POST killing_blow events to the gateway (POST /valheim/events), which drives "
-            + "the public /api/v0/telemetry/events feed and the durable EventLog. Hot-reloadable.");
+            "Client-side gameplay-event telemetry (community-telemetry gameplay seam). OFF (default) "
+            + "= no combat hook emits; the Character.Damage/OnDeath postfixes are no-ops and combat is "
+            + "byte-for-byte untouched. ON = the client (which owns the creature it fights) observes "
+            + "first hits and killing blows (attributed to the acting player) and relays them to the "
+            + "server over the ComfyNetworkSense_GameplayEvent routed RPC; the server POSTs first_hit / "
+            + "killing_blow / weapon_used to the gateway (POST /valheim/events), which drives the public "
+            + "/api/v0/telemetry/events feed and the durable EventLog. Hot-reloadable.");
+
+    GameplayEventVerboseLogging =
+        config.Bind(
+            "Gameplay",
+            "gameplayEventVerboseLogging",
+            false,
+            "Per-hit [gp] diagnostic logging for the gameplay-event seam. OFF (default) = only discrete "
+            + "lifecycle lines are logged (RPC registered, event sent, server received). ON = also log "
+            + "every damage hook and death the producer sees — a firehose during combat, useful only "
+            + "when debugging why an event did or didn't emit. Hot-reloadable.");
 
     ZdoBandShapingEnabled =
         config.Bind(

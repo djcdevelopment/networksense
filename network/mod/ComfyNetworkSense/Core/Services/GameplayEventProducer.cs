@@ -19,7 +19,9 @@ using UnityEngine;
 ///
 /// Gated by <see cref="PluginConfig.GameplayEventProducerEnabled"/> (default false): off ⇒ the hook
 /// no-ops (<see cref="Active"/> null) and combat is byte-for-byte untouched.
-/// DIAGNOSTIC logging (the [gp] lines) stays until the client→RPC→server path is proven end-to-end.
+/// Discrete lifecycle lines (RPC registered / event sent / server received) log at Info; the per-hit
+/// and per-death [gp] firehose is gated behind <see cref="PluginConfig.GameplayEventVerboseLogging"/>
+/// (default false) — flip it on only when debugging why an event did or didn't emit.
 /// </summary>
 public sealed class GameplayEventProducer : IDisposable {
   public const string GameplayEventRpc = "ComfyNetworkSense_GameplayEvent";
@@ -83,11 +85,13 @@ public sealed class GameplayEventProducer : IDisposable {
     bool targetIsPlayer = creature.IsPlayer();
     bool died = creature.IsDead();
 
-    // DIAGNOSTIC: every damage this hook sees.
-    ComfyNetworkSense.LogInfo("[gp] " + source + " dmg target=" + creature.m_name
-        + " targetIsPlayer=" + targetIsPlayer
-        + " attacker=" + (attacker == null ? "null" : attacker.m_name)
-        + " attackerIsPlayer=" + attackerIsPlayer + " died=" + died);
+    // DIAGNOSTIC (verbose only): every damage this hook sees — a firehose during combat.
+    if (PluginConfig.GameplayEventVerboseLogging.Value) {
+      ComfyNetworkSense.LogInfo("[gp] " + source + " dmg target=" + creature.m_name
+          + " targetIsPlayer=" + targetIsPlayer
+          + " attacker=" + (attacker == null ? "null" : attacker.m_name)
+          + " attackerIsPlayer=" + attackerIsPlayer + " died=" + died);
+    }
 
     // IsDead() is not yet true at a Damage/RPC_Damage postfix, so we do NOT decide the kill here.
     // Instead remember the last player-attributed hit; the killing blow is emitted from OnDeath.
@@ -128,7 +132,9 @@ public sealed class GameplayEventProducer : IDisposable {
 
     int id = creature.GetInstanceID();
     bool tracked = _lastHit.TryGetValue(id, out LastHit hit);
-    ComfyNetworkSense.LogInfo("[gp] death target=" + creature.m_name + " playerKill=" + tracked);
+    if (PluginConfig.GameplayEventVerboseLogging.Value) {
+      ComfyNetworkSense.LogInfo("[gp] death target=" + creature.m_name + " playerKill=" + tracked);
+    }
     if (!tracked) {
       return;
     }
