@@ -56,28 +56,13 @@ public static class PluginConfig {
   public static ConfigEntry<float> LumberjacksPriorityProbeIntervalSeconds { get; private set; }
   public static ConfigEntry<int> LumberjacksPriorityProbeMaxObjectsPerSample { get; private set; }
   public static ConfigEntry<string> LumberjacksEventLogUrl { get; private set; }
-  public static ConfigEntry<bool> NetcodeProbeAutoStartEnabled { get; private set; }
-  public static ConfigEntry<float> NetcodeProbeAutoStartDelaySeconds { get; private set; }
-  public static ConfigEntry<float> NetcodeProbeAutoStopSeconds { get; private set; }
   public static ConfigEntry<int> NetcodeProbeMaxDetailRows { get; private set; }
-  public static ConfigEntry<bool> OwnershipObserveEnabled { get; private set; }
-  public static ConfigEntry<bool> OwnershipPinEnabled { get; private set; }
-  public static ConfigEntry<int> OwnershipPinAutoCaptureMax { get; private set; }
-  public static ConfigEntry<string> OwnershipPinPrefabs { get; private set; }
   public static ConfigEntry<bool> ZdoRedirectEnabled { get; private set; }
   public static ConfigEntry<string> ZdoRedirectPrefabs { get; private set; }
   public static ConfigEntry<string> ZdoRedirectEndpoint { get; private set; }
   public static ConfigEntry<string> ZdoRedirectWindowId { get; private set; }
   public static ConfigEntry<float> ZdoRedirectActiveSeconds { get; private set; }
   public static ConfigEntry<int> ZdoRedirectMaxPriorityRank { get; private set; }
-  public static ConfigEntry<bool> ZdoInjectionEnabled { get; private set; }
-  public static ConfigEntry<string> ZdoInjectionPrefabs { get; private set; }
-  public static ConfigEntry<string> ZdoInjectionEndpoint { get; private set; }
-  public static ConfigEntry<string> ZdoInjectionWindowId { get; private set; }
-  public static ConfigEntry<string> ZdoInjectionClientId { get; private set; }
-  public static ConfigEntry<string> ZdoInjectionAuthorityId { get; private set; }
-  public static ConfigEntry<float> ZdoInjectionPollSeconds { get; private set; }
-  public static ConfigEntry<float> ZdoInjectionActiveSeconds { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderEnabled { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderStrictMode { get; private set; }
   public static ConfigEntry<string> HandshakeResponderEndpoint { get; private set; }
@@ -487,74 +472,12 @@ public static class PluginConfig {
             "http://127.0.0.1:4002",
             "Lumberjacks EventLog base URL used by live priority mirror commands.");
 
-    NetcodeProbeAutoStartEnabled =
-        config.Bind(
-            "Netcode",
-            "netcodeProbeAutoStartEnabled",
-            false,
-            "Automatically start the rung I1 ZDO netcode reachability probe once at least one network peer is connected. Works headless on both the dedicated server and clients (no local player required). Intended for private lab runs.");
-
-    NetcodeProbeAutoStartDelaySeconds =
-        config.Bind(
-            "Netcode",
-            "netcodeProbeAutoStartDelaySeconds",
-            25.0f,
-            "Seconds to wait after the first peer connects before the netcode probe auto-starts.");
-
-    NetcodeProbeAutoStopSeconds =
-        config.Bind(
-            "Netcode",
-            "netcodeProbeAutoStopSeconds",
-            150.0f,
-            "If greater than 0, automatically stop the netcode probe this many seconds after it auto-starts, writing the lifecycle counters row. 0 = run until shutdown.");
-
     NetcodeProbeMaxDetailRows =
         config.Bind(
             "Netcode",
             "netcodeProbeMaxDetailRows",
             5000,
             "Maximum per-ZDO detail rows written to netcode-probe.jsonl per auto-started run. Aggregate counters keep counting past the cap.");
-
-    OwnershipObserveEnabled =
-        config.Bind(
-            "Netcode",
-            "ownershipObserveEnabled",
-            false,
-            "P3/I2 observe-only ownership-churn logger. When on, server-side Harmony postfixes on ZDO.SetOwner / SetOwnerInternal record every ownership change (uid, old/new owner, revision, sector, via, is_server) to ownership-churn.jsonl for the window a netcode probe run is active. Changes NO gameplay - pure measurement for the ownership-seizure (pin) work; off = no observation, zero cost (rollback flag). Intended for private lab runs on the dedicated server.");
-
-    OwnershipPinEnabled =
-        config.Bind(
-            "Netcode",
-            "ownershipPinEnabled",
-            false,
-            "P3/I2 ownership-seizure PIN. BEHAVIOUR-CHANGING (server-side/am4 only), rollback flag. "
-            + "When on, server-side Harmony prefixes on ZDO.SetOwner / SetOwnerInternal SKIP the "
-            + "vanilla ownership transfer on a small auto-captured set of ZDOs, scoped to exactly "
-            + "the two churn funnels (ReleaseNearbyZDOS release/reseize + RPC_ZDOData remote-apply), "
-            + "so a pinned ZDO's owner does not transfer on zone entry. It writes NO synthetic "
-            + "owners/revisions - it only skips vanilla owner changes; uncaptured ZDOs transfer "
-            + "normally (the negative control). off = vanilla behaviour, zero cost. Requires "
-            + "ownershipObserveEnabled for the paired per-transfer negative-control detail. Intended "
-            + "for private lab runs on the dedicated server; coupled to the netcode-probe window.");
-
-    OwnershipPinAutoCaptureMax =
-        config.Bind(
-            "Netcode",
-            "ownershipPinAutoCaptureMax",
-            25,
-            "Maximum number of ZDOs the pin will auto-capture (and then hold) in a run. Keeps the "
-            + "pin test-scoped on the ~9M-ZDO world: the first N owned ZDOs the churn funnel tries "
-            + "to transfer are pinned; every ZDO past the cap transfers normally.");
-
-    OwnershipPinPrefabs =
-        config.Bind(
-            "Netcode",
-            "ownershipPinPrefabs",
-            "",
-            "Optional comma-separated prefab name allowlist for the pin (e.g. 'Beech1,Rock_4'). "
-            + "When set, only ZDOs whose prefab is in the list are eligible for auto-capture "
-            + "(targeted test). Blank = any prefab is eligible (broad test). Names are matched by "
-            + "stable hash, so no ZNetScene lookup is needed.");
 
     ZdoRedirectEnabled =
         config.Bind(
@@ -625,68 +548,6 @@ public static class PluginConfig {
             + "Rejected candidates remain in Valheim's native send list and never enter the "
             + "Gateway payload. 6 preserves the prior all-tier behavior; 4 admits the proven "
             + "interactive/structural/storage lanes while leaving support/decorative work native.");
-
-    ZdoInjectionEnabled =
-        config.Bind(
-            "Netcode",
-            "zdoInjectionEnabled",
-            false,
-            "P5/I4 inbound injection rollback flag. Client-side only and coupled to the finite "
-            + "netcode-probe window. Polls Lumberjacks for a bounded synthetic fixture, rebuilds "
-            + "the vanilla ZDOData wire package, and applies it through RPC_ZDOData. off = no "
-            + "polling or state changes.");
-
-    ZdoInjectionPrefabs =
-        config.Bind(
-            "Netcode",
-            "zdoInjectionPrefabs",
-            "",
-            "Required comma-separated prefab allowlist for inbound synthetic fixtures (for "
-            + "example 'Wood'). Empty refuses to arm.");
-
-    ZdoInjectionEndpoint =
-        config.Bind(
-            "Netcode",
-            "zdoInjectionEndpoint",
-            "http://127.0.0.1:4000",
-            "Lumberjacks gateway base URL. The rendered OMEN client polls the local gateway.");
-
-    ZdoInjectionWindowId =
-        config.Bind(
-            "Netcode",
-            "zdoInjectionWindowId",
-            "",
-            "P5 gate window id. Blank generates i4-<utc timestamp>; gate staging should set it.");
-
-    ZdoInjectionClientId =
-        config.Bind(
-            "Netcode",
-            "zdoInjectionClientId",
-            "omen",
-            "Client id used for Lumberjacks poll/ack bookkeeping.");
-
-    ZdoInjectionAuthorityId =
-        config.Bind(
-            "Netcode",
-            "zdoInjectionAuthorityId",
-            "5497853135698",
-            "Non-zero Int64 reserved for the synthetic Lumberjacks ZDO uid/owner namespace. "
-            + "Commands outside this namespace are rejected before package construction.");
-
-    ZdoInjectionPollSeconds =
-        config.Bind(
-            "Netcode",
-            "zdoInjectionPollSeconds",
-            1.0f,
-            "Seconds between off-thread gateway polls; clamped to at least 0.25 seconds.");
-
-    ZdoInjectionActiveSeconds =
-        config.Bind(
-            "Netcode",
-            "zdoInjectionActiveSeconds",
-            90.0f,
-            "Injection sub-window seconds. Shorter than the probe window provides automatic "
-            + "rollback rehearsal. 0 runs until the probe stops.");
 
     HandshakeResponderEnabled =
         config.Bind(

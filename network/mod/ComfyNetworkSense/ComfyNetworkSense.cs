@@ -50,18 +50,11 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityMirrorRunner _lumberjacksPriorityMirrorRunner;
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
   NetcodeProbeRunner _netcodeProbeRunner;
-  OwnershipObserveRunner _ownershipObserveRunner;
-  OwnershipPinRunner _ownershipPinRunner;
   ZdoRedirectRunner _zdoRedirectRunner;
-  ZdoInjectionRunner _zdoInjectionRunner;
   ZdoAuthoritativeConsumerRunner _zdoAuthoritativeConsumerRunner;
   HandshakeResponderRunner _handshakeResponderRunner;
   Harmony _harmony;
   bool _routeRunning;
-  bool _netcodeProbeAutoArmed;
-  bool _netcodeProbeAutoStarted;
-  float _netcodeProbeAutoStartAt = -1.0f;
-  float _netcodeProbeAutoStopAt = -1.0f;
   float _nextPrimaryRedirectStartAt;
   string _lastPrimaryRedirectStartMessage = string.Empty;
 
@@ -90,10 +83,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator.SetLumberjacksReplacementTelemetryProvider(GetLumberjacksReplacementTelemetry);
     _lumberjacksPriorityManifestListener = new();
     _netcodeProbeRunner = new();
-    _ownershipObserveRunner = new();
-    _ownershipPinRunner = new();
     _zdoRedirectRunner = new();
-    _zdoInjectionRunner = new();
     _handshakeResponderRunner = new();
     _zdoAuthoritativeConsumerRunner = new();
     InitializeAuthoritativeConsumer();
@@ -134,7 +124,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     Dictionary<string, object> result = new();
     Dictionary<string, object> handshake = _handshakeResponderRunner?.GetTelemetrySnapshot();
     Dictionary<string, object> redirect = _zdoRedirectRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
-    Dictionary<string, object> injection = _zdoInjectionRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
     Dictionary<string, object> authoritative = _zdoAuthoritativeConsumerRunner?.Snapshot();
     Dictionary<string, object> netcode = _netcodeProbeRunner?.BuildStatusRow("heartbeat") as Dictionary<string, object>;
 
@@ -158,11 +147,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         result["native_fallbacks"] = 0L;
       }
     }
-    if (injection != null) {
-      result["injection_applied"] = injection.TryGetValue("applied", out object applied) ? applied : null;
-      result["injection_rendered"] = injection.TryGetValue("rendered", out object rendered) ? rendered : null;
-      result["injection_rejected"] = injection.TryGetValue("rejected", out object rejected) ? rejected : null;
-    }
+    // injection_applied / _rendered / _rejected were dropped 2026-07-21 with the P5
+    // synthetic-injection runner. The gateway's ValheimTelemetryHeartbeat still declares
+    // those three fields as nullable, so they simply arrive unset rather than breaking the
+    // contract — no gateway change is required for this removal.
     if (authoritative != null) foreach (var pair in authoritative) result["zdo_authoritative_" + (pair.Key == "authoritative_enabled" ? "enabled" : pair.Key)] = pair.Value;
     if (netcode != null) {
       result["zdo_probe_running"] = netcode.TryGetValue("running", out object running) ? running : null;
@@ -212,7 +200,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ZdoInjectionRunner.Update")) {
-      _zdoInjectionRunner?.Update(deltaTime, _coordinator);
     }
 
     // P6/I5 handshake responder self-arms on the server (the handshake fires at connect time,
@@ -221,16 +208,12 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _handshakeResponderRunner?.Update(deltaTime, _coordinator);
     }
 
-    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.TryDriveNetcodeProbeAuto")) {
-      TryDriveNetcodeProbeAuto();
-    }
   }
 
-  // Config-driven auto-start for the rung I1 netcode probe. Unlike the auto-rehearsal, this
-  // does NOT wait for a local player — it fires as soon as a network peer is connected, so it
-  // works headless on the dedicated server as well as on clients. Intended for private lab
-  // runs (e.g. run-autonomous-valheim-lab.ps1) where no console is available to type the
-  // command. Observe-only, so it is safe to leave armed.
+  // Arms the outbound ZDO redirect for lumberjacks-primary: server-side, once peers are
+  // present, retried on a backoff. This is the PRODUCTION arming path and is independent of
+  // any probe window. (The comment that used to sit here described TryDriveNetcodeProbeAuto,
+  // a different method that has since been removed with the P3/P5 lab experiments.)
   void TryEnsurePrimaryRedirect(float now) {
     if (_zdoRedirectRunner == null || !PluginConfig.ZdoRedirectEnabled.Value
         || !string.Equals(TelemetryCoordinator.EffectiveCutoverMode(), "lumberjacks-primary",
@@ -257,129 +240,6 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
   }
 
-  void TryDriveNetcodeProbeAuto() {
-    if (!PluginConfig.NetcodeProbeAutoStartEnabled.Value || _coordinator == null || _netcodeProbeRunner == null) {
-      return;
-    }
-
-    if (_netcodeProbeAutoStarted) {
-      // Already ran this session; only remaining job is the timed auto-stop.
-      if (_netcodeProbeRunner.IsRunning
-          && _netcodeProbeAutoStopAt >= 0.0f
-          && Time.time >= _netcodeProbeAutoStopAt) {
-        string stopMessage = _netcodeProbeRunner.Stop();
-        _coordinator.RecordNetcodeProbe(_netcodeProbeRunner.BuildStatusRow("auto_stop"));
-        _coordinator.RecordDevMarker("netcode_probe_auto stop");
-        LogInfo("Netcode probe auto-stopped: " + stopMessage);
-
-        // Ownership observe is coupled to the probe window: stop it in lockstep.
-        if (_ownershipObserveRunner != null && _ownershipObserveRunner.IsRunning) {
-          string ownershipStop = _ownershipObserveRunner.Stop();
-          _coordinator.RecordDevMarker("ownership_observe stop");
-          LogInfo("Ownership observe auto-stopped: " + ownershipStop);
-        }
-
-        // Ownership pin (behaviour-changing) is coupled to the same window: disarm in lockstep.
-        if (_ownershipPinRunner != null && _ownershipPinRunner.IsRunning) {
-          string pinStop = _ownershipPinRunner.Stop();
-          _coordinator.RecordDevMarker("ownership_pin stop");
-          LogInfo("Ownership pin auto-stopped: " + pinStop);
-        }
-
-        // P4/I3 ZDO redirect (behaviour-changing) is coupled to the same window: disarm in
-        // lockstep (it usually auto-disarmed already at zdoRedirectActiveSeconds — the in-window
-        // rollback rehearsal).
-        if (_zdoRedirectRunner != null && _zdoRedirectRunner.IsRunning) {
-          if (string.Equals(TelemetryCoordinator.EffectiveCutoverMode(), "lumberjacks-primary",
-              StringComparison.OrdinalIgnoreCase)) {
-            _coordinator.RecordDevMarker("zdo_redirect remains armed (lumberjacks-primary)");
-            LogInfo("ZDO redirect remains armed after probe stop: lumberjacks-primary owns the live path.");
-          } else {
-            string redirectStop = _zdoRedirectRunner.Stop();
-            _coordinator.RecordDevMarker("zdo_redirect stop");
-            LogInfo("ZDO redirect auto-stopped: " + redirectStop);
-          }
-        }
-
-        if (_zdoInjectionRunner != null && _zdoInjectionRunner.IsRunning) {
-          string injectionStop = _zdoInjectionRunner.Stop();
-          _coordinator.RecordDevMarker("zdo_injection stop");
-          LogInfo("ZDO injection auto-stopped: " + injectionStop);
-        }
-      }
-      return;
-    }
-
-    ZNet znet = ZNet.instance;
-    if (znet == null || znet.GetPeerConnections() <= 0) {
-      _netcodeProbeAutoArmed = false;
-      _netcodeProbeAutoStartAt = -1.0f;
-      return;
-    }
-
-    if (!_netcodeProbeAutoArmed) {
-      float delay = Math.Max(0.0f, PluginConfig.NetcodeProbeAutoStartDelaySeconds.Value);
-      _netcodeProbeAutoStartAt = Time.time + delay;
-      _netcodeProbeAutoArmed = true;
-      _coordinator.RecordDevMarker(
-          $"netcode_probe_auto armed delay={delay:0.##} peers={znet.GetPeerConnections()}");
-      return;
-    }
-
-    if (_netcodeProbeAutoStartAt >= 0.0f && Time.time < _netcodeProbeAutoStartAt) {
-      return;
-    }
-
-    _netcodeProbeAutoStarted = true;
-    int maxDetailRows = PluginConfig.NetcodeProbeMaxDetailRows.Value;
-    string message = _netcodeProbeRunner.Start(_coordinator, maxDetailRows);
-    float autoStopSeconds = PluginConfig.NetcodeProbeAutoStopSeconds.Value;
-    _netcodeProbeAutoStopAt = autoStopSeconds > 0.0f ? Time.time + autoStopSeconds : -1.0f;
-    _coordinator.RecordDevMarker(
-        $"netcode_probe_auto start maxDetailRows={maxDetailRows} autoStopSeconds={autoStopSeconds:0.##}");
-    LogInfo("Netcode probe auto-started: " + message);
-
-    // P3/I2 ownership-churn observer, coupled to the probe capture window. Rollback-gated and
-    // observe-only (server-side postfix on ZDO.SetOwner/SetOwnerInternal); off by default. Started
-    // BEFORE the pin so its prefix is registered first — a pin-blocked change then reads as a no-op
-    // to the observer (correct) rather than a spurious transition.
-    if (PluginConfig.OwnershipObserveEnabled.Value && _ownershipObserveRunner != null) {
-      string ownershipMessage = _ownershipObserveRunner.Start(_coordinator, maxDetailRows);
-      _coordinator.RecordDevMarker("ownership_observe start (coupled to netcode probe)");
-      LogInfo("Ownership observe auto-started: " + ownershipMessage);
-    }
-
-    // P3/I2 ownership PIN (behaviour-changing), coupled to the same window. Rollback-gated
-    // (ownershipPinEnabled, default off). Server-side prefixes on ZDO.SetOwner/SetOwnerInternal
-    // skip the vanilla transfer on auto-captured ZDOs so ownership stays pinned across zone entry.
-    if (PluginConfig.OwnershipPinEnabled.Value && _ownershipPinRunner != null) {
-      string pinMessage = _ownershipPinRunner.Start(_coordinator, maxDetailRows);
-      _coordinator.RecordDevMarker("ownership_pin start (coupled to netcode probe)");
-      LogInfo("Ownership pin auto-started: " + pinMessage);
-    }
-
-    // P4/I3 outbound REDIRECT (behaviour-changing), coupled to the same window. Rollback-gated
-    // (zdoRedirectEnabled, default off; empty prefab allowlist refuses). Server-side postfix on
-    // ZDOMan.CreateSyncList suppresses native send for tagged prefabs and posts the
-    // wire-equivalent to the Lumberjacks gateway; auto-disarms at zdoRedirectActiveSeconds for
-    // the in-window rollback rehearsal.
-    if (PluginConfig.ZdoRedirectEnabled.Value && _zdoRedirectRunner != null
-        && !_zdoRedirectRunner.IsRunning) {
-      string redirectMessage = _zdoRedirectRunner.Start(_coordinator, maxDetailRows);
-      _coordinator.RecordDevMarker("zdo_redirect start (coupled to netcode probe)");
-      LogInfo("ZDO redirect auto-started: " + redirectMessage);
-    }
-
-
-    // P5/I4 inbound injection, coupled to the same finite probe window. Client-only,
-    // synthetic-authority + prefab allowlist scoped, and off by default.
-    if (PluginConfig.ZdoInjectionEnabled.Value && _zdoInjectionRunner != null) {
-      string injectionMessage = _zdoInjectionRunner.Start(_coordinator);
-      _coordinator.RecordDevMarker("zdo_injection start (coupled to netcode probe)");
-      LogInfo("ZDO injection auto-started: " + injectionMessage);
-    }
-  }
-
   void OnGUI() {
     if (!PluginConfig.IsModEnabled.Value) {
       return;
@@ -402,14 +262,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = null;
     _netcodeProbeRunner?.Dispose();
     _netcodeProbeRunner = null;
-    _ownershipObserveRunner?.Dispose();
-    _ownershipObserveRunner = null;
-    _ownershipPinRunner?.Dispose();
-    _ownershipPinRunner = null;
     _zdoRedirectRunner?.Dispose();
     _zdoRedirectRunner = null;
-    _zdoInjectionRunner?.Dispose();
-    _zdoInjectionRunner = null;
     _handshakeResponderRunner?.Dispose();
     _handshakeResponderRunner = null;
     _coordinator?.Dispose();
