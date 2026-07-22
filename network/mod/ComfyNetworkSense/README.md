@@ -439,13 +439,24 @@ Useful HUD config keys:
 
 ## Current Boundaries
 
-This build implements an authoritative Lumberjacks **ZDO delivery adapter**, not a
-full netcode replacement. Lumberjacks orders, durably queues, delivers, and
-acknowledges the declared ZDO stream. Native Valheim still owns the Steam peer,
-candidate relevance/sync-list construction, world simulation, non-ZDO RPCs, and
-the receive/application and movement-presentation semantics used by the client.
-The live Valheim adapter does not currently use Lumberjacks' WebSocket + UDP
-dual-channel transport; it uses authenticated HTTP with JSON payloads.
+This build implements an authoritative Lumberjacks **ZDO delivery adapter** plus an
+observe-first player-motion lane; it is not yet a full netcode replacement.
+Lumberjacks orders, durably queues, delivers, and acknowledges the declared ZDO
+stream over authenticated HTTP/JSON. Separately, enrolled clients send actual local
+Valheim transforms through the authenticated Lumberjacks WebSocket session, using
+its session-bound UDP token when UDP is available and binary WebSocket fallback when
+it is not.
+
+The motion lane defaults to observation only. Its `APPLY` switch is deliberately
+separate from `WebSocket` and `UDP`, so an alpha tester can prove carriage before
+changing remote-player presentation. With apply off, native Valheim remains visible
+and authoritative. With apply on, fresh Lumberjacks snapshots smooth remote player
+transforms without velocity extrapolation; stale or implausibly distant snapshots
+yield to native behavior.
+
+Native Valheim still owns the Steam peer, candidate relevance/sync-list construction,
+world simulation, ownership, non-ZDO RPCs, and every network plane not named above.
+The truth strip continues to say `FULL NETCODE [NO]` until those claims are earned.
 
 The local MCP/Raven surface remains a dev-only side channel. The truth strip is
 an acceptance instrument for moving one remaining network plane at a time rather

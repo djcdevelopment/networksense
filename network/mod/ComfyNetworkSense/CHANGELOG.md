@@ -1,5 +1,17 @@
 ## Changelog
 
+### 0.5.33
+
+- Add an observe-first Lumberjacks player-motion path using the authenticated
+  WebSocket session and its session-bound UDP token. Actual local Valheim transforms
+  are sent at 20 Hz in a fixed 50-byte datagram; the Gateway relays them to other
+  enrolled players in the same region with binary WebSocket fallback.
+- Add explicit `WebSocket`, `UDP`, and `APPLY` switches to the always-visible transport
+  strip. Applying remote snapshots defaults off, rejects corrections over 30 metres,
+  and yields to native presentation when a snapshot is stale.
+- Report sent, received, and applied motion counts in-game so a tester can connect a
+  switch flip to the Gateway community trace without guessing which lane is active.
+
 ### 0.5.32
 
 - Add an always-visible transport truth strip that separately reports the native

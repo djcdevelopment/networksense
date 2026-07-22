@@ -43,6 +43,11 @@ public static class PluginConfig {
   public static ConfigEntry<string> LumberjacksTelemetryKey { get; private set; }
   public static ConfigEntry<string> LumberjacksClientAccessKey { get; private set; }
   public static ConfigEntry<string> LumberjacksRegionId { get; private set; }
+  public static ConfigEntry<bool> LumberjacksMotionEnabled { get; private set; }
+  public static ConfigEntry<bool> LumberjacksMotionApplyEnabled { get; private set; }
+  public static ConfigEntry<float> LumberjacksMotionSendHz { get; private set; }
+  public static ConfigEntry<float> LumberjacksMotionSmoothing { get; private set; }
+  public static ConfigEntry<float> LumberjacksMotionFreshSeconds { get; private set; }
   public static ConfigEntry<int> LumberjacksProbeInputCount { get; private set; }
   public static ConfigEntry<float> LumberjacksProjectionInputHz { get; private set; }
   public static ConfigEntry<float> LumberjacksProjectionScale { get; private set; }
@@ -427,6 +432,41 @@ public static class PluginConfig {
             "lumberjacksRegionId",
             "region-spawn",
             "Lumberjacks region id used by network_sense_lumberjacks_probe unless supplied on the console command.");
+
+    LumberjacksMotionEnabled =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksMotionEnabled",
+            true,
+            "Connect the authenticated Lumberjacks WebSocket/UDP motion lane. Dedicated servers ignore this client-only switch.");
+
+    LumberjacksMotionApplyEnabled =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksMotionApplyEnabled",
+            false,
+            "Apply fresh Lumberjacks movement snapshots to remote player presentation. False observes the lane without overriding native motion.");
+
+    LumberjacksMotionSendHz =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksMotionSendHz",
+            20.0f,
+            "Local player movement snapshots sent per second on the Lumberjacks datagram lane (5-30 Hz)." );
+
+    LumberjacksMotionSmoothing =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksMotionSmoothing",
+            18.0f,
+            "Remote presentation convergence rate. This first slice interpolates toward observed snapshots and does not extrapolate velocity." );
+
+    LumberjacksMotionFreshSeconds =
+        config.Bind(
+            "Lumberjacks",
+            "lumberjacksMotionFreshSeconds",
+            0.5f,
+            "Stop applying Lumberjacks motion and fall back to native Valheim when the latest snapshot is older than this." );
 
     LumberjacksProbeInputCount =
         config.Bind(

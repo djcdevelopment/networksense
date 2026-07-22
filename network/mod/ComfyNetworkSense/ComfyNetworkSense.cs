@@ -22,7 +22,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.32";
+  public const string PluginVersion = "0.5.33";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -37,7 +37,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m11-transport-20260722-r1";
+  public const string ReleaseId = "m12-motion-20260722-r1";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -50,6 +50,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityProbeRunner _lumberjacksPriorityProbeRunner;
   LumberjacksPriorityMirrorRunner _lumberjacksPriorityMirrorRunner;
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
+  LumberjacksMotionRunner _lumberjacksMotionRunner;
   NetcodeProbeRunner _netcodeProbeRunner;
   ZdoRedirectRunner _zdoRedirectRunner;
   GameplayEventProducer _gameplayEventProducer;
@@ -85,7 +86,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _logger = Logger;
 
     PluginConfig.Bind(Config);
-    AlphaTransportSwitches.Reset();
+    AlphaTransportSwitches.Reset(PluginConfig.LumberjacksMotionApplyEnabled.Value);
 
     _coordinator = new();
     _lumberjacksBridgeProbe = new();
@@ -96,6 +97,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator.SetLumberjacksPriorityMirror(_lumberjacksPriorityMirrorRunner);
     _coordinator.SetLumberjacksReplacementTelemetryProvider(GetLumberjacksReplacementTelemetry);
     _lumberjacksPriorityManifestListener = new();
+    _lumberjacksMotionRunner = new();
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
@@ -237,6 +239,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _lumberjacksPriorityProbeRunner?.Update(deltaTime, _coordinator);
     }
 
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
+      _lumberjacksMotionRunner?.Update(now);
+    }
+
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ZdoInjectionRunner.Update")) {
     }
 
@@ -251,6 +257,11 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     UpdateMcpHealth(now);
+  }
+
+  void LateUpdate() {
+    if (!PluginConfig.IsModEnabled.Value) return;
+    _lumberjacksMotionRunner?.LateUpdate(Time.unscaledDeltaTime);
   }
 
   // Arms the outbound ZDO redirect for lumberjacks-primary: server-side, once peers are
@@ -381,6 +392,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _transportStatusOverlay.Draw(
         BuildTransportStatus(),
         ToggleLumberjacksHttp,
+        ToggleLumberjacksWebSocket,
+        ToggleLumberjacksUdp,
+        ToggleMotionApply,
         ToggleMcp,
         DisconnectValheim,
         OpenDashboard,
@@ -395,6 +409,14 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         ValheimConnected = valheimConnected,
         LumberjacksArmed = lumberjacksArmed,
         LumberjacksHttpEnabled = AlphaTransportSwitches.LumberjacksHttpEnabled,
+        LumberjacksWebSocketEnabled = AlphaTransportSwitches.LumberjacksWebSocketEnabled,
+        LumberjacksUdpEnabled = AlphaTransportSwitches.LumberjacksUdpEnabled,
+        LumberjacksWebSocketConnected = _lumberjacksMotionRunner?.WebSocketConnected == true,
+        LumberjacksUdpReady = _lumberjacksMotionRunner?.UdpReady == true,
+        MotionApplyEnabled = AlphaTransportSwitches.MotionApplyEnabled,
+        MotionSent = (_lumberjacksMotionRunner?.SentUdp ?? 0) + (_lumberjacksMotionRunner?.SentWebSocket ?? 0),
+        MotionReceived = (_lumberjacksMotionRunner?.ReceivedUdp ?? 0) + (_lumberjacksMotionRunner?.ReceivedWebSocket ?? 0),
+        MotionApplied = _lumberjacksMotionRunner?.Applied ?? 0,
         McpEnabled = AlphaTransportSwitches.McpEnabled,
         McpReachable = _mcpReachable,
         LumberjacksState = _zdoAuthoritativeConsumerRunner?.State ?? "not-armed",
@@ -414,6 +436,24 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     if (!enabled) _mcpReachable = false;
     else _nextMcpProbeAt = 0.0f;
     RecordTransportControl("local_mcp", enabled, "process_local");
+  }
+
+  void ToggleLumberjacksWebSocket() {
+    bool enabled = AlphaTransportSwitches.SetLumberjacksWebSocketEnabled(
+        !AlphaTransportSwitches.LumberjacksWebSocketEnabled);
+    if (!enabled) _lumberjacksMotionRunner?.Stop();
+    RecordTransportControl("lumberjacks_websocket", enabled, "motion_control");
+  }
+
+  void ToggleLumberjacksUdp() {
+    bool enabled = AlphaTransportSwitches.SetLumberjacksUdpEnabled(
+        !AlphaTransportSwitches.LumberjacksUdpEnabled);
+    RecordTransportControl("lumberjacks_udp", enabled, enabled ? "motion_datagram" : "websocket_fallback");
+  }
+
+  void ToggleMotionApply() {
+    bool enabled = AlphaTransportSwitches.SetMotionApplyEnabled(!AlphaTransportSwitches.MotionApplyEnabled);
+    RecordTransportControl("lumberjacks_motion_apply", enabled, enabled ? "remote_presentation" : "native_fallback");
   }
 
   void DisconnectValheim() {
@@ -485,6 +525,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityMirrorRunner = null;
     _lumberjacksPriorityManifestListener?.Dispose();
     _lumberjacksPriorityManifestListener = null;
+    _lumberjacksMotionRunner?.Dispose();
+    _lumberjacksMotionRunner = null;
     _netcodeProbeRunner?.Dispose();
     _netcodeProbeRunner = null;
     _zdoRedirectRunner?.Dispose();

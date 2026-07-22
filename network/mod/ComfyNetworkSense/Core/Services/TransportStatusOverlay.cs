@@ -16,6 +16,9 @@ public sealed class TransportStatusOverlay {
   public void Draw(
       TransportStatusSnapshot status,
       Action toggleLumberjacksHttp,
+      Action toggleLumberjacksWebSocket,
+      Action toggleLumberjacksUdp,
+      Action toggleMotionApply,
       Action toggleMcp,
       Action disconnectValheim,
       Action openDashboard,
@@ -25,8 +28,8 @@ public sealed class TransportStatusOverlay {
     }
 
     EnsureStyles();
-    const float width = 890.0f;
-    const float height = 92.0f;
+    const float width = 1040.0f;
+    const float height = 122.0f;
     float x = Mathf.Max(8.0f, (Screen.width - width) / 2.0f);
     float y = Mathf.Max(8.0f, Screen.height - height - 18.0f);
 
@@ -35,6 +38,7 @@ public sealed class TransportStatusOverlay {
     GUILayout.Label("NETWORK", _label, GUILayout.Width(82.0f));
     Status("Native Valheim", status.ValheimConnected, _good, _off, 156.0f);
     Status("LJ ZDO", status.LumberjacksArmed && status.LumberjacksHttpEnabled, _good, _off, 104.0f);
+    Status("LJ Motion", status.LumberjacksWebSocketConnected, _good, _off, 118.0f);
     GUILayout.Label("FULL NETCODE [NO]", _off, GUILayout.Width(142.0f));
     GUILayout.Label("Dashboard: " + Fallback(status.DashboardUrl), _label, GUILayout.ExpandWidth(true));
     if (GUILayout.Button("OPEN", _button, GUILayout.Width(58.0f))) openDashboard?.Invoke();
@@ -56,6 +60,23 @@ public sealed class TransportStatusOverlay {
     }
     GUILayout.Label("state " + Fallback(status.LumberjacksState), _label, GUILayout.ExpandWidth(true));
     if (GUILayout.Button("DISCONNECT", _off, GUILayout.Width(104.0f))) disconnectValheim?.Invoke();
+    GUILayout.EndHorizontal();
+
+    GUILayout.BeginHorizontal();
+    GUILayout.Label("LJ MOTION", _label, GUILayout.Width(82.0f));
+    if (GUILayout.Button("WebSocket " + Mark(status.LumberjacksWebSocketEnabled && status.LumberjacksWebSocketConnected),
+        status.LumberjacksWebSocketEnabled && status.LumberjacksWebSocketConnected ? _good : _off,
+        GUILayout.Width(136.0f))) toggleLumberjacksWebSocket?.Invoke();
+    if (GUILayout.Button("UDP " + Mark(status.LumberjacksUdpEnabled && status.LumberjacksUdpReady),
+        status.LumberjacksUdpEnabled && status.LumberjacksUdpReady ? _good : _off,
+        GUILayout.Width(96.0f))) toggleLumberjacksUdp?.Invoke();
+    if (GUILayout.Button("APPLY " + Mark(status.MotionApplyEnabled),
+        status.MotionApplyEnabled ? _good : _idle, GUILayout.Width(104.0f))) toggleMotionApply?.Invoke();
+    GUILayout.Label(
+        "snapshots sent " + status.MotionSent + " · received " + status.MotionReceived + " · applied " + status.MotionApplied
+        + (status.MotionApplyEnabled ? "" : " · OBSERVE ONLY"),
+        _label,
+        GUILayout.ExpandWidth(true));
     GUILayout.EndHorizontal();
     GUILayout.EndArea();
   }
