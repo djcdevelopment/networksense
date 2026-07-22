@@ -50,6 +50,24 @@ public sealed class GameplayEventProducer : IDisposable {
   public int Received => _received;
   public int PostedOk => _postedOk;
 
+  /// <summary>
+  /// Relays an alpha transport switch observation over the still-live native Valheim RPC path.
+  /// This deliberately bypasses GameplayEventProducerEnabled: transport fault evidence must still
+  /// reach the server when ordinary gameplay capture is off, and the server remains the only peer
+  /// permitted to POST it to the Gateway.
+  /// </summary>
+  public void RecordTransportControl(string component, bool enabled, string observedPath) {
+    long playerId = Player.m_localPlayer == null ? 0L : Player.m_localPlayer.GetPlayerID();
+    string detail = component + "=" + (enabled ? "on" : "off") + " via " + observedPath;
+    SendToServer(
+        GameplayEventTypes.TransportControlChanged,
+        detail,
+        component,
+        observedPath,
+        enabled,
+        playerId);
+  }
+
   public void Update(float deltaTime, TelemetryCoordinator coordinator) {
     _coordinator = coordinator;
     _live = this;
@@ -344,4 +362,5 @@ public static class GameplayEventTypes {
   public const string KillingBlow = "killing_blow";
   public const string WeaponUsed = "weapon_used";
   public const string QuestCompleted = "quest_completed";
+  public const string TransportControlChanged = "transport_control_changed";
 }

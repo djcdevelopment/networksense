@@ -90,6 +90,9 @@ public static class PluginConfig {
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
   public static ConfigEntry<int> HudMarginPixels { get; private set; }
   public static ConfigEntry<string> HudPreset { get; private set; }
+  public static ConfigEntry<bool> TransportStripEnabled { get; private set; }
+  public static ConfigEntry<string> DashboardUrl { get; private set; }
+  public static ConfigEntry<string> DashboardSetupUrl { get; private set; }
   public static ConfigEntry<KeyboardShortcut> ToggleHudShortcut { get; private set; }
   public static ConfigEntry<KeyboardShortcut> CycleHudDetailShortcut { get; private set; }
   public static ConfigEntry<KeyboardShortcut> CycleModeShortcut { get; private set; }
@@ -144,6 +147,27 @@ public static class PluginConfig {
             "hudPreset",
             "Compact",
             "Compact HUD layout preset: Minimal, Compact, or Diagnostic.");
+
+    TransportStripEnabled =
+        config.Bind(
+            "HUD",
+            "transportStripEnabled",
+            true,
+            "Show the always-visible alpha transport truth strip and fault switchboard.");
+
+    DashboardUrl =
+        config.Bind(
+            "HUD",
+            "dashboardUrl",
+            "http://127.0.0.1:8080/community",
+            "Local Docker community dashboard opened by the transport strip.");
+
+    DashboardSetupUrl =
+        config.Bind(
+            "HUD",
+            "dashboardSetupUrl",
+            "https://github.com/djcdevelopment/baseline/tree/main/Lumberjacks/tools/omen-dashboard",
+            "Repository setup instructions opened by the transport strip when the local dashboard is not installed.");
 
     ToggleHudShortcut =
         config.Bind(

@@ -1,7 +1,15 @@
 ## Changelog
 
-### Unreleased
+### 0.5.32
 
+- Add an always-visible transport truth strip that separately reports the native
+  Valheim peer, Lumberjacks ZDO delivery, HTTP/JSON, unused WebSocket/UDP lanes,
+  and local MCP health. It states `FULL NETCODE [NO]` until that claim is earned.
+- Add restart-reset alpha fault switches for the Lumberjacks HTTP consumer and
+  local MCP, plus an explicit native disconnect. Switch changes append to local
+  JSONL and relay over native Valheim RPC to the server/Gateway dashboard feed.
+- Rename dashboard coverage language from ambiguous "gameplay coverage" to the
+  actual denominator: "ZDO delivery coverage".
 - Add a player-character ZDO fast lane for Lumberjacks primary mode. When
   `zdoPlayerFastLaneEnabled=true`, connected players' character ZDOs bypass
   distance-band thinning/drop and are redirected on every native sync pass, so

@@ -8,6 +8,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 
 using BepInEx;
@@ -21,7 +22,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.31";
+  public const string PluginVersion = "0.5.32";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -36,7 +37,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m5-recipients-20260720-r1";
+  public const string ReleaseId = "m11-transport-20260722-r1";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -54,10 +55,14 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   GameplayEventProducer _gameplayEventProducer;
   ZdoAuthoritativeConsumerRunner _zdoAuthoritativeConsumerRunner;
   HandshakeResponderRunner _handshakeResponderRunner;
+  readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
   bool _routeRunning;
   float _nextPrimaryRedirectStartAt;
   string _lastPrimaryRedirectStartMessage = string.Empty;
+  int _mcpProbeInFlight;
+  float _nextMcpProbeAt;
+  volatile bool _mcpReachable;
 
   // Auto-port test harness (autoPortOnJoinEnabled). Server-side: push the densest-region coordinate
   // to each newly-joined peer once. Client-side: HandleAutoPort receives it and, if opted in, runs
@@ -80,6 +85,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _logger = Logger;
 
     PluginConfig.Bind(Config);
+    AlphaTransportSwitches.Reset();
 
     _coordinator = new();
     _lumberjacksBridgeProbe = new();
@@ -109,8 +115,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         + " operation=" + ZdoIntegrationContract.Operation);
   }
 
-  // Loads the player's quest-view.json (quest-evaluator track). The file always loads — matching is
-  // separately gated by questEvaluatorEnabled — so a bad file surfaces at startup, not first kill.
+  // Loads the player's quest-view.json (quest-evaluator track). The file always loads; matching is
+  // separately gated by questEvaluatorEnabled, so a bad file surfaces at startup, not first kill.
   // A missing file is normal (no quests tracked) and logs nothing alarming.
   internal static string QuestViewPath => Path.Combine(Paths.ConfigPath, "comfy-network-sense", "quest-view.json");
 
@@ -179,7 +185,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     // injection_applied / _rendered / _rejected were dropped 2026-07-21 with the P5
     // synthetic-injection runner. The gateway's ValheimTelemetryHeartbeat still declares
     // those three fields as nullable, so they simply arrive unset rather than breaking the
-    // contract — no gateway change is required for this removal.
+    // contract; no gateway change is required for this removal.
     if (authoritative != null) foreach (var pair in authoritative) result["zdo_authoritative_" + (pair.Key == "authoritative_enabled" ? "enabled" : pair.Key)] = pair.Value;
     if (netcode != null) {
       result["zdo_probe_running"] = netcode.TryGetValue("running", out object running) ? running : null;
@@ -244,6 +250,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _gameplayEventProducer?.Update(deltaTime, _coordinator);
     }
 
+    UpdateMcpHealth(now);
   }
 
   // Arms the outbound ZDO redirect for lumberjacks-primary: server-side, once peers are
@@ -278,7 +285,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
   // Auto-port harness: register the RPC handler once ZRoutedRpc is up, then (server only) push the
   // densest-ZDO coordinate to each peer exactly once. The client acts on it in HandleAutoPort, gated
-  // on its own autoPortOnJoinEnabled — so only an opted-in operator is ever moved. The density scan
+  // on its own autoPortOnJoinEnabled, so only an opted-in operator is ever moved. The density scan
   // is cached (AutoPortDensity), so a join costs at most one scan every few minutes.
   void TickAutoPort(float now) {
     ZRoutedRpc rpc = ZRoutedRpc.instance;
@@ -371,9 +378,102 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     _coordinator?.DrawHud();
+    _transportStatusOverlay.Draw(
+        BuildTransportStatus(),
+        ToggleLumberjacksHttp,
+        ToggleMcp,
+        DisconnectValheim,
+        OpenDashboard,
+        OpenDashboardSetup);
+  }
+
+  TransportStatusSnapshot BuildTransportStatus() {
+    ZNet znet = ZNet.instance;
+    bool valheimConnected = znet != null && !znet.IsServer() && (znet.GetPeers()?.Count ?? 0) > 0;
+    bool lumberjacksArmed = valheimConnected && _zdoAuthoritativeConsumerRunner?.IsRunning == true;
+    return new() {
+        ValheimConnected = valheimConnected,
+        LumberjacksArmed = lumberjacksArmed,
+        LumberjacksHttpEnabled = AlphaTransportSwitches.LumberjacksHttpEnabled,
+        McpEnabled = AlphaTransportSwitches.McpEnabled,
+        McpReachable = _mcpReachable,
+        LumberjacksState = _zdoAuthoritativeConsumerRunner?.State ?? "not-armed",
+        DashboardUrl = PluginConfig.DashboardUrl.Value,
+        SetupUrl = PluginConfig.DashboardSetupUrl.Value
+    };
+  }
+
+  void ToggleLumberjacksHttp() {
+    bool enabled = AlphaTransportSwitches.SetLumberjacksHttpEnabled(
+        !AlphaTransportSwitches.LumberjacksHttpEnabled);
+    RecordTransportControl("lumberjacks_http", enabled, "native_valheim_rpc");
+  }
+
+  void ToggleMcp() {
+    bool enabled = AlphaTransportSwitches.SetMcpEnabled(!AlphaTransportSwitches.McpEnabled);
+    if (!enabled) _mcpReachable = false;
+    else _nextMcpProbeAt = 0.0f;
+    RecordTransportControl("local_mcp", enabled, "process_local");
+  }
+
+  void DisconnectValheim() {
+    if (ZNet.instance == null || ZNet.instance.IsServer()) return;
+    RecordTransportControl("native_valheim_peer", false, "disconnect_requested");
+    StartCoroutine(DisconnectAfterTelemetry());
+  }
+
+  IEnumerator DisconnectAfterTelemetry() {
+    yield return new WaitForSecondsRealtime(0.25f);
+    Game.instance?.Logout();
+  }
+
+  void OpenDashboard() {
+    string url = PluginConfig.DashboardUrl.Value;
+    if (!string.IsNullOrWhiteSpace(url)) Application.OpenURL(url);
+    _coordinator?.RecordDevMarker("transport strip opened local dashboard");
+  }
+
+  void OpenDashboardSetup() {
+    string url = PluginConfig.DashboardSetupUrl.Value;
+    if (!string.IsNullOrWhiteSpace(url)) Application.OpenURL(url);
+    _coordinator?.RecordDevMarker("transport strip opened dashboard setup");
+  }
+
+  void RecordTransportControl(string component, bool enabled, string observedPath) {
+    _coordinator?.RecordTransportControl(component, enabled, observedPath);
+    _gameplayEventProducer?.RecordTransportControl(component, enabled, observedPath);
+    string message = component + " " + (enabled ? "ON" : "OFF");
+    MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
+    LogInfo("Alpha transport control: " + message + " via " + observedPath);
+  }
+
+  void UpdateMcpHealth(float now) {
+    if (ZNet.instance != null && ZNet.instance.IsServer() && ZNet.instance.IsDedicated()) return;
+    if (!AlphaTransportSwitches.McpEnabled) {
+      _mcpReachable = false;
+      return;
+    }
+    if (now < _nextMcpProbeAt || Interlocked.CompareExchange(ref _mcpProbeInFlight, 1, 0) != 0) return;
+    _nextMcpProbeAt = now + 5.0f;
+    _ = Task.Run(async () => {
+      try {
+        HttpWebRequest request = (HttpWebRequest) WebRequest.Create("http://127.0.0.1:8720/healthz");
+        request.Method = "GET";
+        request.Timeout = 1500;
+        request.ReadWriteTimeout = 1500;
+        request.Headers.Add("X-Comfy-Key", "valheim-mod-local");
+        using WebResponse response = await request.GetResponseAsync().ConfigureAwait(false);
+        _mcpReachable = response is HttpWebResponse http && (int) http.StatusCode >= 200 && (int) http.StatusCode < 300;
+      } catch {
+        _mcpReachable = false;
+      } finally {
+        Interlocked.Exchange(ref _mcpProbeInFlight, 0);
+      }
+    });
   }
 
   void OnDestroy() {
+    AlphaTransportSwitches.Reset();
     _lumberjacksBridgeProbe = null;
     _lumberjacksProjectionRunner?.Dispose();
     _lumberjacksProjectionRunner = null;
@@ -616,6 +716,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   }
 
   object CheckMcpGateway() {
+    if (!AlphaTransportSwitches.McpEnabled) {
+      return "Comfy MCP is switched off by the alpha transport control.";
+    }
+
     const string endpoint = "http://127.0.0.1:8720/healthz";
     _ = Task.Run(async () => {
       string message;
@@ -1308,7 +1412,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
   // Enable god mode + debug-fly on the local player before a teleport walk begins, so a fall after
   // any teleport can't kill the character mid-route (a death aborts the walk and drags Derek back
-  // into the loop — the exact KVM regression the hands-free rig exists to prevent). We call the
+  // into the loop--the exact KVM regression the hands-free rig exists to prevent). We call the
   // Player API directly rather than issuing the 'god'/'fly' console commands: those are cheat-gated
   // (Terminal.IsCheatsEnabled() returns ZNet.IsServer(), which is false on a client joined to the
   // dedicated am4 server) and 'fly' is onlyServer, so the console strings would be rejected

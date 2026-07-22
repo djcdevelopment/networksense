@@ -590,6 +590,12 @@ public sealed class TelemetryCoordinator : IDisposable {
   }
 
   public void StartRavenRequest(string requestKind) {
+    if (!AlphaTransportSwitches.McpEnabled) {
+      WriteEvent("mcp_blocked", "Local MCP request blocked by alpha transport switch.");
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, "Local MCP is switched off.");
+      return;
+    }
+
     if (_ravenState.IsBusy) {
       return;
     }
@@ -625,6 +631,12 @@ public sealed class TelemetryCoordinator : IDisposable {
   }
 
   public void StartApplyProfile(string profile) {
+    if (!AlphaTransportSwitches.McpEnabled) {
+      WriteEvent("mcp_blocked", "Local MCP profile request blocked by alpha transport switch.");
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, "Local MCP is switched off.");
+      return;
+    }
+
     if (_ravenState.IsBusy) {
       return;
     }
@@ -688,6 +700,20 @@ public sealed class TelemetryCoordinator : IDisposable {
     ComfyNetworkSense.EnqueueMainThreadMessage(message);
     ComfyNetworkSense.LogInfo(message);
     WriteEvent("raven_response", message);
+  }
+
+  public void RecordTransportControl(string component, bool enabled, string observedPath) {
+    Dictionary<string, object> row = new() {
+        ["schema_version"] = "1.0",
+        ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+        ["session_id"] = _sessionId,
+        ["event_type"] = "transport_control_changed",
+        ["component"] = component,
+        ["enabled"] = enabled,
+        ["observed_path"] = observedPath
+    };
+    _logWriter.Write("transport-controls.jsonl", row);
+    WriteEvent("transport_control_changed", component + "=" + (enabled ? "on" : "off") + " via " + observedPath);
   }
 
   static string RequestEndpoint(string requestKind) {

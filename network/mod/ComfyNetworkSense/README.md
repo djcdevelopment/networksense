@@ -23,6 +23,10 @@ gameplay policy.
 ## What Is Built
 
 - BepInEx Valheim plugin: `ComfyNetworkSense.dll`.
+- Always-visible alpha transport truth strip. It distinguishes the native Valheim
+  peer from Lumberjacks ZDO delivery, states that full netcode cutover is not yet
+  complete, links to the local Docker dashboard/setup instructions, and exposes
+  restart-reset HTTP/MCP fault switches plus an explicit native disconnect.
 - Upper-left HUD with `Minimal`, `Compact`, and `Diagnostic` presets.
 - Modern IMGUI debug drawer with `Debug`, `Signals`, and `Raven` tabs.
 - Mode selector visible in the panel: `Solo`, `Combat`, `Group`, `Town`.
@@ -328,6 +332,8 @@ Main files:
   count. With 0 peers it is the at-rest baseline. The client sampler does not run on a
   dedicated server, so `telemetry-client.jsonl` there stays empty.
 - `event-timeline.jsonl`: commands, markers, notes, Raven responses, exports.
+- `transport-controls.jsonl`: append-only switch changes with component, enabled
+  state, and the path that carried the observation.
 - `benchmark-results.jsonl`: completed benchmark summaries.
 - `exports\network-sense-session-*.json`: compact session export bundles.
 
@@ -344,6 +350,9 @@ Useful HUD config keys:
 - `hudMaxWidth`: wide HUD width before scale.
 - `hudScale`: HUD scale factor.
 - `hudMarginPixels`: upper-left HUD margin.
+- `transportStripEnabled`: show/hide the alpha transport truth strip.
+- `dashboardUrl`: local Docker dashboard opened by the strip.
+- `dashboardSetupUrl`: repository setup instructions opened by the strip.
 
 ## Debugging
 
@@ -430,7 +439,14 @@ Useful HUD config keys:
 
 ## Current Boundaries
 
-This build does not implement automatic authority selection, queue
-prioritization, gameplay policy enforcement, or production MCP connectivity.
-It is a dev/test instrument for understanding conditions and shortening the
-feedback loop while refining the Valheim network mod.
+This build implements an authoritative Lumberjacks **ZDO delivery adapter**, not a
+full netcode replacement. Lumberjacks orders, durably queues, delivers, and
+acknowledges the declared ZDO stream. Native Valheim still owns the Steam peer,
+candidate relevance/sync-list construction, world simulation, non-ZDO RPCs, and
+the receive/application and movement-presentation semantics used by the client.
+The live Valheim adapter does not currently use Lumberjacks' WebSocket + UDP
+dual-channel transport; it uses authenticated HTTP with JSON payloads.
+
+The local MCP/Raven surface remains a dev-only side channel. The truth strip is
+an acceptance instrument for moving one remaining network plane at a time rather
+than evidence that those planes have already moved.

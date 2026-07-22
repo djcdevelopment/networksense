@@ -80,6 +80,9 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   string _firstOperationResult = string.Empty;
 
   public bool IsRunning { get; private set; }
+  public string State {
+    get { lock (_gate) return _state; }
+  }
   public long Applied => _applied;
   public long Superseded => _superseded;
   public long Rejected => _rejected;
@@ -105,6 +108,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     // Redirect envelopes represent the server-to-client delivery path.  The dedicated
     // server produces them; only an enrolled connected client may consume them.
     if (!IsRunning) return;
+    if (!AlphaTransportSwitches.LumberjacksHttpEnabled) {
+      lock (_gate) _state = "fault-paused";
+      return;
+    }
     int peers = ZNet.instance?.GetPeers()?.Count ?? 0;
     _connectedPeers = peers;
     if (ZNet.instance == null || ZNet.instance.IsServer() || peers == 0) {
@@ -392,6 +399,10 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
   static void SendPost(string url, string body) { Send(url, "POST", body); }
 
   static string Send(string url, string method, string body) {
+    if (!AlphaTransportSwitches.LumberjacksHttpEnabled) {
+      throw new InvalidOperationException("Lumberjacks HTTP paused by alpha transport switch");
+    }
+
     Uri uri = new(url);
     byte[] bytes = Encoding.UTF8.GetBytes(body ?? string.Empty);
     // The head stays here, byte-for-byte as before: the credential headers come from PluginConfig
