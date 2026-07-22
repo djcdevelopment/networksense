@@ -74,6 +74,7 @@ public static class PluginConfig {
   public static ConfigEntry<float> ZdoInnerRadiusMeters { get; private set; }
   public static ConfigEntry<float> ZdoOuterRadiusMeters { get; private set; }
   public static ConfigEntry<float> ZdoThinHz { get; private set; }
+  public static ConfigEntry<bool> ZdoCoPresenceShadowEnabled { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderEnabled { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderStrictMode { get; private set; }
   public static ConfigEntry<string> HandshakeResponderEndpoint { get; private set; }
@@ -677,6 +678,19 @@ public static class PluginConfig {
             + "to at most this many redirects/second per (peer, object) — 20Hz→5Hz takes most of the "
             + "bandwidth saving with none of the staleness risk of dropping, since the object is still "
             + "inside the active zone. <=0 disables thinning (mid emits every pass).");
+
+    ZdoCoPresenceShadowEnabled =
+        config.Bind(
+            "Netcode",
+            "zdoCoPresenceShadowEnabled",
+            false,
+            "Phase 0 of the ownership/visibility split (ADR 0013): co-presence SHADOW. OFF (default) = "
+            + "no effect. ON = for each admitted ZDO, compute which OTHER connected observers are in-band "
+            + "(near/mid) for it and emit a 'copresence_shadow' telemetry row naming them — WITHOUT "
+            + "changing delivery. Zero behaviour change: it only measures the fan-out a correct model "
+            + "would produce, so the log names the exact shared-area ZDOs a co-located player is starved "
+            + "of under today's single-recipient stamping. Hot-reloadable; arm only during a 2+ client "
+            + "shadow test (it iterates all peers per admitted candidate).");
 
     HandshakeResponderEnabled =
         config.Bind(
