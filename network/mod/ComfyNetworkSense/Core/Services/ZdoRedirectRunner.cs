@@ -135,6 +135,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
   long _importanceRejected;
   long _bandDropped;   // far-band ZDOs suppressed from native but not emitted (zdoBandShaping)
   long _bandHeld;      // mid-band ZDOs held this pass by the thin rate (increment 2)
+  long _playerFastLaneCandidates;
+  long _playerFastLaneEmitted;
   long _ackFailures;
   long _postedOk;
   long _postFailedBatches;
@@ -426,6 +428,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
         continue;
       }
 
+      bool playerFastLane = PluginConfig.ZdoPlayerFastLaneEnabled.Value && IsPlayerCharacterZdo(zdo);
+
       // Mid-band thinning consults the per-(recipient, uid) last-emit clock; near always emits, far
       // drops, landmarks always emit (ZdoBandPolicy). A first sighting has no entry (-1) and emits.
       string emitKey = recipient + "|" + zdo.m_uid.ToString();
@@ -437,10 +441,16 @@ public sealed class ZdoRedirectRunner : IDisposable {
           candidate.LandmarkReachMeters,
           Time.time,
           lastEmit,
-          ThinIntervalSeconds());
+          ThinIntervalSeconds(),
+          playerFastLane);
+      if (playerFastLane) {
+        lock (_lock) _playerFastLaneCandidates++;
+      }
       if (ZdoBandPolicy.Emits(band)) {
         Redirect(peer, candidate);
-        if (band == ZdoBandAction.EmitThinned) {
+        if (band == ZdoBandAction.PlayerFastLane) {
+          lock (_lock) _playerFastLaneEmitted++;
+        } else if (band == ZdoBandAction.EmitThinned) {
           // Reset the mid-band clock only on an actual thinned emit (near/landmark don't gate on it).
           if (_lastEmit.Count >= LastEmitMaxEntries) _lastEmit.Clear();
           _lastEmit[emitKey] = Time.time;
@@ -647,6 +657,26 @@ public sealed class ZdoRedirectRunner : IDisposable {
   static float ThinIntervalSeconds() {
     float hz = PluginConfig.ZdoThinHz.Value;
     return hz > 0.0f ? 1.0f / hz : 0.0f;
+  }
+
+  static bool IsPlayerCharacterZdo(ZDO zdo) {
+    if (zdo == null || ZNet.instance == null) {
+      return false;
+    }
+
+    List<ZNetPeer> peers = ZNet.instance.GetPeers();
+    if (peers == null || peers.Count == 0) {
+      return false;
+    }
+
+    ZDOID uid = zdo.m_uid;
+    for (int i = 0; i < peers.Count; i++) {
+      if (peers[i] != null && peers[i].m_characterID == uid) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // One row per band decision on an ADMITTED ZDO, so redirect-send.jsonl shows the AoI shaping
@@ -1126,6 +1156,9 @@ public sealed class ZdoRedirectRunner : IDisposable {
         ["importance_rejected"] = _importanceRejected,
         ["band_dropped"] = _bandDropped,
         ["band_held"] = _bandHeld,
+        ["player_fast_lane_candidates"] = _playerFastLaneCandidates,
+        ["player_fast_lane_emitted"] = _playerFastLaneEmitted,
+        ["player_fast_lane_enabled"] = PluginConfig.ZdoPlayerFastLaneEnabled.Value,
         ["max_priority_rank"] = PluginConfig.ZdoRedirectMaxPriorityRank.Value,
         ["ack_failures"] = _ackFailures,
         ["posted_ok"] = _postedOk,

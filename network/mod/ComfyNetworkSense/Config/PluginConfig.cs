@@ -74,6 +74,9 @@ public static class PluginConfig {
   public static ConfigEntry<float> ZdoInnerRadiusMeters { get; private set; }
   public static ConfigEntry<float> ZdoOuterRadiusMeters { get; private set; }
   public static ConfigEntry<float> ZdoThinHz { get; private set; }
+  public static ConfigEntry<bool> ZdoPlayerFastLaneEnabled { get; private set; }
+  public static ConfigEntry<bool> ZdoSendCadenceOverrideEnabled { get; private set; }
+  public static ConfigEntry<float> ZdoSendCadenceOverrideIntervalSeconds { get; private set; }
   public static ConfigEntry<bool> ZdoCoPresenceShadowEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoCoPresenceFanoutEnabled { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderEnabled { get; private set; }
@@ -679,6 +682,33 @@ public static class PluginConfig {
             + "to at most this many redirects/second per (peer, object) — 20Hz→5Hz takes most of the "
             + "bandwidth saving with none of the staleness risk of dropping, since the object is still "
             + "inside the active zone. <=0 disables thinning (mid emits every pass).");
+
+    ZdoPlayerFastLaneEnabled =
+        config.Bind(
+            "Netcode",
+            "zdoPlayerFastLaneEnabled",
+            true,
+            "When zdoBandShapingEnabled is ON, player-character ZDOs bypass distance thinning/drop "
+            + "and are redirected every native sync pass. This protects remote avatar motion from the "
+            + "static-world AoI policy while keeping buildings/decor shaped. Hot-reloadable.");
+
+    ZdoSendCadenceOverrideEnabled =
+        config.Bind(
+            "Netcode",
+            "zdoSendCadenceOverrideEnabled",
+            false,
+            "Experimental server-side send-loop cadence override inspired by the classic Comfy "
+            + "ReturnToSender idea, implemented locally rather than copied. OFF = vanilla ZDOMan.Update "
+            + "scheduler. ON = call SendZDOs(peer, flush:false) for each connected peer at the configured "
+            + "interval. Behaviour-changing; enable only during a measured alpha pass.");
+
+    ZdoSendCadenceOverrideIntervalSeconds =
+        config.Bind(
+            "Netcode",
+            "zdoSendCadenceOverrideIntervalSeconds",
+            0.05f,
+            "Seconds between forced per-peer SendZDOs passes when zdoSendCadenceOverrideEnabled is ON. "
+            + "0.05s is 20Hz, matching the proven Comfy-era posture; values below 0.02s are clamped.");
 
     ZdoCoPresenceShadowEnabled =
         config.Bind(

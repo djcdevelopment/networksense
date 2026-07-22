@@ -12,6 +12,8 @@ public enum ZdoBandAction {
   Drop,
   /// <summary>A granted-reach landmark within reach: always emit regardless of band.</summary>
   Landmark,
+  /// <summary>Player-character motion: always emit regardless of distance band.</summary>
+  PlayerFastLane,
 }
 
 /// <summary>
@@ -44,7 +46,12 @@ public static class ZdoBandPolicy {
       double reachMeters,
       double nowSeconds,
       double lastEmitSeconds,
-      double thinIntervalSeconds) {
+      double thinIntervalSeconds,
+      bool playerFastLane = false) {
+    if (playerFastLane) {
+      return ZdoBandAction.PlayerFastLane;
+    }
+
     // Landmark presence overrides band shaping entirely — distance as a scarce, granted property.
     if (ZdoIntegrationContract.LandmarkAllows(distanceMeters, reachMeters)) {
       return ZdoBandAction.Landmark;
@@ -66,5 +73,6 @@ public static class ZdoBandPolicy {
   public static bool Emits(ZdoBandAction action) =>
       action == ZdoBandAction.EmitFull
       || action == ZdoBandAction.EmitThinned
-      || action == ZdoBandAction.Landmark;
+      || action == ZdoBandAction.Landmark
+      || action == ZdoBandAction.PlayerFastLane;
 }

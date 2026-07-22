@@ -49,10 +49,21 @@ public sealed class ZdoBandPolicyTests {
   }
 
   [Fact]
+  public void PlayerFastLaneOverridesEveryBand() {
+    Assert.Equal(
+        ZdoBandAction.PlayerFastLane,
+        ZdoBandPolicy.Classify(500, Inner, Outer, 0, 100.0, 99.99, Thin, playerFastLane: true));
+    Assert.Equal(
+        ZdoBandAction.PlayerFastLane,
+        ZdoBandPolicy.Classify(45, Inner, Outer, 0, 100.0, 99.99, Thin, playerFastLane: true));
+  }
+
+  [Fact]
   public void EmitsHelperMatchesTheEmitActions() {
     Assert.True(ZdoBandPolicy.Emits(ZdoBandAction.EmitFull));
     Assert.True(ZdoBandPolicy.Emits(ZdoBandAction.EmitThinned));
     Assert.True(ZdoBandPolicy.Emits(ZdoBandAction.Landmark));
+    Assert.True(ZdoBandPolicy.Emits(ZdoBandAction.PlayerFastLane));
     Assert.False(ZdoBandPolicy.Emits(ZdoBandAction.HoldThinned));
     Assert.False(ZdoBandPolicy.Emits(ZdoBandAction.Drop));
   }

@@ -1,5 +1,16 @@
 ## Changelog
 
+### Unreleased
+
+- Add a player-character ZDO fast lane for Lumberjacks primary mode. When
+  `zdoPlayerFastLaneEnabled=true`, connected players' character ZDOs bypass
+  distance-band thinning/drop and are redirected on every native sync pass, so
+  static-world AoI shaping does not starve remote avatar motion.
+- Add an off-by-default `zdoSendCadenceOverrideEnabled` A/B lever. The implementation
+  is clean-room-inspired by Comfy-era send-cadence fixes, uses reflection against the
+  loaded Valheim assembly, leaves vanilla untouched if the helper seam is absent, and
+  emits heartbeat fields describing patch/reflection status and per-pass cost.
+
 ### 0.5.31
 
 - Start permanent primary redirection as soon as the server peer is ready instead of waiting for

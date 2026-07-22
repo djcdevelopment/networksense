@@ -188,6 +188,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       result["zdo_probe_recv_calls"] = netcode.TryGetValue("recv_funnel_calls", out object recvCalls) ? recvCalls : null;
       result["zdo_probe_create_sync_calls"] = netcode.TryGetValue("create_sync_list_calls", out object syncCalls) ? syncCalls : null;
     }
+    Dictionary<string, object> sendCadence = ZdoSendCadenceOverride.Snapshot();
+    foreach (var pair in sendCadence) result[pair.Key] = pair.Value;
     return result;
   }
 
