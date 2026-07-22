@@ -82,6 +82,18 @@ public sealed class ZdoRedirectRunner : IDisposable {
   static readonly MethodInfo ZdosSetItem =
       ZdosField == null ? null : ZdosField.FieldType.GetMethod("set_Item");
 
+  // Read handles for the co-presence fan-out's per-observer delivered-revision check (ADR 0013): does
+  // a given peer's m_zdos already hold this ZDO at this data revision? All fail-soft — a missing
+  // handle yields a null delivered revision (treated as "never delivered"), never a crash.
+  static readonly MethodInfo ZdosContainsKey =
+      ZdosField == null ? null : ZdosField.FieldType.GetMethod("ContainsKey");
+  static readonly MethodInfo ZdosGetItem =
+      ZdosField == null ? null : ZdosField.FieldType.GetMethod("get_Item");
+  static readonly FieldInfo PeerZdoInfoDataRev =
+      PeerZdoInfoType == null ? null : PeerZdoInfoType.GetField("m_dataRevision");
+  // ZDOMan.m_peers (List<ZDOPeer>) — the connected-observer set the fan-out serves.
+  static readonly FieldInfo ZdoManPeersField = AccessTools.Field(typeof(ZDOMan), "m_peers");
+
   static bool ReflectionReady =>
       ZdosField != null && ForceSendField != null && PeerInfoCtor != null && ZdosSetItem != null;
 
@@ -347,10 +359,13 @@ public sealed class ZdoRedirectRunner : IDisposable {
     // (recipient, zdo uid). Computed once per pass, only when band-shaping is armed.
     string recipient = PluginConfig.ZdoBandShapingEnabled.Value ? RecipientFor(peer) : null;
 
-    // Phase 0 co-presence shadow (ADR 0013): snapshot all connected observers once per pass so the
-    // per-candidate shadow can ask which OTHERS are in-band. Only when armed; null otherwise.
-    List<ZNetPeer> shadowPeers =
-        PluginConfig.ZdoCoPresenceShadowEnabled.Value ? SafeGetPeers() : null;
+    // Co-presence (ADR 0013): snapshot the connected ZDOPeers once per pass when shadow or fan-out is
+    // armed. ZDOPeer (not ZNetPeer) because Redirect/SuppressNative and the delivered-revision read
+    // operate on ZDOMan's per-peer bookkeeping. Null when neither is armed (zero cost by default).
+    bool coPresenceShadow = PluginConfig.ZdoCoPresenceShadowEnabled.Value;
+    bool coPresenceFanout = PluginConfig.ZdoCoPresenceFanoutEnabled.Value;
+    List<object> coPresencePeers =
+        (coPresenceShadow || coPresenceFanout) ? SafeGetZdoPeers() : null;
 
     // CreateSyncList has already passed through Valheim's ServerSortSendZDOS priority
     // ordering. Remove from the source list backwards for index safety, but redirect in
@@ -379,10 +394,22 @@ public sealed class ZdoRedirectRunner : IDisposable {
       lock (_lock) _importanceAllowed++;
       RecordImportanceDecision(candidate, "importance_allowed");
 
-      // Phase 0 co-presence shadow (ADR 0013): measure the fan-out a correct model would produce,
-      // with ZERO delivery change. Runs whether or not band-shaping is armed; default off.
-      if (shadowPeers != null && shadowPeers.Count >= 2) {
-        ShadowCoPresence(peer, candidate, shadowPeers);
+      // Co-presence (ADR 0013): evaluate every connected observer once. The shadow records the
+      // evidence with ZERO delivery change; fan-out emits a read copy to each in-band observer so the
+      // one pass that sees a contended ZDO serves ALL co-located players. Both share the same
+      // evaluation, so the shadow predicts the fan-out exactly. Fan-out REPLACES the single-recipient
+      // path for this candidate (it still removes the ZDO from the exposing peer's toSync and acks it).
+      if (coPresencePeers != null && coPresencePeers.Count > 0) {
+        IReadOnlyList<FanoutObserverDecision> decisions =
+            EvaluateObservers(peer, candidate, coPresencePeers);
+        if (coPresenceShadow) {
+          RecordCoPresenceShadow(peer, candidate, coPresencePeers, decisions);
+        }
+        if (coPresenceFanout) {
+          selectedIndexes.Add(i);
+          ApplyFanOut(peer, candidate, coPresencePeers, decisions);
+          continue;
+        }
       }
 
       // Every path below removes the ZDO from toSync (selectedIndexes) so native never sends it.
@@ -651,84 +678,158 @@ public sealed class ZdoRedirectRunner : IDisposable {
     });
   }
 
-  // Phase 0 of the ownership/visibility split (ADR 0013): co-presence SHADOW — measurement only.
-  //
-  // Today a shared-area ZDO is stamped for exactly one recipient (RecipientFor), and under
-  // lumberjacks-primary native sync is suppressed, so a co-located second player is starved of it —
-  // the "buildings vanish when the other player is present" repro (FINDINGS-multiplayer-copresence-
-  // 2026-07-21). This changes NOTHING about delivery; it asks, for this admitted ZDO, which OTHER
-  // connected observers are in-band (near/mid/landmark — i.e. NOT far) and would be served by a
-  // correct fan-out. Two or more in-band observers = co-presence contention: every in-band peer other
-  // than the one this pass delivers to is a starved reader under single-recipient stamping. Emits one
-  // 'copresence_shadow' row per (admitted ZDO, peer pass); offline analysis dedups by uid to name the
-  // shared-area set the ADR-0013 fan-out must serve. The peer snapshot is taken once per pass by the
-  // caller; visibility here is intentionally band-only (lastEmit = -1, so thinning never masks a
-  // visible object as absent).
-  void ShadowCoPresence(object peer, ClassifiedZdo candidate, List<ZNetPeer> peers) {
+  // The shared per-observer evaluation for the co-presence shadow AND fan-out (ADR 0013). For each
+  // connected ZDOPeer it reads the observer's position and its native delivered-revision bookkeeping,
+  // then runs the pure ZdoFanoutPlan to decide, per observer: visible?, already-delivered?, emit?.
+  // Decisions are returned PARALLEL to `peers` (same index), so the caller can map an Emit decision
+  // back to the exact ZDOPeer it must Redirect. Ownership is never read here — visibility must not be
+  // a function of who owns the ZDO (Derek's constraint; owner is logged only as evidence).
+  IReadOnlyList<FanoutObserverDecision> EvaluateObservers(
+      object exposingPeer, ClassifiedZdo candidate, List<object> peers) {
+    Vector3 zdoPos = candidate.Position;
+    List<FanoutObserverInput> inputs = new(peers.Count);
+    foreach (object zdoPeer in peers) {
+      string host = null;
+      double dist = double.MaxValue;
+      try {
+        if (NetworkPeerField?.GetValue(zdoPeer) is ZNetPeer netPeer) {
+          host = netPeer.m_socket?.GetHostName();
+          dist = Vector3.Distance(zdoPos, netPeer.m_refPos);
+        }
+      } catch {
+        // A peer we cannot read is simply treated as out-of-band (host null, dist max).
+      }
+      inputs.Add(new FanoutObserverInput(host, dist, DeliveredDataRevision(zdoPeer, candidate.Zdo.m_uid)));
+    }
+    return ZdoFanoutPlan.Evaluate(
+        candidate.Zdo.DataRevision, PluginConfig.ZdoInnerRadiusMeters.Value,
+        PluginConfig.ZdoOuterRadiusMeters.Value, candidate.LandmarkReachMeters, inputs);
+  }
+
+  // The SHADOW (zdoCoPresenceShadowEnabled): one 'copresence_shadow' row per observer for a contended
+  // candidate, with ZERO delivery change. Records exactly the distinctions the analysis needs — the
+  // exposing pass, every observer considered, its distance + AoI band, whether it is visible/selected,
+  // whether a redirect would occur, whether its native bookkeeping already had the revision, and the
+  // ownership state (evidence only, never used to decide visibility). Skipped unless at least two
+  // observers are in-band, i.e. actual co-presence.
+  void RecordCoPresenceShadow(
+      object exposingPeer, ClassifiedZdo candidate, List<object> peers,
+      IReadOnlyList<FanoutObserverDecision> decisions) {
+    int visible = 0;
+    for (int k = 0; k < decisions.Count; k++)
+      if (decisions[k].Disposition != ZdoFanoutDisposition.OutOfBand) visible++;
+    if (visible < 2) {
+      return;   // no co-presence contention to shadow
+    }
+
+    string exposingHost = RecipientFor(exposingPeer);
+    string owner = candidate.Zdo.GetOwner().ToString(CultureInfo.InvariantCulture);
+    int ownerRev = candidate.Zdo.OwnerRevision;
+    long dataRev = candidate.Zdo.DataRevision;
     float inner = PluginConfig.ZdoInnerRadiusMeters.Value;
     float outer = PluginConfig.ZdoOuterRadiusMeters.Value;
-    float now = Time.time;
     float thin = ThinIntervalSeconds();
 
-    int inBand = 0;
-    List<string> observers = new();
-    foreach (ZNetPeer p in peers) {
-      string host = p?.m_socket?.GetHostName();
-      if (string.IsNullOrEmpty(host)) {
-        continue;
-      }
-      float dist = Vector3.Distance(candidate.Position, p.m_refPos);
+    for (int k = 0; k < decisions.Count; k++) {
+      FanoutObserverDecision d = decisions[k];
+      bool isExposing = ReferenceEquals(peers[k], exposingPeer);
       ZdoBandAction band = ZdoBandPolicy.Classify(
-          dist, inner, outer, candidate.LandmarkReachMeters, now, -1.0f, thin);
-      if (band == ZdoBandAction.Drop) {
-        continue;   // far = not visible to this observer, not starved
-      }
-      inBand++;
-      observers.Add(
-          host + ":" + band + ":" + Math.Round(dist, 1).ToString(CultureInfo.InvariantCulture));
-    }
+          d.DistanceMeters, inner, outer, candidate.LandmarkReachMeters, Time.time, -1.0f, thin);
 
-    if (inBand < 2) {
-      return;   // one (or zero) observer wants it — no co-presence contention to shadow
+      TelemetryCoordinator coordinator;
+      lock (_lock) {
+        if (_rowsWritten >= _maxRows) {
+          _capped = true;
+          return;
+        }
+        _rowsWritten++;
+        coordinator = _coordinator;
+      }
+      coordinator?.RecordZdoRedirect(new Dictionary<string, object> {
+          ["event"] = "copresence_shadow",
+          ["uid"] = candidate.Zdo.m_uid.ToString(),
+          ["prefab"] = SafePrefab(candidate.Zdo),
+          ["data_rev"] = dataRev,
+          ["exposing_peer"] = exposingHost,
+          ["observer"] = d.Recipient ?? string.Empty,
+          ["is_exposing_pass"] = isExposing,
+          ["distance_meters"] = Math.Round(d.DistanceMeters, 2),
+          ["band"] = band.ToString(),
+          ["disposition"] = d.Disposition.ToString(),
+          ["visible"] = d.Disposition != ZdoFanoutDisposition.OutOfBand,   // selected as an observer
+          ["would_redirect"] = d.Emit,                                     // a redirect would occur
+          ["already_delivered"] = d.Disposition == ZdoFanoutDisposition.AlreadyDelivered,
+          ["delivered_data_rev"] =
+              d.DeliveredDataRevision.HasValue ? (object) d.DeliveredDataRevision.Value : string.Empty,
+          ["owner"] = owner,          // EVIDENCE ONLY — never an input to the visibility decision
+          ["owner_rev"] = ownerRev,
+          ["window_id"] = _windowId,
+          ["mod_release"] = ComfyNetworkSense.ReleaseId
+      });
     }
-    RecordCoPresenceShadow(candidate, RecipientFor(peer), inBand, observers);
   }
 
-  // One row per co-presence-contended admitted ZDO (zdoCoPresenceShadowEnabled). delivered_to is the
-  // recipient THIS pass would stamp; starved_readers is the rest — the shared-area state today's
-  // single-recipient model withholds. Bounded by the same _rowsWritten/_maxRows cap as every row.
-  void RecordCoPresenceShadow(
-      ClassifiedZdo candidate, string deliveredTo, int inBandObservers, List<string> observers) {
-    TelemetryCoordinator coordinator;
-    lock (_lock) {
-      if (_rowsWritten >= _maxRows) {
-        _capped = true;
-        return;
+  // The FAN-OUT (zdoCoPresenceFanoutEnabled): from the one pass that saw this candidate, emit a read
+  // copy to EVERY in-band observer whose bookkeeping does not already have this revision, reusing the
+  // existing Redirect (recipient stamp + m_zdos ack + queue + dedup, all centralized). One logical
+  // revision produces at most one redirect per recipient (ZdoFanoutPlan's Emit flag). The exposing
+  // peer's ZDO was removed from its toSync by the caller, so it MUST be acked either by its own
+  // Redirect (Emit) or, failing that, an explicit SuppressNative — the ADR-0011 remove-implies-ack
+  // invariant, now enforced per observer.
+  void ApplyFanOut(
+      object exposingPeer, ClassifiedZdo candidate, List<object> peers,
+      IReadOnlyList<FanoutObserverDecision> decisions) {
+    bool exposingHandled = false;
+    for (int k = 0; k < decisions.Count; k++) {
+      bool isExposing = ReferenceEquals(peers[k], exposingPeer);
+      if (decisions[k].Emit) {
+        Redirect(peers[k], candidate);   // stamps RecipientFor(peer), acks this peer's m_zdos
+        if (isExposing) exposingHandled = true;
+      } else if (isExposing) {
+        SuppressNative(exposingPeer, candidate.Zdo);   // removed from toSync but not emitted -> ack
+        exposingHandled = true;
       }
-      _rowsWritten++;
-      coordinator = _coordinator;
+      // Non-exposing, non-Emit observers (far, or already-delivered) are left untouched: far peers
+      // re-sync on approach; already-delivered peers keep the copy they have.
     }
-    coordinator?.RecordZdoRedirect(new Dictionary<string, object> {
-        ["event"] = "copresence_shadow",
-        ["uid"] = candidate.Zdo.m_uid.ToString(),
-        ["prefab"] = SafePrefab(candidate.Zdo),
-        ["importance_class"] = candidate.PriorityTier,
-        ["delivered_to"] = deliveredTo,
-        ["in_band_observers"] = inBandObservers,
-        ["starved_readers"] = Math.Max(0, inBandObservers - 1),
-        ["observers"] = string.Join(",", observers),
-        ["inner_radius"] = PluginConfig.ZdoInnerRadiusMeters.Value,
-        ["outer_radius"] = PluginConfig.ZdoOuterRadiusMeters.Value,
-        ["window_id"] = _windowId,
-        ["mod_release"] = ComfyNetworkSense.ReleaseId
-    });
+    if (!exposingHandled) {
+      SuppressNative(exposingPeer, candidate.Zdo);   // defensive: exposing peer absent from m_peers
+    }
   }
 
-  // Connected-observer snapshot for the co-presence shadow; a copy per call, so the caller hoists it
-  // to once per pass. Null on any failure — the shadow is diagnostic and must never break delivery.
-  static List<ZNetPeer> SafeGetPeers() {
+  // This peer's native delivered data revision for a ZDO (its m_zdos[uid].m_dataRevision), or null if
+  // it has no entry — the "already considered delivered" bookkeeping the fan-out dedups on. Fail-soft:
+  // any missing reflection handle or read error yields null (treated as never-delivered).
+  long? DeliveredDataRevision(object zdoPeer, ZDOID uid) {
+    if (ZdosField == null || ZdosContainsKey == null || ZdosGetItem == null || PeerZdoInfoDataRev == null) {
+      return null;
+    }
     try {
-      return ZNet.instance?.GetPeers();
+      object dict = ZdosField.GetValue(zdoPeer);
+      if (dict == null || !(bool) ZdosContainsKey.Invoke(dict, new object[] { uid })) {
+        return null;
+      }
+      object info = ZdosGetItem.Invoke(dict, new object[] { uid });
+      return Convert.ToInt64(PeerZdoInfoDataRev.GetValue(info));
+    } catch {
+      return null;
+    }
+  }
+
+  // The connected ZDOPeers (ZDOMan.m_peers) as a per-call snapshot, so the caller hoists it to once
+  // per pass. These are the ZDOPeer objects Redirect/SuppressNative/DeliveredDataRevision operate on.
+  // Null on any failure — co-presence is opt-in diagnostics/fan-out and must never break delivery.
+  static List<object> SafeGetZdoPeers() {
+    if (ZdoManPeersField == null || ZDOMan.instance == null) {
+      return null;
+    }
+    try {
+      if (ZdoManPeersField.GetValue(ZDOMan.instance) is not System.Collections.IEnumerable list) {
+        return null;
+      }
+      List<object> peers = new();
+      foreach (object peer in list) peers.Add(peer);
+      return peers;
     } catch {
       return null;
     }

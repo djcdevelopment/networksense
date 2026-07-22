@@ -75,6 +75,7 @@ public static class PluginConfig {
   public static ConfigEntry<float> ZdoOuterRadiusMeters { get; private set; }
   public static ConfigEntry<float> ZdoThinHz { get; private set; }
   public static ConfigEntry<bool> ZdoCoPresenceShadowEnabled { get; private set; }
+  public static ConfigEntry<bool> ZdoCoPresenceFanoutEnabled { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderEnabled { get; private set; }
   public static ConfigEntry<bool> HandshakeResponderStrictMode { get; private set; }
   public static ConfigEntry<string> HandshakeResponderEndpoint { get; private set; }
@@ -691,6 +692,20 @@ public static class PluginConfig {
             + "would produce, so the log names the exact shared-area ZDOs a co-located player is starved "
             + "of under today's single-recipient stamping. Hot-reloadable; arm only during a 2+ client "
             + "shadow test (it iterates all peers per admitted candidate).");
+
+    ZdoCoPresenceFanoutEnabled =
+        config.Bind(
+            "Netcode",
+            "zdoCoPresenceFanoutEnabled",
+            false,
+            "Phase 2 of the ownership/visibility split (ADR 0013): co-presence FAN-OUT. OFF (default) = "
+            + "today's single-recipient delivery, byte-for-byte. ON = the one CreateSyncList pass that "
+            + "sees a contended ZDO emits a read copy to EVERY in-band observer (each stamped for its "
+            + "own recipient, its own m_zdos acked), so co-located players all see the same buildings/"
+            + "portals — reuses Redirect, so queue/dedup/ack behaviour is unchanged. One logical "
+            + "revision produces at most one redirect per recipient. Ownership is NOT changed. This "
+            + "REPLACES the single-recipient path per candidate; flip it off for instant rollback. Arm "
+            + "only with the shadow verified first (they share the same evaluation).");
 
     HandshakeResponderEnabled =
         config.Bind(
