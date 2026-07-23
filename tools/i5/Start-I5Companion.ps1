@@ -39,7 +39,20 @@ if (-not (Test-Path -LiteralPath $valheim)) { throw "Valheim path not found: $va
 
 Set-Location $remoteRoot
 $envFile = Join-Path $remoteRoot 'tools\companion\.env'
-Set-Content -LiteralPath $envFile -Value ('LUMBERJACKS_VALHEIM_HOST_PATH=' + $valheim) -Encoding ascii
+$latestBootstrapFile = Join-Path $remoteRoot 'tools\companion\latest-bootstrap.json'
+$bootstrapRelease = 'unknown'
+if (Test-Path -LiteralPath $latestBootstrapFile) {
+    try {
+        $latestBootstrap = Get-Content -LiteralPath $latestBootstrapFile -Raw | ConvertFrom-Json
+        if ($latestBootstrap.release) { $bootstrapRelease = $latestBootstrap.release }
+    } catch {
+        Write-Output ("Could not read latest bootstrap pointer: {0}" -f $_.Exception.Message)
+    }
+}
+Set-Content -LiteralPath $envFile -Value @(
+    'LUMBERJACKS_VALHEIM_HOST_PATH=' + $valheim
+    'LUMBERJACKS_COMPANION_BOOTSTRAP_RELEASE=' + $bootstrapRelease
+) -Encoding ascii
 
 function Test-DockerServer {
     param([int]$TimeoutSeconds = 8)
