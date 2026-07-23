@@ -83,6 +83,9 @@ Host i5
 # Drive a bounded named movement pattern on both joined clients
 .\Start-TwoClientMotionTest.ps1 -Pattern straight_north -DurationSeconds 10
 
+# Set the Wave 0 apply/observe split without keyboard/KVM work
+.\Set-TwoClientApplyRoles.ps1 -ApplyClient omen
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -177,6 +180,11 @@ Companion. Allowed patterns are `straight_north`, `straight_east`, `stutter_nort
 with a one-to-60-second bound. The mod consumes the command on Unity's main thread and appends
 `companion-motion-receipts.jsonl`; this is intentionally not a general console or keyboard-
 injection bridge.
+
+`Set-TwoClientApplyRoles.ps1` uses that same bounded Companion command lane to set exactly one
+client's Lumberjacks motion apply switch. The mod applies `set_apply` on Unity's main thread and
+records the same transport-control event as the HUD toggle. Use `-ApplyClient omen` for the first
+Wave 0 pass and `-ApplyClient i5` for role reversal.
 
 ### Connected-player evidence handoff
 

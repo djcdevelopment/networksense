@@ -99,7 +99,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator.SetLumberjacksReplacementTelemetryProvider(GetLumberjacksReplacementTelemetry);
     _lumberjacksPriorityManifestListener = new();
     _lumberjacksMotionRunner = new();
-    _motionTestController = new();
+    _motionTestController = new(RecordTransportControl);
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();

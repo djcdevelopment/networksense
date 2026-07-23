@@ -18,6 +18,7 @@ public sealed class MotionTestController : IDisposable {
   readonly string _directory = Path.Combine(Paths.ConfigPath, "comfy-network-sense");
   readonly string _commandPath;
   readonly string _receiptPath;
+  readonly Action<string, bool, string> _recordTransportControl;
   float _nextPollAt;
   float _startedAt;
   float _duration;
@@ -26,7 +27,8 @@ public sealed class MotionTestController : IDisposable {
   string _pattern = string.Empty;
   bool _active;
 
-  public MotionTestController() {
+  public MotionTestController(Action<string, bool, string> recordTransportControl = null) {
+    _recordTransportControl = recordTransportControl;
     _commandPath = Path.Combine(_directory, "companion-motion.command");
     _receiptPath = Path.Combine(_directory, "companion-motion-receipts.jsonl");
     Directory.CreateDirectory(_directory);
@@ -81,6 +83,21 @@ public sealed class MotionTestController : IDisposable {
     if (action == "stop") {
       if (_active) Finish("stopped", string.Empty);
       else WriteReceipt("stopped", id, string.Empty, 0.0f, string.Empty);
+      return;
+    }
+    if (action == "set_apply") {
+      if (fields.Length < 3 || !IsSafeToken(id)) {
+        WriteReceipt("error", id, "motion_apply", 0.0f, "invalid_set_apply_command");
+        return;
+      }
+      if (!TryParseBool(fields[2], out bool enabled)) {
+        WriteReceipt("error", id, "motion_apply", 0.0f, "apply_value_not_allowed");
+        return;
+      }
+      AlphaTransportSwitches.SetMotionApplyEnabled(enabled);
+      _recordTransportControl?.Invoke("lumberjacks_motion_apply", enabled,
+          enabled ? "remote_presentation" : "native_fallback");
+      WriteReceipt("apply_set", id, "motion_apply", 0.0f, enabled ? "enabled=true" : "enabled=false");
       return;
     }
     if (action != "start" || fields.Length < 4 || !IsSafeToken(id)) {
@@ -150,6 +167,25 @@ public sealed class MotionTestController : IDisposable {
 
   static bool IsSafeToken(string value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 80 &&
       value.All(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.');
+  static bool TryParseBool(string value, out bool enabled) {
+    switch ((value ?? string.Empty).Trim().ToLowerInvariant()) {
+      case "true":
+      case "1":
+      case "on":
+      case "yes":
+        enabled = true;
+        return true;
+      case "false":
+      case "0":
+      case "off":
+      case "no":
+        enabled = false;
+        return true;
+      default:
+        enabled = false;
+        return false;
+    }
+  }
   static string Escape(string value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
   public void Dispose() { if (_active) Finish("stopped", "plugin_disposed"); }
 }
