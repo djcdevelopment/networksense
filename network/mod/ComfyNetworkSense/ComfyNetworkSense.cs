@@ -37,7 +37,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m15-hudrecover-20260723-r1";
+  public const string ReleaseId = "m18-motioncontrol-20260723-r1";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -51,6 +51,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityMirrorRunner _lumberjacksPriorityMirrorRunner;
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
   LumberjacksMotionRunner _lumberjacksMotionRunner;
+  MotionTestController _motionTestController;
   NetcodeProbeRunner _netcodeProbeRunner;
   ZdoRedirectRunner _zdoRedirectRunner;
   GameplayEventProducer _gameplayEventProducer;
@@ -98,6 +99,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator.SetLumberjacksReplacementTelemetryProvider(GetLumberjacksReplacementTelemetry);
     _lumberjacksPriorityManifestListener = new();
     _lumberjacksMotionRunner = new();
+    _motionTestController = new();
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
@@ -243,6 +245,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
       _lumberjacksMotionRunner?.Update(now);
+    }
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.MotionTestController.Update")) {
+      _motionTestController?.Update();
     }
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ZdoInjectionRunner.Update")) {
@@ -531,6 +537,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = null;
     _lumberjacksMotionRunner?.Dispose();
     _lumberjacksMotionRunner = null;
+    _motionTestController?.Dispose();
+    _motionTestController = null;
     _netcodeProbeRunner?.Dispose();
     _netcodeProbeRunner = null;
     _zdoRedirectRunner?.Dispose();

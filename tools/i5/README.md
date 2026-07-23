@@ -74,6 +74,9 @@ Host i5
 # Compact console plus a saved JSON receipt
 .\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter -SummaryOnly -OutputJson .\captures\sprint-stutter\result.json
 
+# Drive a bounded named movement pattern on both joined clients
+.\Start-TwoClientMotionTest.ps1 -Pattern straight_north -DurationSeconds 10
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -127,6 +130,12 @@ Pass `-BundleDirectory` to collect both machine-local evidence bundle zips onto 
 Pass `-SummaryOnly` during rapid live testing when the compact verdict is enough.
 Pass `-OutputJson` to save the full comparison and raw per-machine summaries while keeping the
 console compact.
+
+`Start-TwoClientMotionTest.ps1` delivers the same command through each machine's localhost
+Companion. Allowed patterns are `straight_north`, `straight_east`, `stutter_north`, and `circle`,
+with a one-to-60-second bound. The mod consumes the command on Unity's main thread and appends
+`companion-motion-receipts.jsonl`; this is intentionally not a general console or keyboard-
+injection bridge.
 
 ### Connected-player evidence handoff
 
