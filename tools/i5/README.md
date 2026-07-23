@@ -71,6 +71,9 @@ Host i5
 # Fast operator readout without the full JSON body
 .\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter -SummaryOnly
 
+# Compact console plus a saved JSON receipt
+.\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter -SummaryOnly -OutputJson .\captures\sprint-stutter\result.json
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -120,6 +123,8 @@ summaries. A useful Lumberjacks motion run should show peer count above zero and
 that visible movement is still native Valheim for that run.
 Pass `-BundleDirectory` to collect both machine-local evidence bundle zips onto OMEN for review.
 Pass `-SummaryOnly` during rapid live testing when the compact verdict is enough.
+Pass `-OutputJson` to save the full comparison and raw per-machine summaries while keeping the
+console compact.
 
 Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
 mismatch — a green run *is* the receipt. Directories land as

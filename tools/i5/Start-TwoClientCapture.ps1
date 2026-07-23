@@ -28,6 +28,10 @@ remain in each Companion and can be downloaded from that machine's dashboard.
 Print only the compact operator summary. By default the command prints the summary followed by the
 full JSON result.
 
+.PARAMETER OutputJson
+Optional local path where the full result JSON should be written. This works with SummaryOnly, so
+operators can keep the console compact while still preserving a machine-readable receipt.
+
 .EXAMPLE
 .\tools\i5\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter
 #>
@@ -43,7 +47,9 @@ param(
 
     [string]$BundleDirectory,
 
-    [switch]$SummaryOnly
+    [switch]$SummaryOnly,
+
+    [string]$OutputJson
 )
 
 $ErrorActionPreference = 'Stop'
@@ -290,6 +296,14 @@ function Write-CaptureSummary {
 }
 
 Write-CaptureSummary $result
+$json = $result | ConvertTo-Json -Depth 12
+if ($OutputJson) {
+    $outputPath = [IO.Path]::GetFullPath($OutputJson)
+    $outputDirectory = Split-Path -Parent $outputPath
+    if ($outputDirectory) { New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null }
+    [IO.File]::WriteAllText($outputPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    Write-Host ("Result JSON: {0}" -f $outputPath)
+}
 if (-not $SummaryOnly) {
-    $result | ConvertTo-Json -Depth 12
+    $json
 }
