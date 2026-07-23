@@ -54,6 +54,7 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   public bool WebSocketConnected { get { lock (_statusLock) return _webSocketConnected; } }
   public bool UdpReady { get { lock (_statusLock) return _udpReady; } }
   public string State { get { lock (_statusLock) return _state; } }
+  public string LastError { get { lock (_statusLock) return _lastError; } }
   public long SentUdp => Interlocked.Read(ref _sentUdp);
   public long SentWebSocket => Interlocked.Read(ref _sentWebSocket);
   public long ReceivedUdp => Interlocked.Read(ref _receivedUdp);

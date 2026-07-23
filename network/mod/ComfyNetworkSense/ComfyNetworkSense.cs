@@ -189,6 +189,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     // those three fields as nullable, so they simply arrive unset rather than breaking the
     // contract; no gateway change is required for this removal.
     if (authoritative != null) foreach (var pair in authoritative) result["zdo_authoritative_" + (pair.Key == "authoritative_enabled" ? "enabled" : pair.Key)] = pair.Value;
+    IDictionary<string, object> motion = _lumberjacksMotionRunner?.Snapshot();
+    if (motion != null) foreach (var pair in motion) result["motion_" + pair.Key] = pair.Value;
     if (netcode != null) {
       result["zdo_probe_running"] = netcode.TryGetValue("running", out object running) ? running : null;
       result["zdo_probe_recv_rows"] = netcode.TryGetValue("recv_zdo_rows", out object recv) ? recv : null;
@@ -413,6 +415,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         LumberjacksUdpEnabled = AlphaTransportSwitches.LumberjacksUdpEnabled,
         LumberjacksWebSocketConnected = _lumberjacksMotionRunner?.WebSocketConnected == true,
         LumberjacksUdpReady = _lumberjacksMotionRunner?.UdpReady == true,
+        MotionState = _lumberjacksMotionRunner?.State ?? "not-created",
+        MotionLastError = _lumberjacksMotionRunner?.LastError,
         MotionApplyEnabled = AlphaTransportSwitches.MotionApplyEnabled,
         MotionSent = (_lumberjacksMotionRunner?.SentUdp ?? 0) + (_lumberjacksMotionRunner?.SentWebSocket ?? 0),
         MotionReceived = (_lumberjacksMotionRunner?.ReceivedUdp ?? 0) + (_lumberjacksMotionRunner?.ReceivedWebSocket ?? 0),

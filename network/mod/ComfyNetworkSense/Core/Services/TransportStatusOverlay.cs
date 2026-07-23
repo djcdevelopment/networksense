@@ -81,8 +81,10 @@ public sealed class TransportStatusOverlay {
     if (GUILayout.Button("APPLY " + Mark(status.MotionApplyEnabled),
         status.MotionApplyEnabled ? _good : _idle, GUILayout.Width(104.0f))) toggleMotionApply?.Invoke();
     GUILayout.Label(
-        "snapshots sent " + status.MotionSent + " · received " + status.MotionReceived + " · applied " + status.MotionApplied
-        + (status.MotionApplyEnabled ? "" : " · OBSERVE ONLY"),
+        "state " + Fallback(status.MotionState)
+        + " | sent " + status.MotionSent + " | received " + status.MotionReceived + " | applied " + status.MotionApplied
+        + (status.MotionApplyEnabled ? "" : " | OBSERVE ONLY")
+        + (string.IsNullOrWhiteSpace(status.MotionLastError) ? "" : " | error " + status.MotionLastError),
         _label,
         GUILayout.ExpandWidth(true));
     GUILayout.EndHorizontal();

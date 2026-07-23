@@ -8,6 +8,8 @@ public sealed class TransportStatusSnapshot {
   public bool LumberjacksUdpEnabled { get; set; }
   public bool LumberjacksWebSocketConnected { get; set; }
   public bool LumberjacksUdpReady { get; set; }
+  public string MotionState { get; set; }
+  public string MotionLastError { get; set; }
   public bool MotionApplyEnabled { get; set; }
   public long MotionSent { get; set; }
   public long MotionReceived { get; set; }
