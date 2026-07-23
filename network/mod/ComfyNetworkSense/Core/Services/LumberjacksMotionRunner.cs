@@ -25,6 +25,7 @@ public sealed class LumberjacksMotionRunner : IDisposable {
 
   readonly ConcurrentQueue<ReceivedMotion> _received = new();
   readonly Dictionary<string, RemoteMotion> _remote = new(StringComparer.Ordinal);
+  readonly Dictionary<ZDOID, GameObject> _playerInstances = new();
   readonly object _outboundLock = new();
   readonly object _statusLock = new();
 
@@ -37,6 +38,7 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   int _lastSentGeneration;
   float _nextConnectAt;
   float _nextSampleAt;
+  float _nextPlayerIndexAt;
   ushort _sequence;
   string _state = "idle";
   string _lastError = string.Empty;
@@ -89,7 +91,7 @@ public sealed class LumberjacksMotionRunner : IDisposable {
       }
 
       ZDOID zdoId = new(remote.Snapshot.ZdoUserId, remote.Snapshot.ZdoId);
-      GameObject instance = ResolveInstance(zdoId);
+      GameObject instance = ResolveInstance(zdoId, now);
       if (instance == null) {
         Interlocked.Increment(ref _unknownZdos);
         continue;
@@ -275,7 +277,7 @@ public sealed class LumberjacksMotionRunner : IDisposable {
     }
   }
 
-  static GameObject ResolveInstance(ZDOID zdoId) {
+  GameObject ResolveInstance(ZDOID zdoId, float now) {
     ZNetScene scene = ZNetScene.instance;
     if (scene == null) return null;
 
@@ -287,7 +289,23 @@ public sealed class LumberjacksMotionRunner : IDisposable {
 
     ZDO zdo = ZDOMan.instance?.GetZDO(zdoId);
     ZNetView view = zdo == null ? null : scene.FindInstance(zdo);
-    return view?.gameObject;
+    GameObject resolved = view?.gameObject;
+    if (resolved != null) return resolved;
+
+    if (now >= _nextPlayerIndexAt) {
+      _nextPlayerIndexAt = now + 1.0f;
+      RebuildPlayerIndex();
+    }
+    return _playerInstances.TryGetValue(zdoId, out GameObject player) ? player : null;
+  }
+
+  void RebuildPlayerIndex() {
+    _playerInstances.Clear();
+    foreach (Player player in UnityEngine.Object.FindObjectsByType<Player>(FindObjectsSortMode.None)) {
+      ZNetView view = player?.GetComponent<ZNetView>();
+      ZDO zdo = view?.GetZDO();
+      if (zdo != null && player != null) _playerInstances[zdo.m_uid] = player.gameObject;
+    }
   }
 
   string NormalizeGatewayUrl() {
