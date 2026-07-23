@@ -142,6 +142,7 @@ function Get-CaptureBrief {
         final_motion_websocket_connected = $Summary.final_motion_websocket_connected
         final_motion_udp_ready = $Summary.final_motion_udp_ready
         final_motion_last_error = $Summary.final_motion_last_error
+        final_local_motion = $Summary.final_local_motion
         gateway = $Summary.capture_identity.gateway_version
         mod = $Summary.capture_identity.valheim_mod_version
         cutover = $Summary.capture_identity.cutover_mode
