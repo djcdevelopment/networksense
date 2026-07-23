@@ -30,6 +30,10 @@ Overrides -Dest.
 .PARAMETER DryRun
 Print the deploy plan (files and remote paths) without copying anything.
 
+.PARAMETER ExcludeDirectoryName
+Directory leaf names to skip when deploying directories recursively. Useful for build outputs such
+as bin and obj; exact leaf-name match only.
+
 .EXAMPLE
 .\Deploy-ToI5.ps1 -Path .\ComfyNetworkSense.dll -ValheimPlugins
 
@@ -45,7 +49,9 @@ param(
 
     [switch]$ValheimPlugins,
 
-    [switch]$DryRun
+    [switch]$DryRun,
+
+    [string[]]$ExcludeDirectoryName = @()
 )
 
 $SshAlias = 'i5'
@@ -70,7 +76,18 @@ if ($dupes) {
 $manifest = @()
 foreach ($item in $items) {
     if ($item.PSIsContainer) {
-        $files = Get-ChildItem -LiteralPath $item.FullName -Recurse -File
+        $excludeSet = @{}
+        foreach ($name in $ExcludeDirectoryName) {
+            if (-not [string]::IsNullOrWhiteSpace($name)) { $excludeSet[$name] = $true }
+        }
+        $files = Get-ChildItem -LiteralPath $item.FullName -Recurse -File | Where-Object {
+            $relativeDirectory = $_.DirectoryName.Substring($item.FullName.Length).TrimStart('\', '/')
+            if ([string]::IsNullOrWhiteSpace($relativeDirectory)) { return $true }
+            foreach ($segment in ($relativeDirectory -split '[\\/]')) {
+                if ($excludeSet.ContainsKey($segment)) { return $false }
+            }
+            return $true
+        }
         if (-not $files) { throw "directory has no files: $($item.FullName)" }
         foreach ($f in $files) {
             $rel = $f.FullName.Substring($item.FullName.Length).TrimStart('\', '/') -replace '\\', '/'

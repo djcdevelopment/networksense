@@ -59,6 +59,9 @@ Host i5
 # Start/rebuild the i5 Companion with the Valheim directory mounted
 .\Start-I5Companion.ps1
 
+# Sync the current Companion source/runtime inputs, then start/rebuild it
+.\Sync-I5Companion.ps1
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -94,6 +97,11 @@ The task starts Docker Desktop only. It does not start Valheim or write the Valh
 the script tries the `LumberjacksDockerDesktop` scheduled task once, waits briefly,
 then exits with a clear error. Do not work around that by launching only the base
 compose file; that recreates the read-only dashboard with no `/valheim` mount.
+
+For Companion development, prefer `Sync-I5Companion.ps1`. It uses the verified deploy lane for the
+minimal Docker build context, clears only the stale remote `src\Game.Companion` staging directory,
+then calls `Start-I5Companion.ps1`. Use `-DryRun` to inspect the copy plan or `-NoStart` when only
+staging files is desired.
 
 Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
 mismatch — a green run *is* the receipt. Directories land as
