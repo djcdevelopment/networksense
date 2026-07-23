@@ -24,6 +24,10 @@ Capture label suffix. A timestamp and machine label are added automatically.
 Optional local directory where both evidence bundle zips should be collected. If omitted, bundles
 remain in each Companion and can be downloaded from that machine's dashboard.
 
+.PARAMETER SummaryOnly
+Print only the compact operator summary. By default the command prints the summary followed by the
+full JSON result.
+
 .EXAMPLE
 .\tools\i5\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter
 #>
@@ -37,7 +41,9 @@ param(
 
     [string]$Label = 'two-client',
 
-    [string]$BundleDirectory
+    [string]$BundleDirectory,
+
+    [switch]$SummaryOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -246,4 +252,44 @@ $result = [ordered]@{
     i5 = if ($remoteError) { @{ ok = $false; error = $remoteError } } else { $remote }
 }
 
-$result | ConvertTo-Json -Depth 12
+function Write-CaptureSummary {
+    param($Result)
+
+    $c = $Result.comparison
+    Write-Host ''
+    Write-Host ("[{0}] {1}" -f $c.level.ToUpperInvariant(), $c.headline)
+    Write-Host ("Evidence: {0}" -f $c.evidence)
+    Write-Host ("Next: {0}" -f $c.next_action)
+    if ($c.observed_players -and @($c.observed_players).Count -gt 0) {
+        Write-Host ("Players: {0}" -f (@($c.observed_players) -join ', '))
+    }
+    foreach ($machine in 'omen', 'i5') {
+        $brief = $c.$machine
+        if (-not $brief) { continue }
+        if ($brief.ok -eq $false) {
+            Write-Host ("{0}: ERROR {1}" -f $machine, $brief.error)
+            continue
+        }
+        Write-Host ("{0}: run={1} verdict={2} peers={3} motion_recv_delta={4} relay_delta={5} samples={6} bad={7}" -f `
+            $machine,
+            $brief.run_id,
+            $brief.verdict,
+            $brief.max_peers,
+            $brief.motion_received_delta,
+            $brief.motion_relayed_delta,
+            $brief.samples,
+            $brief.bad_samples)
+    }
+    if ($Result.bundles -and @($Result.bundles).Count -gt 0) {
+        Write-Host 'Bundles:'
+        foreach ($bundle in @($Result.bundles)) {
+            Write-Host ("  {0}: {1} ({2} bytes)" -f $bundle.machine, $bundle.path, $bundle.bytes)
+        }
+    }
+    Write-Host ''
+}
+
+Write-CaptureSummary $result
+if (-not $SummaryOnly) {
+    $result | ConvertTo-Json -Depth 12
+}
