@@ -24,7 +24,7 @@ public sealed class TransportStatusOverlay {
       Action disconnectValheim,
       Action openDashboard,
       Action openSetup) {
-    if (status == null || !PluginConfig.TransportStripEnabled.Value || IsDedicatedServer()) {
+    if (status == null || IsDedicatedServer()) {
       return;
     }
 
@@ -32,7 +32,7 @@ public sealed class TransportStatusOverlay {
     EnsureStyles();
 
     DrawToggleTab();
-    if (_visible != true) {
+    if (!PluginConfig.TransportStripEnabled.Value || _visible != true) {
       return;
     }
 
@@ -98,7 +98,12 @@ public sealed class TransportStatusOverlay {
 
     GUILayout.BeginArea(new Rect(x, y, tabWidth, tabHeight));
     if (GUILayout.Button(label, _visible == true ? _idle : _good, GUILayout.Width(tabWidth), GUILayout.Height(tabHeight))) {
-      _visible = _visible != true;
+      if (_visible == true) {
+        _visible = false;
+      } else {
+        PluginConfig.TransportStripEnabled.Value = true;
+        _visible = true;
+      }
     }
     GUILayout.EndArea();
   }

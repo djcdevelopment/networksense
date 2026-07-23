@@ -1,5 +1,11 @@
 ## Changelog
 
+### 0.5.35
+
+- Keep the side `NET SHOW` recovery tab visible even when an older local config has
+  `transportStripEnabled = false`, so testers can recover the transport strip without
+  editing the BepInEx config.
+
 ### 0.5.34
 
 - Start the alpha transport truth strip collapsed so lower-resolution menu buttons remain reachable.
