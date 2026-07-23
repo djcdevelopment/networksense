@@ -89,6 +89,12 @@ ssh -o BatchMode=yes i5 'powershell.exe -NoProfile -Command "Invoke-RestMethod h
 
 The task starts Docker Desktop only. It does not start Valheim or write the Valheim config.
 
+`Start-I5Companion.ps1` requires the Docker Desktop Linux engine before it runs
+`docker compose`. If Docker is installed but the engine pipe/server is unavailable,
+the script tries the `LumberjacksDockerDesktop` scheduled task once, waits briefly,
+then exits with a clear error. Do not work around that by launching only the base
+compose file; that recreates the read-only dashboard with no `/valheim` mount.
+
 Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
 mismatch — a green run *is* the receipt. Directories land as
 `<Dest>/<dirname>/...`; top-level items with duplicate leaf names are rejected

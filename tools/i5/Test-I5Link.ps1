@@ -76,6 +76,52 @@ Write-Output ("{0}|{1}|{2}" -f $staging, $plugins, $free)
     } else {
         Write-Step 'remote layout probe' $false 'remote powershell probe failed'
     }
+
+    $dockerProbe = @'
+$pipe = Test-Path -LiteralPath '\\.\pipe\dockerDesktopLinuxEngine'
+$cli = Get-Command docker -ErrorAction SilentlyContinue
+$server = $null
+$versionError = $null
+if ($cli) {
+    $job = Start-Job -ScriptBlock { docker version --format '{{.Server.Version}}' 2>&1 }
+    if (Wait-Job $job -Timeout 12) {
+        $output = Receive-Job $job -ErrorAction SilentlyContinue
+        if ($output) {
+            $server = ($output | Select-Object -Last 1).ToString().Trim()
+            if ($server -match 'error|failed|Cannot connect|pipe') {
+                $versionError = (($output | Out-String) -replace '\s+', ' ').Trim()
+                $server = $null
+            }
+        }
+    } else {
+        Stop-Job $job -ErrorAction SilentlyContinue
+        $versionError = 'docker version timed out after 12 seconds'
+    }
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+}
+[pscustomobject]@{
+    docker_cli = [bool]$cli
+    linux_engine_pipe = $pipe
+    server_version = $server
+    version_error = $versionError
+} | ConvertTo-Json -Compress
+'@
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($dockerProbe))
+    $dockerFacts = ssh -o BatchMode=yes -o ConnectTimeout=8 $SshAlias "powershell.exe -NoProfile -EncodedCommand $b64" 2>$null
+    if ($LASTEXITCODE -eq 0 -and $dockerFacts) {
+        $docker = $dockerFacts | Select-Object -Last 1 | ConvertFrom-Json
+        if ($docker.docker_cli -and $docker.linux_engine_pipe -and $docker.server_version) {
+            Write-Host ("[INFO] Docker Desktop Linux engine ready: {0}" -f $docker.server_version)
+        } else {
+            $reason = 'Docker Desktop Linux engine unavailable'
+            if (-not $docker.docker_cli) { $reason = 'docker CLI not found' }
+            elseif ($docker.version_error) { $reason = $docker.version_error }
+            Write-Host ("[WARN] Companion Docker runtime not ready: {0}" -f $reason)
+            Write-Host "[WARN] Deploy lane can still copy files; Start-I5Companion.ps1 will fail until Docker Desktop is ready."
+        }
+    } else {
+        Write-Host '[WARN] Companion Docker runtime probe failed; deploy lane verdict is still based on tailnet/ssh.'
+    }
 }
 
 if ($script:AnyFail) {
