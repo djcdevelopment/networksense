@@ -108,9 +108,10 @@ staging files is desired.
 
 For two-client transport evidence, use `Start-TwoClientCapture.ps1`. Start both Valheim clients,
 begin the capture, move both characters during the window, then compare the `omen` and `i5`
+summaries. The output includes a top-level `comparison` verdict before the raw per-machine
 summaries. A useful Lumberjacks motion run should show peer count above zero and advancing
-`motion_received` counters. If peer count rises but motion remains zero, the visible movement is
-still native Valheim for that run.
+`motion_received` counters. If peer count rises but motion remains zero, the comparison calls out
+that visible movement is still native Valheim for that run.
 
 Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
 mismatch — a green run *is* the receipt. Directories land as

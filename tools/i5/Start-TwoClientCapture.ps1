@@ -91,11 +91,107 @@ try {
 } catch { $remoteError = $_.Exception.Message }
 Remove-Job $localJob, $remoteJob -Force -ErrorAction SilentlyContinue
 
+function Get-CounterDelta {
+    param($Summary, [string]$Name)
+
+    if (-not $Summary -or -not $Summary.counter_ranges) { return $null }
+    $counter = $Summary.counter_ranges.$Name
+    if (-not $counter) { return $null }
+    return $counter.delta
+}
+
+function Get-CaptureBrief {
+    param($Summary)
+
+    if (-not $Summary) { return $null }
+    [ordered]@{
+        run_id = $Summary.run_id
+        verdict = $Summary.verdict
+        samples = $Summary.sample_count
+        bad_samples = $Summary.bad_sample_count
+        max_peers = $Summary.max_peers
+        players = @($Summary.observed_players)
+        motion_received_delta = $Summary.motion_received_delta
+        motion_relayed_delta = Get-CounterDelta $Summary 'motion_relayed'
+        pending_delta = Get-CounterDelta $Summary 'pending'
+        acknowledged_delta = Get-CounterDelta $Summary 'acknowledged'
+        applied_delta = Get-CounterDelta $Summary 'applied'
+        gateway = $Summary.capture_identity.gateway_version
+        mod = $Summary.capture_identity.valheim_mod_version
+        cutover = $Summary.capture_identity.cutover_mode
+        final = $Summary.final_current_read.text
+    }
+}
+
+function Get-IntValue {
+    param($Value)
+
+    if ($null -eq $Value) { return 0 }
+    return [int]$Value
+}
+
+function Compare-Captures {
+    param($Omen, $I5, [string]$OmenError, [string]$I5Error)
+
+    if ($OmenError -or $I5Error) {
+        return [ordered]@{
+            level = 'bad'
+            headline = 'One or both capture commands failed.'
+            next_action = 'Fix the failed Companion lane before using this run as movement evidence.'
+            evidence = (@($OmenError, $I5Error) | Where-Object { $_ }) -join ' | '
+            omen = if ($OmenError) { @{ ok = $false; error = $OmenError } } else { Get-CaptureBrief $Omen }
+            i5 = if ($I5Error) { @{ ok = $false; error = $I5Error } } else { Get-CaptureBrief $I5 }
+        }
+    }
+
+    $omenMotion = Get-IntValue $Omen.motion_received_delta
+    $i5Motion = Get-IntValue $I5.motion_received_delta
+    $omenPeers = Get-IntValue $Omen.max_peers
+    $i5Peers = Get-IntValue $I5.max_peers
+    $badSamples = (Get-IntValue $Omen.bad_sample_count) + (Get-IntValue $I5.bad_sample_count)
+
+    if ($badSamples -gt 0) {
+        $level = 'bad'
+        $headline = 'Capture had incomplete telemetry.'
+        $next = 'Do not use this as a transport verdict. Re-run after both Companion dashboards show readable Gateway, Valheim, cutover, and motion telemetry.'
+    } elseif ($omenMotion -gt 0 -or $i5Motion -gt 0) {
+        $level = 'ok'
+        $headline = 'Lumberjacks motion frames advanced during the two-client window.'
+        $next = 'Use the samples/bundles to correlate perceived movement against motion counter deltas and player names.'
+    } elseif ($omenPeers -gt 0 -or $i5Peers -gt 0) {
+        $level = 'wait'
+        $headline = 'Peers were present, but Lumberjacks motion counters did not advance.'
+        $next = 'Treat visible movement as native Valheim for this run; inspect mod-side motion publish path before tuning interpolation.'
+    } else {
+        $level = 'wait'
+        $headline = 'No active peer window was captured.'
+        $next = 'Start this command after both clients are joining or immediately before moving both characters.'
+    }
+
+    $players = @(@($Omen.observed_players) + @($I5.observed_players)) |
+        Where-Object { $_ } |
+        Sort-Object -Unique
+    if ($null -eq $players) { $players = @() }
+
+    return [ordered]@{
+        level = $level
+        headline = $headline
+        next_action = $next
+        evidence = "omen peers=$omenPeers motion_delta=$omenMotion; i5 peers=$i5Peers motion_delta=$i5Motion; bad_samples=$badSamples"
+        observed_players = @($players)
+        omen = Get-CaptureBrief $Omen
+        i5 = Get-CaptureBrief $I5
+    }
+}
+
+$comparison = Compare-Captures $local $remote $localError $remoteError
+
 $result = [ordered]@{
     schema_version = 1
     started_label = "$stamp-$safeLabel"
     duration_seconds = $DurationSeconds
     interval_seconds = $IntervalSeconds
+    comparison = $comparison
     omen = if ($localError) { @{ ok = $false; error = $localError } } else { $local }
     i5 = if ($remoteError) { @{ ok = $false; error = $remoteError } } else { $remote }
 }
