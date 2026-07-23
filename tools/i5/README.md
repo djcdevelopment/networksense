@@ -56,6 +56,9 @@ Host i5
 # Ship the mod straight into the live BepInEx plugins dir
 .\Deploy-ToI5.ps1 -Path ..\..\network\mod\ComfyNetworkSense\bin\Release\ComfyNetworkSense.dll -ValheimPlugins
 
+# Start/rebuild the i5 Companion with the Valheim directory mounted
+.\Start-I5Companion.ps1
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -66,6 +69,18 @@ When i5 is enrolled as a Docker-backed Companion client, its `admin` console ses
 scheduled task named `LumberjacksDockerDesktop`. It starts Docker Desktop at logon; the Companion
 compose service uses `restart: unless-stopped`, so its loopback dashboard returns after Docker is
 ready. Verify the recovery path without touching Valheim:
+
+Always start the i5 Companion through `Start-I5Companion.ps1` or the equivalent compose command with
+both compose files:
+
+```powershell
+docker compose -p lumberjacks-companion --env-file C:\deploy\baseline\i5-companion\tools\companion\.env `
+  -f C:\deploy\baseline\i5-companion\tools\companion\docker-compose.yml `
+  -f C:\deploy\baseline\i5-companion\tools\companion\docker-compose.valheim.yml up -d --build
+```
+
+Starting with only `docker-compose.yml` creates a read-only dashboard. It will show
+`valheim.found=false`, `config_found=false`, and no enrollment hash because `/valheim` is not mounted.
 
 ```powershell
 ssh -o BatchMode=yes i5 'schtasks /Query /TN LumberjacksDockerDesktop /FO LIST'
