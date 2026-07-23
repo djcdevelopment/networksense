@@ -149,6 +149,10 @@ Before asking for a live course, run the read-only seam gates in this order:
 
 If a gate fails, stop at that boundary and use its receipt; do not repeat the same join/movement
 experiment until the failing seam has changed.
+
+For network-condition analysis without starting Valheim, run Test-NetworkCondition.ps1. It reads
+only the retained client-local JSONL on OMEN and i5 and reports distribution values plus the exact
+RTT provenance. Use this before changing interpolation, packet cadence, or the tailnet path.
 Pass `-BundleDirectory` to collect both machine-local evidence bundle zips onto OMEN for review.
 Pass `-SummaryOnly` during rapid live testing when the compact verdict is enough.
 Pass `-OutputJson` to save the full comparison and raw per-machine summaries while keeping the
