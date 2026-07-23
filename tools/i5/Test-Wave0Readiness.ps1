@@ -152,7 +152,7 @@ $checks += New-Check 'omen-profile-and-config' ([bool]$omenStatus.profile.linked
 if ($heartbeatAgeCapture) {
     $checks += New-Check 'heartbeat-age-capture-field' $true ("run=$($heartbeatAgeCapture.run_id)")
 } else {
-    $checks += New-Check 'heartbeat-age-capture-field' $false ("no retained $expectedRelease capture with server_ping_age_ms/server_ping_age_jitter_ms; not required before the next real capture") 'wait'
+    $checks += New-Check 'heartbeat-age-capture-field' $false ("no retained $expectedRelease capture with server_ping_age_ms/server_ping_age_jitter_ms; the next real capture should create it") 'warn'
 }
 $checks += New-Check 'motion-endpoint-readable' ($null -ne $motion.received -and $null -ne $motion.relayed_websocket) ("received=$($motion.received) relayed_ws=$($motion.relayed_websocket) relayed_udp=$($motion.relayed_udp)")
 
@@ -166,7 +166,7 @@ if ($i5StatusResult.ok) {
     $checks += New-Check 'i5-installed-package' $false ($i5StatusResult.error) 'wait'
 }
 
-$failed = @($checks | Where-Object { -not $_.ok -and $_.level -ne 'wait' })
+$failed = @($checks | Where-Object { -not $_.ok -and $_.level -notin @('wait', 'warn') })
 $waiting = @($checks | Where-Object { -not $_.ok -and $_.level -eq 'wait' })
 $readyForDerek = $failed.Count -eq 0 -and $waiting.Count -eq 0
 
@@ -212,7 +212,7 @@ function Write-Summary {
     Write-Host ("Wave 0 readiness: {0}" -f $Receipt.verdict)
     Write-Host ("Expected release: {0}" -f $Receipt.expected_release)
     foreach ($check in $Receipt.checks) {
-        $mark = if ($check.ok) { 'OK' } elseif ($check.level -eq 'wait') { 'WAIT' } else { 'FAIL' }
+        $mark = if ($check.ok) { 'OK' } elseif ($check.level -eq 'wait') { 'WAIT' } elseif ($check.level -eq 'warn') { 'WARN' } else { 'FAIL' }
         Write-Host ("[{0}] {1} - {2}" -f $mark, $check.name, $check.detail)
     }
     Write-Host ''
