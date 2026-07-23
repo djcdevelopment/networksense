@@ -74,6 +74,9 @@ Host i5
 # Compact console plus a saved JSON receipt
 .\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter -SummaryOnly -OutputJson .\captures\sprint-stutter\result.json
 
+# Compact Wave 0 receipt plus the remaining real-client test list
+.\Test-Wave0Readiness.ps1 -SummaryOnly -OutputJson .\captures\wave0-readiness.json
+
 # Drive a bounded named movement pattern on both joined clients
 .\Start-TwoClientMotionTest.ps1 -Pattern straight_north -DurationSeconds 10
 
@@ -137,14 +140,18 @@ live movement course for every code change.
 
 Before asking for a live course, run the read-only seam gates in this order:
 
-1. Confirm Gateway, server mod, and both Companion package releases agree.
-2. Confirm each client has an enrollment, access-key presence, partition/region, and active
+1. Run `Test-Wave0Readiness.ps1`. It confirms P7, OMEN, retained heartbeat-age evidence,
+   readable motion telemetry, and the optional i5 lane in one receipt. If i5 is offline,
+   the script records `WAIT` and prints the exact return-test list instead of failing the
+   whole preflight.
+2. Confirm Gateway, server mod, and both Companion package releases agree.
+3. Confirm each client has an enrollment, access-key presence, partition/region, and active
    WebSocket/UDP readiness without printing secret values.
-3. Run synthetic Gateway motion tests for recipient isolation, duplicate/old sequence rejection,
+4. Run synthetic Gateway motion tests for recipient isolation, duplicate/old sequence rejection,
    malformed frames, and unauthorized senders.
-4. Run the bounded capture with both clients idle. This proves the telemetry surfaces and gives a
+5. Run the bounded capture with both clients idle. This proves the telemetry surfaces and gives a
    baseline for server-heartbeat age/variation, peer count, relay counters, and Valheim binding counters.
-5. Only if those gates pass, run one bounded APPLY course. The course is evidence collection, not
+6. Only if those gates pass, run one bounded APPLY course. The course is evidence collection, not
    a prerequisite for discovering whether the release is aligned.
 
 If a gate fails, stop at that boundary and use its receipt; do not repeat the same join/movement

@@ -125,9 +125,15 @@ function Get-CaptureBrief {
 
     if (-not $Summary) { return $null }
     $local = $Summary.final_local_motion
-    $networkCondition = if (-not $local -or $null -eq $local.rtt_ms -or $null -eq $local.jitter_ms) { 'unknown' }
-        elseif ($local.jitter_ms -ge 250 -or $local.rtt_ms -ge 500) { 'severe_variance' }
-        elseif ($local.jitter_ms -ge 100 -or $local.rtt_ms -ge 200) { 'elevated' }
+    $pingAge = if ($local -and $null -ne $local.server_ping_age_ms) { [double]$local.server_ping_age_ms }
+        elseif ($local -and $null -ne $local.rtt_ms) { [double]$local.rtt_ms }
+        else { $null }
+    $variation = if ($local -and $null -ne $local.server_ping_age_jitter_ms) { [double]$local.server_ping_age_jitter_ms }
+        elseif ($local -and $null -ne $local.jitter_ms) { [double]$local.jitter_ms }
+        else { $null }
+    $networkCondition = if (-not $local -or $null -eq $pingAge -or $null -eq $variation) { 'unknown' }
+        elseif ($variation -ge 250 -or $pingAge -ge 500) { 'severe_variance' }
+        elseif ($variation -ge 100 -or $pingAge -ge 200) { 'elevated' }
         else { 'stable' }
     [ordered]@{
         run_id = $Summary.run_id
