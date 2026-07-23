@@ -89,7 +89,7 @@ function Get-PlayerTestList {
             id = 'i5-online-install'
             who = 'agent'
             requires_derek = $false
-            task = 'When i5 is online, run Sync-I5Companion.ps1 and install/check m29 through i5 Companion.'
+            task = "When i5 is online, run Sync-I5Companion.ps1 if needed and install/check $ExpectedRelease through i5 Companion."
             expected = "i5 Companion status installed.mod_release == $ExpectedRelease and package hash matches P7."
         },
         [ordered]@{
@@ -104,7 +104,7 @@ function Get-PlayerTestList {
             who = 'agent'
             requires_derek = $false
             task = 'Run Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label m29-idle.'
-            expected = 'Both summaries have bad_sample_count 0, Gateway m29 identity, and peer count above zero.'
+            expected = "Both summaries have bad_sample_count 0, Gateway $ExpectedRelease identity, and peer count above zero."
         },
         [ordered]@{
             id = 'apply-observe-course'
@@ -149,7 +149,11 @@ $checks += New-Check 'p7-gateway-deployment' ([string]$deployment.lumberjacks_ve
 $checks += New-Check 'p7-valheim-ready' (-not [bool]$valheim.stale -and [string]$valheim.heartbeat.server_state -eq 'ready') ("stale=$($valheim.stale) server_state=$($valheim.heartbeat.server_state) peers=$($valheim.heartbeat.peer_count)")
 $checks += New-Check 'omen-installed-package' ([string]$omenStatus.installed.mod_release -eq $expectedRelease -and [string]$omenStatus.installed.package_sha256 -eq $expectedPackageHash) ("omen=$($omenStatus.installed.mod_release) sha256=$($omenStatus.installed.package_sha256)")
 $checks += New-Check 'omen-profile-and-config' ([bool]$omenStatus.profile.linked -and [bool]$omenStatus.valheim.config_found) ("profile_linked=$($omenStatus.profile.linked) config_found=$($omenStatus.valheim.config_found)")
-$checks += New-Check 'heartbeat-age-capture-field' ($null -ne $heartbeatAgeCapture) ($(if ($heartbeatAgeCapture) { "run=$($heartbeatAgeCapture.run_id)" } else { 'no retained m29 capture with server_ping_age_ms/server_ping_age_jitter_ms' }))
+if ($heartbeatAgeCapture) {
+    $checks += New-Check 'heartbeat-age-capture-field' $true ("run=$($heartbeatAgeCapture.run_id)")
+} else {
+    $checks += New-Check 'heartbeat-age-capture-field' $false ("no retained $expectedRelease capture with server_ping_age_ms/server_ping_age_jitter_ms; not required before the next real capture") 'wait'
+}
 $checks += New-Check 'motion-endpoint-readable' ($null -ne $motion.received -and $null -ne $motion.relayed_websocket) ("received=$($motion.received) relayed_ws=$($motion.relayed_websocket) relayed_udp=$($motion.relayed_udp)")
 
 if ($i5StatusResult.ok) {
