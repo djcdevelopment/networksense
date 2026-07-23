@@ -124,6 +124,11 @@ function Get-CaptureBrief {
     param($Summary)
 
     if (-not $Summary) { return $null }
+    $local = $Summary.final_local_motion
+    $networkCondition = if (-not $local -or $null -eq $local.rtt_ms -or $null -eq $local.jitter_ms) { 'unknown' }
+        elseif ($local.jitter_ms -ge 250 -or $local.rtt_ms -ge 500) { 'severe_variance' }
+        elseif ($local.jitter_ms -ge 100 -or $local.rtt_ms -ge 200) { 'elevated' }
+        else { 'stable' }
     [ordered]@{
         run_id = $Summary.run_id
         verdict = $Summary.verdict
@@ -143,6 +148,7 @@ function Get-CaptureBrief {
         final_motion_udp_ready = $Summary.final_motion_udp_ready
         final_motion_last_error = $Summary.final_motion_last_error
         final_local_motion = $Summary.final_local_motion
+        network_condition = $networkCondition
         gateway = $Summary.capture_identity.gateway_version
         mod = $Summary.capture_identity.valheim_mod_version
         cutover = $Summary.capture_identity.cutover_mode
