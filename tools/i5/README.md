@@ -65,6 +65,9 @@ Host i5
 # Start concurrent OMEN+i5 transport captures for a two-client movement test
 .\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter
 
+# Also collect both evidence bundle zips into a local folder
+.\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter -BundleDirectory .\captures\sprint-stutter
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -112,6 +115,7 @@ summaries. The output includes a top-level `comparison` verdict before the raw p
 summaries. A useful Lumberjacks motion run should show peer count above zero and advancing
 `motion_received` counters. If peer count rises but motion remains zero, the comparison calls out
 that visible movement is still native Valheim for that run.
+Pass `-BundleDirectory` to collect both machine-local evidence bundle zips onto OMEN for review.
 
 Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
 mismatch — a green run *is* the receipt. Directories land as

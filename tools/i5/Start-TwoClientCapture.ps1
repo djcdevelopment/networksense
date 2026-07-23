@@ -20,6 +20,10 @@ Sampling interval for both machines. Default: 1.
 .PARAMETER Label
 Capture label suffix. A timestamp and machine label are added automatically.
 
+.PARAMETER BundleDirectory
+Optional local directory where both evidence bundle zips should be collected. If omitted, bundles
+remain in each Companion and can be downloaded from that machine's dashboard.
+
 .EXAMPLE
 .\tools\i5\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter
 #>
@@ -31,10 +35,13 @@ param(
     [ValidateRange(1, 60)]
     [int]$IntervalSeconds = 1,
 
-    [string]$Label = 'two-client'
+    [string]$Label = 'two-client',
+
+    [string]$BundleDirectory
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $SshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', 'i5')
 $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
 $safeLabel = ($Label -replace '[^A-Za-z0-9._-]', '-').Trim('-')
@@ -43,8 +50,9 @@ if ([string]::IsNullOrWhiteSpace($safeLabel)) { $safeLabel = 'two-client' }
 function New-RemoteCaptureScript {
     param([string]$Machine)
 
-    @"
+@"
 `$ErrorActionPreference = 'Stop'
+`$ProgressPreference = 'SilentlyContinue'
 `$body = @{
     duration_seconds = $DurationSeconds
     interval_seconds = $IntervalSeconds
@@ -185,6 +193,47 @@ function Compare-Captures {
 }
 
 $comparison = Compare-Captures $local $remote $localError $remoteError
+$bundles = @()
+
+if ($BundleDirectory) {
+    $bundleRoot = [IO.Path]::GetFullPath($BundleDirectory)
+    New-Item -ItemType Directory -Force -Path $bundleRoot | Out-Null
+
+    if ($local -and $local.run_id) {
+        $omenBundle = Join-Path $bundleRoot ("omen-" + $local.run_id + ".zip")
+        Invoke-WebRequest -Uri ("http://127.0.0.1:8080/api/v0/companion/transport-capture/{0}/bundle.zip" -f [uri]::EscapeDataString($local.run_id)) -OutFile $omenBundle
+        $bundles += [ordered]@{
+            machine = 'omen'
+            path = $omenBundle
+            bytes = (Get-Item -LiteralPath $omenBundle).Length
+        }
+    }
+
+    if ($remote -and $remote.run_id) {
+        $remoteTemp = "C:\deploy\baseline\capture-bundles\i5-$($remote.run_id).zip"
+        $remoteFetch = @"
+`$ErrorActionPreference = 'Stop'
+`$ProgressPreference = 'SilentlyContinue'
+New-Item -ItemType Directory -Force -Path 'C:\deploy\baseline\capture-bundles' | Out-Null
+Invoke-WebRequest -Uri 'http://127.0.0.1:8080/api/v0/companion/transport-capture/$($remote.run_id)/bundle.zip' -OutFile '$remoteTemp'
+Get-Item -LiteralPath '$remoteTemp' | Select-Object -ExpandProperty Length
+"@
+        $encodedFetch = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remoteFetch))
+        $remoteSize = ssh @SshArgs "powershell.exe -NoProfile -EncodedCommand $encodedFetch"
+        if ($LASTEXITCODE -ne 0) { throw "i5 bundle fetch failed for $($remote.run_id)" }
+
+        $i5Bundle = Join-Path $bundleRoot ("i5-" + $remote.run_id + ".zip")
+        scp -q -o BatchMode=yes -o ConnectTimeout=8 "i5:$remoteTemp" $i5Bundle
+        if ($LASTEXITCODE -ne 0) { throw "i5 bundle copy failed for $($remote.run_id)" }
+
+        $bundles += [ordered]@{
+            machine = 'i5'
+            path = $i5Bundle
+            bytes = (Get-Item -LiteralPath $i5Bundle).Length
+            remote_bytes = [int64]($remoteSize | Select-Object -Last 1)
+        }
+    }
+}
 
 $result = [ordered]@{
     schema_version = 1
@@ -192,6 +241,7 @@ $result = [ordered]@{
     duration_seconds = $DurationSeconds
     interval_seconds = $IntervalSeconds
     comparison = $comparison
+    bundles = $bundles
     omen = if ($localError) { @{ ok = $false; error = $localError } } else { $local }
     i5 = if ($remoteError) { @{ ok = $false; error = $remoteError } } else { $remote }
 }
