@@ -62,6 +62,9 @@ Host i5
 # Sync the current Companion source/runtime inputs, then start/rebuild it
 .\Sync-I5Companion.ps1
 
+# Start concurrent OMEN+i5 transport captures for a two-client movement test
+.\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -102,6 +105,12 @@ For Companion development, prefer `Sync-I5Companion.ps1`. It uses the verified d
 minimal Docker build context, clears only the stale remote `src\Game.Companion` staging directory,
 then calls `Start-I5Companion.ps1`. Use `-DryRun` to inspect the copy plan or `-NoStart` when only
 staging files is desired.
+
+For two-client transport evidence, use `Start-TwoClientCapture.ps1`. Start both Valheim clients,
+begin the capture, move both characters during the window, then compare the `omen` and `i5`
+summaries. A useful Lumberjacks motion run should show peer count above zero and advancing
+`motion_received` counters. If peer count rises but motion remains zero, the visible movement is
+still native Valheim for that run.
 
 Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
 mismatch — a green run *is* the receipt. Directories land as
