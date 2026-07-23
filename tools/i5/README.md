@@ -128,6 +128,18 @@ Pass `-SummaryOnly` during rapid live testing when the compact verdict is enough
 Pass `-OutputJson` to save the full comparison and raw per-machine summaries while keeping the
 console compact.
 
+### Connected-player evidence handoff
+
+For the live gate, leave both clients fully loaded and ready to move before starting the capture.
+During the capture window, connect both accounts if they are not already connected, wait for the
+peer count to reach two, then run the same short movement pattern on both clients: straight sprint,
+brief stutter steps, and a stop. The useful receipt should identify both player names, show peers
+above zero, and preserve the motion state/readiness fields on both machines. A `native_motion_only`
+verdict means the players were visible but Lumberjacks motion counters did not advance; it is valid
+evidence, not a failed test. A `lumberjacks_motion_observed` verdict means the counters advanced and
+the movement feel can be compared against the captured deltas. Any `incomplete_telemetry` result is
+discarded until both Companion lanes report readable Gateway, Valheim, cutover, and motion surfaces.
+
 Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
 mismatch — a green run *is* the receipt. Directories land as
 `<Dest>/<dirname>/...`; top-level items with duplicate leaf names are rejected
