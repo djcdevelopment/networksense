@@ -103,7 +103,7 @@ function Get-PlayerTestList {
             id = 'idle-two-client-capture'
             who = 'agent'
             requires_derek = $false
-            task = 'Run Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label m29-idle.'
+            task = "Run Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label $ExpectedRelease-idle."
             expected = "Both summaries have bad_sample_count 0, Gateway $ExpectedRelease identity, and peer count above zero."
         },
         [ordered]@{
