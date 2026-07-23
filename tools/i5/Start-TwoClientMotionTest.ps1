@@ -25,8 +25,12 @@ $payload = @{ action = 'start'; pattern = $Pattern; duration_seconds = $Duration
 function Invoke-I5Companion([string]$Body) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Body)
     $encoded = [Convert]::ToBase64String($bytes)
-    $remote = "`$body = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded')); Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/motion-test' -Method Post -ContentType 'application/json' -Body `$body | ConvertTo-Json -Compress"
-    $result = & ssh -o BatchMode=yes -o ConnectTimeout=8 i5 "powershell.exe -NoProfile -Command `"$remote`""
+    $remote = @"
+`$body = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded'))
+Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/motion-test' -Method Post -ContentType 'application/json' -Body `$body | ConvertTo-Json -Compress
+"@
+    $remoteEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remote))
+    $result = & ssh -o BatchMode=yes -o ConnectTimeout=8 i5 "powershell.exe -NoProfile -EncodedCommand $remoteEncoded"
     if ($LASTEXITCODE -ne 0) { throw 'i5 Companion motion command failed' }
     return ($result -join "`n" | ConvertFrom-Json)
 }
