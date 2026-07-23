@@ -1,5 +1,11 @@
 ## Changelog
 
+### 0.5.34
+
+- Start the alpha transport truth strip collapsed so lower-resolution menu buttons remain reachable.
+- Add a side `NET SHOW` / `NET HIDE` tab, configurable left or right, so testers can expose the transport switches only when they are actively comparing HUD state to the dashboard trace.
+- Keep the transport-state switches and dashboard links unchanged; this is a presentation-only release.
+
 ### 0.5.33
 
 - Add an observe-first Lumberjacks player-motion path using the authenticated

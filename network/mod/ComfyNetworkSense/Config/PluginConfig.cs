@@ -96,6 +96,8 @@ public static class PluginConfig {
   public static ConfigEntry<int> HudMarginPixels { get; private set; }
   public static ConfigEntry<string> HudPreset { get; private set; }
   public static ConfigEntry<bool> TransportStripEnabled { get; private set; }
+  public static ConfigEntry<bool> TransportStripVisibleOnStart { get; private set; }
+  public static ConfigEntry<string> TransportStripToggleSide { get; private set; }
   public static ConfigEntry<string> DashboardUrl { get; private set; }
   public static ConfigEntry<string> DashboardSetupUrl { get; private set; }
   public static ConfigEntry<KeyboardShortcut> ToggleHudShortcut { get; private set; }
@@ -159,6 +161,20 @@ public static class PluginConfig {
             "transportStripEnabled",
             true,
             "Show the always-visible alpha transport truth strip and fault switchboard.");
+
+    TransportStripVisibleOnStart =
+        config.Bind(
+            "HUD",
+            "transportStripVisibleOnStart",
+            false,
+            "Start with the alpha transport truth strip collapsed so lower-resolution menu buttons remain reachable. The side Show tab stays visible.");
+
+    TransportStripToggleSide =
+        config.Bind(
+            "HUD",
+            "transportStripToggleSide",
+            "Right",
+            "Side for the transport strip Hide/Show tab: Left or Right.");
 
     DashboardUrl =
         config.Bind(

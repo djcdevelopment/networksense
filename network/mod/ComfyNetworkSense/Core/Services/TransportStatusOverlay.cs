@@ -12,6 +12,7 @@ public sealed class TransportStatusOverlay {
   GUIStyle _good;
   GUIStyle _idle;
   GUIStyle _off;
+  bool? _visible;
 
   public void Draw(
       TransportStatusSnapshot status,
@@ -27,7 +28,14 @@ public sealed class TransportStatusOverlay {
       return;
     }
 
+    _visible ??= PluginConfig.TransportStripVisibleOnStart.Value;
     EnsureStyles();
+
+    DrawToggleTab();
+    if (_visible != true) {
+      return;
+    }
+
     const float width = 1040.0f;
     const float height = 122.0f;
     float x = Mathf.Max(8.0f, (Screen.width - width) / 2.0f);
@@ -81,6 +89,20 @@ public sealed class TransportStatusOverlay {
     GUILayout.EndArea();
   }
 
+  void DrawToggleTab() {
+    const float tabWidth = 78.0f;
+    const float tabHeight = 34.0f;
+    float x = ToggleSideIsLeft() ? 8.0f : Mathf.Max(8.0f, Screen.width - tabWidth - 8.0f);
+    float y = Mathf.Max(8.0f, (Screen.height - tabHeight) / 2.0f);
+    string label = _visible == true ? "NET HIDE" : "NET SHOW";
+
+    GUILayout.BeginArea(new Rect(x, y, tabWidth, tabHeight));
+    if (GUILayout.Button(label, _visible == true ? _idle : _good, GUILayout.Width(tabWidth), GUILayout.Height(tabHeight))) {
+      _visible = _visible != true;
+    }
+    GUILayout.EndArea();
+  }
+
   static bool IsDedicatedServer() =>
       ZNet.instance != null && ZNet.instance.IsServer() && ZNet.instance.IsDedicated();
 
@@ -90,6 +112,8 @@ public sealed class TransportStatusOverlay {
 
   static string Mark(bool active) => active ? "[x]" : "[ ]";
   static string Fallback(string value) => string.IsNullOrWhiteSpace(value) ? "n/a" : value;
+  static bool ToggleSideIsLeft() =>
+      string.Equals(PluginConfig.TransportStripToggleSide.Value?.Trim(), "left", StringComparison.OrdinalIgnoreCase);
 
   void EnsureStyles() {
     if (_box != null) return;
