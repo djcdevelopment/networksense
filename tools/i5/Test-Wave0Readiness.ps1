@@ -110,15 +110,15 @@ function Get-PlayerTestList {
             id = 'apply-observe-course'
             who = 'agent-plus-derek-visual'
             requires_derek = $true
-            task = 'Run one bounded movement course using Start-TwoClientMotionTest.ps1 while concurrent capture is running.'
-            expected = 'Selected client applies Lumberjacks motion while observe-only client does not; Derek records visual smoothness/teleporting.'
+            task = 'Run Start-Wave0LiveGate.ps1 -DesiredApplyClient omen while both clients are joined.'
+            expected = 'Live gate sets OMEN APPLY and i5 OBSERVE ONLY, verifies that split, then runs bounded motion; Derek records visual smoothness/teleporting.'
         },
         [ordered]@{
             id = 'role-reversal'
             who = 'agent-plus-derek-visual'
             requires_derek = $true
-            task = 'Reverse apply/observe roles and rerun one short straight/stutter movement course.'
-            expected = 'The apply/observe result follows the role, not the machine or account.'
+            task = 'Run Start-Wave0LiveGate.ps1 -DesiredApplyClient i5 and annotate the reversal receipt.'
+            expected = 'Live gate verifies i5 APPLY and OMEN OBSERVE ONLY; the visual result follows the role, not the machine or account.'
         }
     )
 }
