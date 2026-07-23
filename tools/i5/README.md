@@ -120,7 +120,9 @@ begin the capture, move both characters during the window, then compare the `ome
 summaries. The output includes a top-level `comparison` verdict before the raw per-machine
 summaries. A useful Lumberjacks motion run should show peer count above zero and advancing
 `motion_received` counters. If peer count rises but motion remains zero, the comparison calls out
-that visible movement is still native Valheim for that run.
+that visible movement is still native Valheim for that run. Each summary also records the observed
+motion states and final WebSocket/UDP readiness; a missing or stale Valheim heartbeat is treated as
+incomplete evidence rather than a healthy motion result.
 Pass `-BundleDirectory` to collect both machine-local evidence bundle zips onto OMEN for review.
 Pass `-SummaryOnly` during rapid live testing when the compact verdict is enough.
 Pass `-OutputJson` to save the full comparison and raw per-machine summaries while keeping the

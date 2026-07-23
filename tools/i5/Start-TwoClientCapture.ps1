@@ -136,6 +136,12 @@ function Get-CaptureBrief {
         pending_delta = Get-CounterDelta $Summary 'pending'
         acknowledged_delta = Get-CounterDelta $Summary 'acknowledged'
         applied_delta = Get-CounterDelta $Summary 'applied'
+        first_motion_state = $Summary.first_motion_state
+        last_motion_state = $Summary.last_motion_state
+        observed_motion_states = @($Summary.observed_motion_states)
+        final_motion_websocket_connected = $Summary.final_motion_websocket_connected
+        final_motion_udp_ready = $Summary.final_motion_udp_ready
+        final_motion_last_error = $Summary.final_motion_last_error
         gateway = $Summary.capture_identity.gateway_version
         mod = $Summary.capture_identity.valheim_mod_version
         cutover = $Summary.capture_identity.cutover_mode
@@ -169,6 +175,8 @@ function Compare-Captures {
     $omenPeers = Get-IntValue $Omen.max_peers
     $i5Peers = Get-IntValue $I5.max_peers
     $badSamples = (Get-IntValue $Omen.bad_sample_count) + (Get-IntValue $I5.bad_sample_count)
+    $omenStates = (@($Omen.observed_motion_states) -join ',')
+    $i5States = (@($I5.observed_motion_states) -join ',')
 
     if ($badSamples -gt 0) {
         $level = 'bad'
@@ -197,7 +205,7 @@ function Compare-Captures {
         level = $level
         headline = $headline
         next_action = $next
-        evidence = "omen peers=$omenPeers motion_delta=$omenMotion; i5 peers=$i5Peers motion_delta=$i5Motion; bad_samples=$badSamples"
+        evidence = "omen peers=$omenPeers motion_delta=$omenMotion states=$omenStates ws=$($Omen.final_motion_websocket_connected) udp=$($Omen.final_motion_udp_ready); i5 peers=$i5Peers motion_delta=$i5Motion states=$i5States ws=$($I5.final_motion_websocket_connected) udp=$($I5.final_motion_udp_ready); bad_samples=$badSamples"
         observed_players = @($players)
         omen = Get-CaptureBrief $Omen
         i5 = Get-CaptureBrief $I5
@@ -276,13 +284,16 @@ function Write-CaptureSummary {
             Write-Host ("{0}: ERROR {1}" -f $machine, $brief.error)
             continue
         }
-        Write-Host ("{0}: run={1} verdict={2} peers={3} motion_recv_delta={4} relay_delta={5} samples={6} bad={7}" -f `
+        Write-Host ("{0}: run={1} verdict={2} peers={3} motion_recv_delta={4} relay_delta={5} states={6} ws={7} udp={8} samples={9} bad={10}" -f `
             $machine,
             $brief.run_id,
             $brief.verdict,
             $brief.max_peers,
             $brief.motion_received_delta,
             $brief.motion_relayed_delta,
+            (@($brief.observed_motion_states) -join ','),
+            $brief.final_motion_websocket_connected,
+            $brief.final_motion_udp_ready,
             $brief.samples,
             $brief.bad_samples)
     }
