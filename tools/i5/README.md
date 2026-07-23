@@ -60,6 +60,20 @@ Host i5
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
 
+## Companion persistence
+
+When i5 is enrolled as a Docker-backed Companion client, its `admin` console session owns a
+scheduled task named `LumberjacksDockerDesktop`. It starts Docker Desktop at logon; the Companion
+compose service uses `restart: unless-stopped`, so its loopback dashboard returns after Docker is
+ready. Verify the recovery path without touching Valheim:
+
+```powershell
+ssh -o BatchMode=yes i5 'schtasks /Query /TN LumberjacksDockerDesktop /FO LIST'
+ssh -o BatchMode=yes i5 'powershell.exe -NoProfile -Command "Invoke-RestMethod http://127.0.0.1:8080/health"'
+```
+
+The task starts Docker Desktop only. It does not start Valheim or write the Valheim config.
+
 Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
 mismatch — a green run *is* the receipt. Directories land as
 `<Dest>/<dirname>/...`; top-level items with duplicate leaf names are rejected
