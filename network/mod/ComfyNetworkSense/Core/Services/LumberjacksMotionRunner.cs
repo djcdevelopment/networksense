@@ -51,6 +51,11 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   long _applied;
   long _staleFallbacks;
   long _unknownZdos;
+  long _zdoLookupAttempts;
+  long _directLookupHits;
+  long _zdoObjectLookupHits;
+  long _playerIndexLookupHits;
+  long _playerIndexRebuilds;
 
   public bool IsRunning => _cts != null && !_cts.IsCancellationRequested;
   public bool WebSocketConnected { get { lock (_statusLock) return _webSocketConnected; } }
@@ -91,6 +96,7 @@ public sealed class LumberjacksMotionRunner : IDisposable {
       }
 
       ZDOID zdoId = new(remote.Snapshot.ZdoUserId, remote.Snapshot.ZdoId);
+      Interlocked.Increment(ref _zdoLookupAttempts);
       GameObject instance = ResolveInstance(zdoId, now);
       if (instance == null) {
         Interlocked.Increment(ref _unknownZdos);
@@ -123,6 +129,12 @@ public sealed class LumberjacksMotionRunner : IDisposable {
           ["applied"] = Interlocked.Read(ref _applied),
           ["stale_fallbacks"] = Interlocked.Read(ref _staleFallbacks),
           ["unknown_zdos"] = Interlocked.Read(ref _unknownZdos),
+          ["zdo_lookup_attempts"] = Interlocked.Read(ref _zdoLookupAttempts),
+          ["direct_lookup_hits"] = Interlocked.Read(ref _directLookupHits),
+          ["zdo_object_lookup_hits"] = Interlocked.Read(ref _zdoObjectLookupHits),
+          ["player_index_lookup_hits"] = Interlocked.Read(ref _playerIndexLookupHits),
+          ["player_index_rebuilds"] = Interlocked.Read(ref _playerIndexRebuilds),
+          ["player_index_size"] = _playerInstances.Count,
           ["remote_entities"] = _remote.Count,
           ["last_error"] = _lastError
       };
@@ -285,21 +297,32 @@ public sealed class LumberjacksMotionRunner : IDisposable {
     // clients where the authoritative ZDO has arrived before ZNetScene has indexed
     // the corresponding view under the ID overload.
     GameObject direct = scene.FindInstance(zdoId);
-    if (direct != null) return direct;
+    if (direct != null) {
+      Interlocked.Increment(ref _directLookupHits);
+      return direct;
+    }
 
     ZDO zdo = ZDOMan.instance?.GetZDO(zdoId);
     ZNetView view = zdo == null ? null : scene.FindInstance(zdo);
     GameObject resolved = view?.gameObject;
-    if (resolved != null) return resolved;
+    if (resolved != null) {
+      Interlocked.Increment(ref _zdoObjectLookupHits);
+      return resolved;
+    }
 
     if (now >= _nextPlayerIndexAt) {
       _nextPlayerIndexAt = now + 1.0f;
       RebuildPlayerIndex();
     }
-    return _playerInstances.TryGetValue(zdoId, out GameObject player) ? player : null;
+    if (_playerInstances.TryGetValue(zdoId, out GameObject player)) {
+      Interlocked.Increment(ref _playerIndexLookupHits);
+      return player;
+    }
+    return null;
   }
 
   void RebuildPlayerIndex() {
+    Interlocked.Increment(ref _playerIndexRebuilds);
     _playerInstances.Clear();
     foreach (Player player in UnityEngine.Object.FindObjectsByType<Player>(FindObjectsSortMode.None)) {
       ZNetView view = player?.GetComponent<ZNetView>();

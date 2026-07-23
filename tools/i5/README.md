@@ -126,6 +126,29 @@ summaries. A useful Lumberjacks motion run should show peer count above zero and
 that visible movement is still native Valheim for that run. Each summary also records the observed
 motion states and final WebSocket/UDP readiness; a missing or stale Valheim heartbeat is treated as
 incomplete evidence rather than a healthy motion result.
+
+The capture deliberately separates three truths: client-local motion readiness, Gateway relay
+counters, and visual application. A `motion_ready_no_gateway_delta` verdict means the client
+connected and reported an active motion lane, but no Gateway motion counter advanced; investigate
+publish/recipient binding/relay evidence before calling the movement native or tuning smoothing.
+The mod's motion tile also reports direct ZDO hits, ZDO-object hits, player-index hits, unresolved
+lookups, and index rebuilds. Those counters identify the Valheim binding seam without requiring a
+live movement course for every code change.
+
+Before asking for a live course, run the read-only seam gates in this order:
+
+1. Confirm Gateway, server mod, and both Companion package releases agree.
+2. Confirm each client has an enrollment, access-key presence, partition/region, and active
+   WebSocket/UDP readiness without printing secret values.
+3. Run synthetic Gateway motion tests for recipient isolation, duplicate/old sequence rejection,
+   malformed frames, and unauthorized senders.
+4. Run the bounded capture with both clients idle. This proves the telemetry surfaces and gives a
+   baseline for RTT/jitter, peer count, relay counters, and Valheim binding counters.
+5. Only if those gates pass, run one bounded APPLY course. The course is evidence collection, not
+   a prerequisite for discovering whether the release is aligned.
+
+If a gate fails, stop at that boundary and use its receipt; do not repeat the same join/movement
+experiment until the failing seam has changed.
 Pass `-BundleDirectory` to collect both machine-local evidence bundle zips onto OMEN for review.
 Pass `-SummaryOnly` during rapid live testing when the compact verdict is enough.
 Pass `-OutputJson` to save the full comparison and raw per-machine summaries while keeping the
