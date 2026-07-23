@@ -14,8 +14,10 @@ public sealed class ClientTelemetrySample {
   public string OwnerId { get; set; }
   public string SampleSource { get; set; }
   public string BuildVersion { get; set; }
-  public float RttMs { get; set; }
-  public float JitterMs { get; set; }
+  // Valheim exposes the age of the last ZRpc heartbeat, not a round-trip time.
+  // Keep the legacy fields during the alpha so existing readers do not break.
+  public float ServerPingAgeMs { get; set; }
+  public float ServerPingAgeJitterMs { get; set; }
   public float Fps { get; set; }
   public float FrameTimeMs { get; set; }
   public float FrameTimeP95Ms { get; set; }
@@ -46,8 +48,10 @@ public sealed class ClientTelemetrySample {
         ["owner_id"] = OwnerId,
         ["sample_source"] = SampleSource,
         ["build_version"] = BuildVersion,
-        ["rtt_ms"] = RttMs,
-        ["jitter_ms"] = JitterMs,
+        ["server_ping_age_ms"] = ServerPingAgeMs,
+        ["server_ping_age_jitter_ms"] = ServerPingAgeJitterMs,
+        ["rtt_ms"] = ServerPingAgeMs,
+        ["jitter_ms"] = ServerPingAgeJitterMs,
         ["fps"] = Fps,
         ["frame_time_ms"] = FrameTimeMs,
         ["frame_time_p95_ms"] = FrameTimeP95Ms,

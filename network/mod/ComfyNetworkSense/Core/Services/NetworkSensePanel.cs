@@ -208,14 +208,14 @@ public sealed class NetworkSensePanel {
     if (sample != null) {
       Section("Range & Reception");
       DrawReceptionBar("Frame", 1.0f - Mathf.Clamp01((sample.FrameTimeP95Ms - 16.0f) / 50.0f), $"{sample.FrameTimeP95Ms:0.0} ms");
-      DrawReceptionBar("Network", 1.0f - Mathf.Clamp01((sample.RttMs + sample.JitterMs) / 250.0f), $"{sample.RttMs:0}/{sample.JitterMs:0} ms");
+      DrawReceptionBar("Network", 1.0f - Mathf.Clamp01((sample.ServerPingAgeMs + sample.ServerPingAgeJitterMs) / 250.0f), $"{sample.ServerPingAgeMs:0}/{sample.ServerPingAgeJitterMs:0} ms");
       DrawReceptionBar("Area", 1.0f - Mathf.Clamp01((sample.NearbyBuildPieces / 250.0f) + (sample.NearbyEntities / 50.0f)), $"{sample.NearbyBuildPieces}/{sample.NearbyEntities}");
     }
 
     Section("Signals");
     Inset(new List<string> {
         sample == null ? "Waiting for first telemetry sample." : $"FPS {sample.Fps:0} | p95 {sample.FrameTimeP95Ms:0.0} ms | CPU {sample.CpuBoundEstimate:0.00}",
-        sample == null ? "Network signals pending." : $"Ping {sample.RttMs:0} ms | jitter {sample.JitterMs:0} ms | zone {sample.RegionId}",
+        sample == null ? "Network signals pending." : $"Heartbeat age {sample.ServerPingAgeMs:0} ms | variation {sample.ServerPingAgeJitterMs:0} ms | zone {sample.RegionId}",
         sample == null
             ? "Area pressure pending."
             : $"Area players {sample.NearbyPlayers} | entities {sample.NearbyEntities} | pieces {sample.NearbyBuildPieces} | danger {(sample.DangerNearby ? "yes" : "no")}",
@@ -250,7 +250,7 @@ public sealed class NetworkSensePanel {
         ? new List<string> { "Waiting for client sample." }
         : new List<string> {
             $"fps={sample.Fps:0.###} frame_ms={sample.FrameTimeMs:0.###} p95_ms={sample.FrameTimeP95Ms:0.###}",
-            $"rtt_ms={sample.RttMs:0.###} jitter_ms={sample.JitterMs:0.###}",
+            $"server_ping_age_ms={sample.ServerPingAgeMs:0.###} server_ping_age_jitter_ms={sample.ServerPingAgeJitterMs:0.###}",
             $"bytes in/out={sample.BytesInPerSec:0}/{sample.BytesOutPerSec:0} packets in/out={sample.PacketsInPerSec:0.0}/{sample.PacketsOutPerSec:0.0}",
             $"nearby players/entities/pieces={sample.NearbyPlayers}/{sample.NearbyEntities}/{sample.NearbyBuildPieces}",
         });

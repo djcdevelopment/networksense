@@ -32,10 +32,10 @@ public sealed class HudRenderer {
     bool minimalPreset = IsHudPreset("minimal");
     List<string> lines = minimalPreset
         ? [
-            $"NetworkSense | {ModeLabel(mode)} | ping {clientSample.RttMs:0} ms | fps {clientSample.Fps:0} | p95 {clientSample.FrameTimeP95Ms:0.0} ms | {scores?.ConnectionLabel ?? "n/a"} | {scores?.PressureLabel ?? "n/a"}"
+            $"NetworkSense | {ModeLabel(mode)} | heartbeat age {clientSample.ServerPingAgeMs:0} ms | fps {clientSample.Fps:0} | p95 {clientSample.FrameTimeP95Ms:0.0} ms | {scores?.ConnectionLabel ?? "n/a"} | {scores?.PressureLabel ?? "n/a"}"
         ]
         : [
-            $"Mode {ModeLabel(mode)} | HUD {effectiveDetail} | Benchmark {(benchmarkRunning ? "Running" : "Idle")} | Client ping {clientSample.RttMs:0} ms | jitter {clientSample.JitterMs:0} ms | fps {clientSample.Fps:0} | p95 {clientSample.FrameTimeP95Ms:0.0} ms",
+            $"Mode {ModeLabel(mode)} | HUD {effectiveDetail} | Benchmark {(benchmarkRunning ? "Running" : "Idle")} | Heartbeat age {clientSample.ServerPingAgeMs:0} ms | variation {clientSample.ServerPingAgeJitterMs:0} ms | fps {clientSample.Fps:0} | p95 {clientSample.FrameTimeP95Ms:0.0} ms",
             $"Area players {clientSample.NearbyPlayers} | entities {clientSample.NearbyEntities} | pieces {clientSample.NearbyBuildPieces} | zone {clientSample.RegionId} | connection {scores?.ConnectionLabel ?? "n/a"} | owner {scores?.OwnerFitLabel ?? "n/a"} | pressure {scores?.PressureLabel ?? "n/a"} | server {serverPulseState}"
         ];
 

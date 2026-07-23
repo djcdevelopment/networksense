@@ -7,11 +7,11 @@ public static class ScoreCalculator {
       ClientTelemetrySample clientSample, ServerPulseSnapshot serverPulse, NetworkSenseMode mode) {
     float networkQuality =
         Weighted(
-            NormalizeInverse(clientSample.RttMs, 50.0f, 250.0f),
+            NormalizeInverse(clientSample.ServerPingAgeMs, 50.0f, 250.0f),
             0.50f,
-            NormalizeInverse(clientSample.JitterMs, 5.0f, 50.0f),
+            NormalizeInverse(clientSample.ServerPingAgeJitterMs, 5.0f, 50.0f),
             0.35f,
-            NormalizeInverse(serverPulse?.HeartbeatGapMs ?? clientSample.RttMs, 150.0f, 3000.0f),
+            NormalizeInverse(serverPulse?.HeartbeatGapMs ?? clientSample.ServerPingAgeMs, 150.0f, 3000.0f),
             0.15f);
 
     float frameStability =

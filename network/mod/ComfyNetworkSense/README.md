@@ -30,7 +30,7 @@ gameplay policy.
 - Upper-left HUD with `Minimal`, `Compact`, and `Diagnostic` presets.
 - Modern IMGUI debug drawer with `Debug`, `Signals`, and `Raven` tabs.
 - Mode selector visible in the panel: `Solo`, `Combat`, `Group`, `Town`.
-- Client telemetry sampler for ping, jitter, FPS, frame timing, traffic rates,
+- Client telemetry sampler for server-heartbeat age/variation, FPS, frame timing, traffic rates,
   nearby players/entities/build pieces, danger, and zone.
 - Server pulse broadcaster for host/server-side pressure and ownership context.
 - Score calculator for connection, owner fit, pressure, confidence, and internal
@@ -290,7 +290,7 @@ drive it through a benchmark matrix without a human. When enabled it loops:
    `event_surge` are recorded but run stationary for now (stubbed with a TODO).
 4. `POST /valheim/matrix/report` with `{client, cell_id, metrics}`. Metrics
    include the benchmark result, `load_time_ms`, the cell descriptors, and recent
-   client-sample stats (rtt/jitter/bytes/packets/nearby counts).
+   client-sample stats (server heartbeat age/variation/bytes/packets/nearby counts).
 5. Back off `matrixPollIntervalSeconds` on `idle` / `done` / errors and loop.
 
 Teleport and benchmark run on the Unity main thread (a coroutine); all HTTP runs

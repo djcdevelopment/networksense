@@ -28,7 +28,7 @@ public sealed class ClientTelemetrySampler {
   int _previousSentPackages;
   int _previousRecvPackages;
   float _previousCounterTime;
-  float _lastRttMs;
+  float _lastServerPingAgeMs;
   float _lastSceneScanTime = -9999.0f;
   string _lastSceneScanRegionId = string.Empty;
   int _cachedNearbyEntities;
@@ -52,9 +52,11 @@ public sealed class ClientTelemetrySampler {
     Vector2i zone = ZoneSystem.instance ? ZoneSystem.GetZone(position) : default;
     string regionId = $"{zone.x}:{zone.y}";
 
-    float rttMs = GetRttMs();
-    float jitterMs = _lastRttMs > 0.0f ? Mathf.Abs(rttMs - _lastRttMs) : 0.0f;
-    _lastRttMs = rttMs;
+    float serverPingAgeMs = GetServerPingAgeMs();
+    float serverPingAgeJitterMs = _lastServerPingAgeMs > 0.0f
+        ? Mathf.Abs(serverPingAgeMs - _lastServerPingAgeMs)
+        : 0.0f;
+    _lastServerPingAgeMs = serverPingAgeMs;
 
     ZRpc serverRpc = ZNet.instance ? ZNet.instance.GetServerRPC() : null;
     float bytesInPerSec = 0.0f;
@@ -129,8 +131,8 @@ public sealed class ClientTelemetrySampler {
         OwnerId = ownerId ?? string.Empty,
         SampleSource = "client_live",
         BuildVersion = ComfyNetworkSense.PluginVersion,
-        RttMs = rttMs,
-        JitterMs = jitterMs,
+        ServerPingAgeMs = serverPingAgeMs,
+        ServerPingAgeJitterMs = serverPingAgeJitterMs,
         Fps = fps,
         FrameTimeMs = frameTimeMs,
         FrameTimeP95Ms = p95FrameMs,
@@ -150,7 +152,7 @@ public sealed class ClientTelemetrySampler {
     };
   }
 
-  float GetRttMs() {
+  float GetServerPingAgeMs() {
     if (!ZNet.instance) {
       return 0.0f;
     }
@@ -161,7 +163,8 @@ public sealed class ClientTelemetrySampler {
       return 0.0f;
     }
 
-    return raw < 10.0f ? raw * 1000.0f : raw;
+    // GetServerPing returns ZRpc.GetTimeSinceLastPing(), measured in seconds.
+    return raw * 1000.0f;
   }
 
   float GetP95FrameTimeMs() {
