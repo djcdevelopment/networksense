@@ -177,15 +177,24 @@ function Compare-Captures {
     $badSamples = (Get-IntValue $Omen.bad_sample_count) + (Get-IntValue $I5.bad_sample_count)
     $omenStates = (@($Omen.observed_motion_states) -join ',')
     $i5States = (@($I5.observed_motion_states) -join ',')
+    $motionActive = @($Omen, $I5) | Where-Object {
+        $_.final_motion_websocket_connected -or
+        $_.final_motion_udp_ready -or
+        @('observing', 'websocket') -contains $_.last_motion_state
+    }
 
     if ($badSamples -gt 0) {
         $level = 'bad'
         $headline = 'Capture had incomplete telemetry.'
         $next = 'Do not use this as a transport verdict. Re-run after both Companion dashboards show readable Gateway, Valheim, cutover, and motion telemetry.'
-    } elseif ($omenMotion -gt 0 -or $i5Motion -gt 0) {
+    } elseif ($motionActive.Count -gt 0 -and ($omenMotion -gt 0 -or $i5Motion -gt 0)) {
         $level = 'ok'
         $headline = 'Lumberjacks motion frames advanced during the two-client window.'
         $next = 'Use the samples/bundles to correlate perceived movement against motion counter deltas and player names.'
+    } elseif ($omenMotion -gt 0 -or $i5Motion -gt 0) {
+        $level = 'wait'
+        $headline = 'Lumberjacks counters advanced, but the motion lane was not active.'
+        $next = 'Do not attribute visible movement to Lumberjacks motion; inspect the client motion connection/readiness path before tuning interpolation.'
     } elseif ($omenPeers -gt 0 -or $i5Peers -gt 0) {
         $level = 'wait'
         $headline = 'Peers were present, but Lumberjacks motion counters did not advance.'

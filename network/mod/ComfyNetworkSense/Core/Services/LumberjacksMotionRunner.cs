@@ -88,7 +88,8 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         continue;
       }
 
-      GameObject instance = ZNetScene.instance?.FindInstance(new ZDOID(remote.Snapshot.ZdoUserId, remote.Snapshot.ZdoId));
+      ZDOID zdoId = new(remote.Snapshot.ZdoUserId, remote.Snapshot.ZdoId);
+      GameObject instance = ResolveInstance(zdoId);
       if (instance == null) {
         Interlocked.Increment(ref _unknownZdos);
         continue;
@@ -272,6 +273,21 @@ public sealed class LumberjacksMotionRunner : IDisposable {
           !ValheimMotionCodec.IsNewer(received.Sequence, existing.Sequence)) continue;
       _remote[key] = new(received.Sequence, received.Snapshot, now);
     }
+  }
+
+  static GameObject ResolveInstance(ZDOID zdoId) {
+    ZNetScene scene = ZNetScene.instance;
+    if (scene == null) return null;
+
+    // Prefer the direct lookup, then resolve through ZDOMan. The latter matters on
+    // clients where the authoritative ZDO has arrived before ZNetScene has indexed
+    // the corresponding view under the ID overload.
+    GameObject direct = scene.FindInstance(zdoId);
+    if (direct != null) return direct;
+
+    ZDO zdo = ZDOMan.instance?.GetZDO(zdoId);
+    ZNetView view = zdo == null ? null : scene.FindInstance(zdo);
+    return view?.gameObject;
   }
 
   string NormalizeGatewayUrl() {
