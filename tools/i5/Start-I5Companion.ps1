@@ -62,7 +62,13 @@ function Test-DockerServer {
     }
 
     $pipe = Test-Path -LiteralPath '\\.\pipe\dockerDesktopLinuxEngine'
-    $job = Start-Job -ScriptBlock { docker version --format '{{.Server.Version}}' 2>&1 }
+    $job = Start-Job -ScriptBlock {
+        $version = docker version --format '{{.Server.Version}}' 2>&1
+        if ($LASTEXITCODE -ne 0) { return $version }
+        $os = docker info --format '{{.OSType}}' 2>&1
+        if ($LASTEXITCODE -ne 0) { return $os }
+        "version=$version os=$os"
+    }
     if (-not (Wait-Job $job -Timeout $TimeoutSeconds)) {
         Stop-Job $job -ErrorAction SilentlyContinue
         Remove-Job $job -Force -ErrorAction SilentlyContinue
@@ -73,8 +79,8 @@ function Test-DockerServer {
     Remove-Job $job -Force -ErrorAction SilentlyContinue
     if ($output) {
         $server = ($output | Select-Object -Last 1).ToString().Trim()
-        if ($server -and $server -notmatch 'error|failed|Cannot connect|pipe') {
-            return [pscustomobject]@{ Ok = $true; Detail = "Docker server $server" }
+        if ($server -match 'version=(?<version>\S+)\s+os=linux') {
+            return [pscustomobject]@{ Ok = $true; Detail = "Docker server $($Matches.version) linux engine ready" }
         }
         return [pscustomobject]@{ Ok = $false; Detail = (($output | Out-String) -replace '\s+', ' ').Trim() }
     }
@@ -113,7 +119,7 @@ $composeArgs = @(
     '--env-file', $envFile,
     '-f', '.\tools\companion\docker-compose.yml',
     '-f', '.\tools\companion\docker-compose.valheim.yml',
-    'up', '-d', '--build'
+    'up', '-d', '--build', '--force-recreate'
 )
 & docker @composeArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
