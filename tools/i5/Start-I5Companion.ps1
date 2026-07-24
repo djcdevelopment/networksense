@@ -52,6 +52,10 @@ if (Test-Path -LiteralPath $latestBootstrapFile) {
 Set-Content -LiteralPath $envFile -Value @(
     'LUMBERJACKS_VALHEIM_HOST_PATH=' + $valheim
     'LUMBERJACKS_COMPANION_BOOTSTRAP_RELEASE=' + $bootstrapRelease
+    'LUMBERJACKS_COMPANION_SOURCE_REVISION=bundle:' + $bootstrapRelease
+    'LUMBERJACKS_COMPANION_SOURCE_BRANCH=release-bundle'
+    'LUMBERJACKS_COMPANION_SOURCE_DIRTY=false'
+    'LUMBERJACKS_COMPANION_IMAGE=lumberjacks-companion:' + $bootstrapRelease
 ) -Encoding ascii
 
 function Test-DockerServer {
