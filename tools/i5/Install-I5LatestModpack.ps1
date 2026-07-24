@@ -22,7 +22,7 @@ $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', $SshAlias)
 $remote = @'
 $ErrorActionPreference = 'Stop'
 $body = @{ game_closed_confirmed = $true } | ConvertTo-Json -Compress
-$result = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/update/install' -Method Post -ContentType 'application/json' -Body $body
+$result = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/update/install' -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 60
 $result | ConvertTo-Json -Depth 20 -Compress
 if (-not $result.ok) { exit 1 }
 '@

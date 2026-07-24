@@ -22,11 +22,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $SshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', 'i5')
+$httpTimeoutSeconds = 15
 
 function Get-Json {
     param([string]$Url)
 
-    Invoke-RestMethod -Uri $Url -Method Get -Headers @{ 'Cache-Control' = 'no-cache' }
+    Invoke-RestMethod -Uri $Url -Method Get -Headers @{ 'Cache-Control' = 'no-cache' } -TimeoutSec $httpTimeoutSeconds
 }
 
 function New-Check {
@@ -45,7 +46,7 @@ function Try-GetRemoteJson {
 
     $remoteScript = @"
 `$ErrorActionPreference = 'Stop'
-Invoke-RestMethod -Uri 'http://127.0.0.1:8080$Path' | ConvertTo-Json -Depth 20 -Compress
+Invoke-RestMethod -Uri 'http://127.0.0.1:8080$Path' -TimeoutSec $httpTimeoutSeconds | ConvertTo-Json -Depth 20 -Compress
 "@
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remoteScript))
     $previousErrorActionPreference = $ErrorActionPreference

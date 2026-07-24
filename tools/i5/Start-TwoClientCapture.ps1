@@ -71,7 +71,7 @@ function New-RemoteCaptureScript {
     interval_seconds = $IntervalSeconds
     label = '$safeLabel-$Machine'
 } | ConvertTo-Json -Compress
-Invoke-RestMethod -Method Post -ContentType 'application/json' -Body `$body 'http://127.0.0.1:8080/api/v0/companion/transport-capture' | ConvertTo-Json -Depth 12
+Invoke-RestMethod -TimeoutSec $captureTimeoutSeconds -Method Post -ContentType 'application/json' -Body `$body 'http://127.0.0.1:8080/api/v0/companion/transport-capture' | ConvertTo-Json -Depth 12
 "@
 }
 
@@ -83,7 +83,7 @@ $localJob = Start-Job -ScriptBlock {
         interval_seconds = $using:IntervalSeconds
         label = "$using:safeLabel-omen"
     } | ConvertTo-Json -Compress
-    Invoke-RestMethod -Method Post -ContentType 'application/json' -Body $body 'http://127.0.0.1:8080/api/v0/companion/transport-capture'
+    Invoke-RestMethod -TimeoutSec $using:captureTimeoutSeconds -Method Post -ContentType 'application/json' -Body $body 'http://127.0.0.1:8080/api/v0/companion/transport-capture'
 }
 
 $remoteScript = New-RemoteCaptureScript -Machine 'i5'
@@ -256,7 +256,7 @@ if ($BundleDirectory) {
 
     if ($local -and $local.run_id) {
         $omenBundle = Join-Path $bundleRoot ("omen-" + $local.run_id + ".zip")
-        Invoke-WebRequest -Uri ("http://127.0.0.1:8080/api/v0/companion/transport-capture/{0}/bundle.zip" -f [uri]::EscapeDataString($local.run_id)) -OutFile $omenBundle
+        Invoke-WebRequest -TimeoutSec 60 -Uri ("http://127.0.0.1:8080/api/v0/companion/transport-capture/{0}/bundle.zip" -f [uri]::EscapeDataString($local.run_id)) -OutFile $omenBundle
         $bundles += [ordered]@{
             machine = 'omen'
             path = $omenBundle
@@ -270,7 +270,7 @@ if ($BundleDirectory) {
 `$ErrorActionPreference = 'Stop'
 `$ProgressPreference = 'SilentlyContinue'
 New-Item -ItemType Directory -Force -Path 'C:\deploy\baseline\capture-bundles' | Out-Null
-Invoke-WebRequest -Uri 'http://127.0.0.1:8080/api/v0/companion/transport-capture/$($remote.run_id)/bundle.zip' -OutFile '$remoteTemp'
+Invoke-WebRequest -TimeoutSec 60 -Uri 'http://127.0.0.1:8080/api/v0/companion/transport-capture/$($remote.run_id)/bundle.zip' -OutFile '$remoteTemp'
 Get-Item -LiteralPath '$remoteTemp' | Select-Object -ExpandProperty Length
 "@
         $encodedFetch = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remoteFetch))

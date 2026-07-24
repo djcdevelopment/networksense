@@ -127,7 +127,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $ready = $false
 for ($i = 0; $i -lt 30; $i++) {
     try {
-        Invoke-RestMethod http://127.0.0.1:8080/health | Out-Null
+        Invoke-RestMethod -TimeoutSec 5 http://127.0.0.1:8080/health | Out-Null
         $ready = $true
         break
     } catch {
@@ -139,7 +139,7 @@ if (-not $ready) {
     throw 'Companion did not answer on http://127.0.0.1:8080.'
 }
 
-$status = Invoke-RestMethod http://127.0.0.1:8080/api/v0/companion/status
+$status = Invoke-RestMethod -TimeoutSec 15 http://127.0.0.1:8080/api/v0/companion/status
 $status | ConvertTo-Json -Depth 8
 '@
 
