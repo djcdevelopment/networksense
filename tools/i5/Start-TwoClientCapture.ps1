@@ -55,6 +55,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $SshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', 'i5')
+$captureTimeoutSeconds = [Math]::Max(60, $DurationSeconds + 45)
 $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
 $safeLabel = ($Label -replace '[^A-Za-z0-9._-]', '-').Trim('-')
 if ([string]::IsNullOrWhiteSpace($safeLabel)) { $safeLabel = 'two-client' }
@@ -93,22 +94,34 @@ $remoteJob = Start-Job -ScriptBlock {
     if ($LASTEXITCODE -ne 0) { throw "i5 capture command failed with exit code $LASTEXITCODE" }
 } -ArgumentList $encoded, $SshArgs
 
-Wait-Job -Job $localJob, $remoteJob | Out-Null
+$completedJobs = @(Wait-Job -Job $localJob, $remoteJob -Timeout $captureTimeoutSeconds)
+$timedOutJobs = @($localJob, $remoteJob | Where-Object { $_.State -in @('Running', 'NotStarted') })
+if ($timedOutJobs.Count -gt 0) {
+    Stop-Job -Job $timedOutJobs -ErrorAction SilentlyContinue
+}
 
 $localError = $null
 $remoteError = $null
 $local = $null
 $remote = $null
+if ($localJob -in $timedOutJobs) {
+    $localError = "omen capture timed out after ${captureTimeoutSeconds}s"
+} else {
 try {
     $local = Receive-Job $localJob -ErrorAction Stop
     foreach ($property in 'PSComputerName', 'RunspaceId', 'PSShowComputerName') {
         $local.PSObject.Properties.Remove($property)
     }
 } catch { $localError = $_.Exception.Message }
+}
+if ($remoteJob -in $timedOutJobs) {
+    $remoteError = "i5 capture timed out after ${captureTimeoutSeconds}s"
+} else {
 try {
     $remoteText = Receive-Job $remoteJob -ErrorAction Stop | Where-Object { $_ -and $_ -notmatch '^#< CLIXML' }
     $remote = ($remoteText | Out-String).Trim() | ConvertFrom-Json
 } catch { $remoteError = $_.Exception.Message }
+}
 Remove-Job $localJob, $remoteJob -Force -ErrorAction SilentlyContinue
 
 function Get-CounterDelta {
@@ -282,6 +295,7 @@ $result = [ordered]@{
     started_label = "$stamp-$safeLabel"
     duration_seconds = $DurationSeconds
     interval_seconds = $IntervalSeconds
+    timeout_seconds = $captureTimeoutSeconds
     comparison = $comparison
     bundles = $bundles
     omen = if ($localError) { @{ ok = $false; error = $localError } } else { $local }
