@@ -125,12 +125,36 @@ $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($mkTemplate.R
 $null = ssh @SshOpts $SshAlias "powershell.exe -NoProfile -EncodedCommand $b64" 2>$null
 if ($LASTEXITCODE -ne 0) { throw "could not create remote directory: $Dest" }
 
-# --- Copy: one scp per top-level item (SFTP mode handles spaces literally) ---
-foreach ($item in $items) {
+# --- Copy: exact manifest files only ----------------------------------------
+# Do not scp whole directories here. The manifest may intentionally exclude
+# build output directories such as bin/obj, and copying the top-level directory
+# would silently ship excluded files while verification ignores them.
+$remoteParents = @(
+    $manifest |
+        ForEach-Object { Split-Path -Parent $_.Remote } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique
+)
+if ($remoteParents.Count -gt 0) {
+    $mkdirTemplate = @'
+$paths = @(
+__PATHS__
+)
+foreach ($p in $paths) {
+    New-Item -ItemType Directory -Force -Path $p | Out-Null
+}
+'@
+    $quotedParents = @($remoteParents | ForEach-Object { "    '$($_.Replace("'", "''"))'" }) -join ",`r`n"
+    $mkdirScript = $mkdirTemplate.Replace('__PATHS__', $quotedParents)
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($mkdirScript))
+    $null = ssh @SshOpts $SshAlias "powershell.exe -NoProfile -EncodedCommand $b64" 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'could not create remote manifest parent directories' }
+}
+
+foreach ($m in $manifest) {
     $scpArgs = @('-q') + $SshOpts
-    if ($item.PSIsContainer) { $scpArgs += '-r' }
-    & scp @scpArgs $item.FullName "${SshAlias}:$Dest/"
-    if ($LASTEXITCODE -ne 0) { throw "scp failed for $($item.FullName)" }
+    & scp @scpArgs $m.Local "${SshAlias}:$($m.Remote)"
+    if ($LASTEXITCODE -ne 0) { throw "scp failed for $($m.Local) -> $($m.Remote)" }
 }
 
 # --- Verify: recompute SHA256 on both ends, compare per file -----------------

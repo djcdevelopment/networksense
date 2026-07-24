@@ -50,6 +50,9 @@ Host i5
 # Is the lane up? (tailnet presence, port, key auth, remote layout)
 .\Test-I5Link.ps1
 
+# Prove directory deploy excludes are actually honored on the remote
+.\Test-DeployToI5Fixtures.ps1
+
 # Stage files/dirs under C:\deploy\baseline on the i5
 .\Deploy-ToI5.ps1 -Path .\bundle\ -Dest C:/deploy/baseline/run-042
 
@@ -221,10 +224,12 @@ evidence, not a failed test. A `lumberjacks_motion_observed` verdict means the c
 the movement feel can be compared against the captured deltas. Any `incomplete_telemetry` result is
 discarded until both Companion lanes report readable Gateway, Valheim, cutover, and motion surfaces.
 
-Every deploy re-hashes every file on both ends (SHA256) and exits 1 on any
-mismatch — a green run *is* the receipt. Directories land as
+Every deploy re-hashes every manifest file on both ends (SHA256) and exits 1 on
+any mismatch — a green run *is* the receipt. Directories land as
 `<Dest>/<dirname>/...`; top-level items with duplicate leaf names are rejected
-before anything is copied.
+before anything is copied. When `-ExcludeDirectoryName` is used, the deploy
+copies exact manifest files rather than recursively copying the whole directory,
+so excluded `bin`, `obj`, or other build-output folders do not land remotely.
 
 ## Rules for agents
 
