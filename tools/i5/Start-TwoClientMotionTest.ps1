@@ -19,15 +19,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $localUrl = 'http://127.0.0.1:8080/api/v0/companion/motion-test'
+$httpTimeoutSeconds = [Math]::Max(15, $DurationSeconds + 15)
 $payload = @{ action = 'start'; pattern = $Pattern; duration_seconds = $DurationSeconds; id = $Id } |
     ConvertTo-Json -Compress
 
 function Invoke-I5Companion([string]$Body) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Body)
     $encoded = [Convert]::ToBase64String($bytes)
-    $remote = @"
+$remote = @"
 `$body = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded'))
-Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/motion-test' -Method Post -ContentType 'application/json' -Body `$body | ConvertTo-Json -Compress
+Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/motion-test' -Method Post -ContentType 'application/json' -Body `$body -TimeoutSec $httpTimeoutSeconds | ConvertTo-Json -Compress
 "@
     $remoteEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remote))
     $result = & ssh -o BatchMode=yes -o ConnectTimeout=8 i5 "powershell.exe -NoProfile -EncodedCommand $remoteEncoded"
@@ -35,12 +36,13 @@ Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/motion-test' -Met
     return ($result -join "`n" | ConvertFrom-Json)
 }
 
-$local = Invoke-RestMethod -Uri $localUrl -Method Post -ContentType 'application/json' -Body $payload
+$local = Invoke-RestMethod -Uri $localUrl -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec $httpTimeoutSeconds
 $remote = Invoke-I5Companion $payload
 $result = [ordered]@{
     schema_version = 1
     pattern = $Pattern
     duration_seconds = $DurationSeconds
+    timeout_seconds = $httpTimeoutSeconds
     id = $Id
     omen = $local
     i5 = $remote

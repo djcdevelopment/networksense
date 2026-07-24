@@ -20,6 +20,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $localUrl = 'http://127.0.0.1:8080/api/v0/companion/motion-test'
+$httpTimeoutSeconds = 15
 
 function New-Payload([bool]$Enabled, [string]$Client) {
     @{
@@ -30,15 +31,15 @@ function New-Payload([bool]$Enabled, [string]$Client) {
 }
 
 function Invoke-LocalCompanion([string]$Body) {
-    Invoke-RestMethod -Uri $localUrl -Method Post -ContentType 'application/json' -Body $Body
+    Invoke-RestMethod -Uri $localUrl -Method Post -ContentType 'application/json' -Body $Body -TimeoutSec $httpTimeoutSeconds
 }
 
 function Invoke-I5Companion([string]$Body) {
     $bytes = [Text.Encoding]::UTF8.GetBytes($Body)
     $encoded = [Convert]::ToBase64String($bytes)
-    $remote = @"
+$remote = @"
 `$body = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded'))
-Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/motion-test' -Method Post -ContentType 'application/json' -Body `$body | ConvertTo-Json -Compress
+Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/v0/companion/motion-test' -Method Post -ContentType 'application/json' -Body `$body -TimeoutSec $httpTimeoutSeconds | ConvertTo-Json -Compress
 "@
     $remoteEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remote))
     $result = & ssh -o BatchMode=yes -o ConnectTimeout=8 i5 "powershell.exe -NoProfile -EncodedCommand $remoteEncoded"
@@ -57,6 +58,7 @@ $i5 = Invoke-I5Companion $i5Payload
 $result = [ordered]@{
     schema_version = 1
     generated_utc = [DateTimeOffset]::UtcNow.ToString('o')
+    timeout_seconds = $httpTimeoutSeconds
     apply_client = $ApplyClient
     observe_client = if ($ApplyClient -eq 'omen') { 'i5' } else { 'omen' }
     omen_apply_enabled = $omenEnabled
