@@ -62,6 +62,9 @@ Host i5
 # Sync the current Companion source/runtime inputs, then start/rebuild it
 .\Sync-I5Companion.ps1
 
+# Recover Docker Desktop and recreate i5 Companion if Docker CLI/engine gets stuck
+.\Repair-I5DockerDesktop.ps1
+
 # Start concurrent OMEN+i5 transport captures for a two-client movement test
 .\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter
 
@@ -121,6 +124,26 @@ The task starts Docker Desktop only. It does not start Valheim or write the Valh
 the script tries the `LumberjacksDockerDesktop` scheduled task once, waits briefly,
 then exits with a clear error. Do not work around that by launching only the base
 compose file; that recreates the read-only dashboard with no `/valheim` mount.
+
+If Docker Desktop is installed but the Linux engine is missing, Docker CLI calls
+hang, or the Companion container is stuck in `Created`/zombie state, run:
+
+```powershell
+.\Repair-I5DockerDesktop.ps1
+```
+
+The repair script runs over SSH, restarts only Docker Desktop service/processes
+when required, waits for `docker info --format '{{.OSType}}'` to return `linux`,
+then recreates the Companion with both compose files and verifies:
+
+- `/api/v0/companion/status` is readable;
+- `/api/v0/companion/wave0/packet` is readable;
+- the status body does not expose raw enrollment ids;
+- the Companion container has Docker `init` enabled.
+
+Use `-NoCompanionStart` when only the Docker engine needs to be checked or
+recovered. The command is bounded and emits a JSON receipt; if it fails, keep
+the receipt and stop instead of retry-looping.
 
 For Companion development, prefer `Sync-I5Companion.ps1`. It uses the verified deploy lane for the
 minimal Docker build context, clears only the stale remote `src\Game.Companion` staging directory,
