@@ -92,6 +92,10 @@ Host i5
 # Set the Wave 0 apply/observe split without keyboard/KVM work
 .\Set-TwoClientApplyRoles.ps1 -ApplyClient omen
 
+# Run a bounded physical feel window; capture starts before role/motion commands
+.\Start-TwoClientFeelWindow.ps1 -Pattern straight_north -MotionDurationSeconds 10 `
+  -ApplyClient omen -RoleReversal -Label sprint-role-reversal -CollectBundles
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -211,6 +215,16 @@ injection bridge.
 client's Lumberjacks motion apply switch. The mod applies `set_apply` on Unity's main thread and
 records the same transport-control event as the HUD toggle. Use `-ApplyClient omen` for the first
 Wave 0 pass and `-ApplyClient i5` for role reversal.
+
+`Start-TwoClientFeelWindow.ps1` composes the readiness check, concurrent capture, apply/observe
+role command, and named motion command into one bounded window. It starts capture before issuing
+movement, never launches or closes Valheim, and can run the reverse APPLY role immediately after
+the first window. This is the preferred human-light physical test: the two clients are joined once,
+the agent drives the allow-listed movement surface, and the human records only smooth/rough/mixed,
+whether the result followed APPLY, and the first felt correction. Use `-DryRun` to inspect the
+sequence without querying either machine. Use `-SkipReadiness` only when a current readiness receipt
+is already known to be valid. The detailed account-role and experiment strategy is in
+`plans/m7-physical-feel-lane-strategy.md`.
 
 ### Connected-player evidence handoff
 
