@@ -10,7 +10,9 @@ single-sample spike before changing transport code.
 #>
 [CmdletBinding()]
 param(
-    [ValidateRange(10, 500)] [int]$SampleCount = 120
+    [ValidateRange(10, 500)] [int]$SampleCount = 120,
+
+    [ValidateRange(30, 86400)] [int]$StaleAfterSeconds = 300
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,7 +62,8 @@ function Summarize([string]$Name, [object[]]$Samples) {
     $frames = @($valid | Where-Object { $null -ne $_.frame_time_p95_ms } | ForEach-Object { [double]$_.frame_time_p95_ms })
     $last = $valid | Select-Object -Last 1
     $age = ([DateTimeOffset]::UtcNow - [DateTimeOffset]::Parse([string]$last.timestamp_utc)).TotalSeconds
-    $condition = if (($pingAge | Measure-Object -Maximum).Maximum -ge 500 -or ($variation | Measure-Object -Maximum).Maximum -ge 250) { 'severe_variance' }
+    $condition = if ($age -gt $StaleAfterSeconds) { 'stale_samples' }
+        elseif (($pingAge | Measure-Object -Maximum).Maximum -ge 500 -or ($variation | Measure-Object -Maximum).Maximum -ge 250) { 'severe_variance' }
         elseif (($pingAge | Measure-Object -Maximum).Maximum -ge 200 -or ($variation | Measure-Object -Maximum).Maximum -ge 100) { 'elevated' }
         else { 'stable' }
     [ordered]@{
@@ -69,6 +72,7 @@ function Summarize([string]$Name, [object[]]$Samples) {
         samples = $valid.Count
         latest_utc = $last.timestamp_utc
         latest_age_seconds = [Math]::Round($age, 1)
+        stale_after_seconds = $StaleAfterSeconds
         server_ping_age_min_ms = [Math]::Round(($pingAge | Measure-Object -Minimum).Minimum, 2)
         server_ping_age_avg_ms = [Math]::Round(($pingAge | Measure-Object -Average).Average, 2)
         server_ping_age_p95_ms = Get-Percentile $pingAge 0.95
