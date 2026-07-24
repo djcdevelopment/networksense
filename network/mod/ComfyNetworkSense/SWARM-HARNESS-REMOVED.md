@@ -1,5 +1,15 @@
 # The swarm harness (removed 2026-07-21)
 
+## Scoped lab restoration (2026-07-24)
+
+The full swarm harness remains removed. A small, separate `LabAutoJoinPatches`
+implementation restores only existing-character selection for disposable,
+profile-gated headless/rendered lab clients. It is opt-in through
+`COMFY_AUTOJOIN=true` or the `[LabAutoJoin]` config section, defaults off, and is
+not intended for physical OMEN/i5 player installs. It does not create profiles,
+teleport, run the matrix runner, or execute arbitrary commands. The Compose client
+profile is the only supported place to enable it.
+
 This mod used to carry a harness for running **fleets of headless Valheim clients
 unattended** — the "independent agent" regime, where an AI agent drove builds and tests for
 hours with nobody watching. That regime ended; the operator now drives interactively with

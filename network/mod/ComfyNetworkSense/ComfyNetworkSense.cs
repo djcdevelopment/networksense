@@ -110,6 +110,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _harmony = Harmony.CreateAndPatchAll(Assembly.GetExecutingAssembly(), harmonyInstanceId: PluginGuid);
     PanelInputPatches.Apply(_harmony);
     GameplayEventPatches.Apply(_harmony);
+    // This is deliberately separate from the normal player path. It is an opt-in
+    // selector for disposable profile-gated headless/rendered lab clients only.
+    LabAutoJoinPatches.Apply(_harmony);
     RegisterConsoleCommands();
     LoadQuestView();
 

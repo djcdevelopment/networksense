@@ -29,6 +29,13 @@ public static class PluginConfig {
   public static ConfigEntry<float> PortalConnectionCacheLogIntervalSeconds { get; private set; }
   public static ConfigEntry<bool> SpawnerConnectionCacheEnabled { get; private set; }
   public static ConfigEntry<bool> RouteGodFlySafeguard { get; private set; }
+  public static ConfigEntry<bool> AutoJoinEnabled { get; private set; }
+  public static ConfigEntry<string> AutoJoinCharacterName { get; private set; }
+  public static ConfigEntry<int> AutoJoinCharacterIndex { get; private set; }
+  public static ConfigEntry<bool> AutoJoinDeriveFromHostname { get; private set; }
+  public static ConfigEntry<float> AutoJoinInitialDelaySeconds { get; private set; }
+  public static ConfigEntry<float> AutoJoinPollIntervalSeconds { get; private set; }
+  public static ConfigEntry<float> AutoJoinTimeoutSeconds { get; private set; }
   public static ConfigEntry<bool> AutoPortOnJoinEnabled { get; private set; }
   public static ConfigEntry<float> AutoPortDelaySeconds { get; private set; }
   public static ConfigEntry<float> AutoPortHeightMeters { get; private set; }
@@ -364,6 +371,28 @@ public static class PluginConfig {
             "routeGodFlySafeguard",
             true,
             "Before any teleport route or rehearsal walk starts, enable god mode + debug-fly on the local player so post-teleport falls cannot kill the character mid-walk. Calls the Player API directly rather than the 'god'/'fly' console commands, which are cheat-gated (IsCheatsEnabled() returns ZNet.IsServer(), false on a client joined to a dedicated server) and would be rejected client-side. No-op headless.");
+
+    AutoJoinEnabled = config.Bind(
+        "LabAutoJoin", "autoJoinEnabled", false,
+        "Opt-in character selection for disposable headless/rendered lab clients only. The COMFY_AUTOJOIN environment variable overrides this value. Never enable on a normal player installation.");
+    AutoJoinCharacterName = config.Bind(
+        "LabAutoJoin", "autoJoinCharacterName", "",
+        "Existing character name to select for the lab client. Blank uses COMFY_AUTOJOIN_INDEX, hostname suffix, or autoJoinCharacterIndex.");
+    AutoJoinCharacterIndex = config.Bind(
+        "LabAutoJoin", "autoJoinCharacterIndex", 0,
+        "Zero-based existing character profile index used by the opt-in lab auto-join.");
+    AutoJoinDeriveFromHostname = config.Bind(
+        "LabAutoJoin", "autoJoinDeriveFromHostname", true,
+        "Use a trailing client hostname number to select distinct existing profiles (valheim-client-02 selects index 1).");
+    AutoJoinInitialDelaySeconds = config.Bind(
+        "LabAutoJoin", "autoJoinInitialDelaySeconds", 8.0f,
+        "Seconds to wait after FejdStartup before the bounded lab selector begins.");
+    AutoJoinPollIntervalSeconds = config.Bind(
+        "LabAutoJoin", "autoJoinPollIntervalSeconds", 1.0f,
+        "Seconds between bounded profile/authentication checks.");
+    AutoJoinTimeoutSeconds = config.Bind(
+        "LabAutoJoin", "autoJoinTimeoutSeconds", 120.0f,
+        "Maximum seconds to wait for authentication and an existing profile before stopping.");
 
     AutoPortOnJoinEnabled =
         config.Bind(

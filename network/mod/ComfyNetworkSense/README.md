@@ -40,10 +40,11 @@ gameplay policy.
 - Local Comfy MCP gateway integration for Raven recaps, next-test suggestions,
   config suggestions, whitelisted config profiles, notes, and file/log tooling.
 - Private-lab auto rehearsal config for unattended rendered clients.
-- Auto-join for swarm clients: drives character select and connects so spawned
-  containers collect connected-multiplayer telemetry instead of menu-idle zeros.
-- Matrix check-in poller for swarm clients: continuously collects benchmark data
-  cell-by-cell from a gateway (teleport, load-time, benchmark, report).
+- Bounded lab auto-join for profile-gated disposable headless/rendered clients:
+  selects an existing character after authentication and uses Valheim's normal
+  `OnCharacterStart` path. It is off by default and is not for OMEN/i5 installs.
+- Historical matrix check-in design is retained as a deferred reference; the
+  unattended matrix runner is not active in the current build.
 - Host/server-only cached portal and spawner connection loops for massive-save
   hitch isolation.
 - Lumberjacks priority/load-order probe: classifies loaded local Valheim objects
@@ -261,6 +262,17 @@ The unattended wrapper that used to run this automatically, along with auto-join
 and the matrix check-in poller, was removed with the swarm harness — see
 [SWARM-HARNESS-REMOVED.md](SWARM-HARNESS-REMOVED.md).
 
+### Lab-only unattended client path
+
+The Compose clients under `fieldlab/autonomous/` are disposable, profile-gated
+test clients. Their container entrypoint stages the shared DLL/config and launches
+Valheim; `COMFY_AUTOJOIN=true` then selects an existing character profile. The
+selector does not create characters, teleport, run arbitrary scripts, or target P7.
+After joining, MCP remains the bounded observation/command surface for the lab.
+
+Keep `COMFY_AUTOJOIN` false on normal player installations. This setting is a
+container-lab switch, not part of the alpha player's install/update workflow.
+
 Legacy mode aliases still work for convenience:
 
 ```text
@@ -272,7 +284,10 @@ groupcombat, group-combat, group_combat -> group
 Shortcuts are unbound by default to avoid collisions with ComfyControlSurface,
 camera proof tools, and other local Valheim mods.
 
-### Matrix Check-In (swarm benchmark collection)
+### Matrix Check-In (deferred historical design)
+
+The following describes the former matrix contract for future reconsideration. It
+is not enabled by the current plugin, and `COMFY_MATRIX_CHECKIN` remains false.
 
 Once a swarm client is connected (via auto-join), the matrix check-in poller can
 drive it through a benchmark matrix without a human. When enabled it loops:
