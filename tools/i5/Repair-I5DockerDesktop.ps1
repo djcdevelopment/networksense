@@ -9,7 +9,9 @@ is provided, the staged Lumberjacks Companion compose project under -RemoteRoot.
 
 This is the repair lane for the failure mode where the i5 SSH lane is alive but
 Docker CLI calls hang, the Linux engine pipe is missing, or the Companion
-container is stuck in Created/zombie state after rapid rebuilds.
+container is stuck in Created/zombie state after rapid rebuilds. It also detects
+the post-sleep bind-mount failure where /health responds but /api/v0/companion/status
+times out while touching the mounted Windows Valheim directory.
 
 .PARAMETER RemoteRoot
 The baseline staging checkout on the i5.
@@ -47,6 +49,7 @@ $noCompanionStart = [bool]::Parse('__NO_COMPANION_START__')
 $waitSeconds = [int]'__WAIT_SECONDS__'
 $docker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
 $dockerDesktop = 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+$dockerDesktopTask = 'LumberjacksDockerDesktop'
 
 function Invoke-DockerProbe {
     param([int]$TimeoutSeconds = 10)
@@ -79,6 +82,41 @@ function Invoke-DockerProbe {
     return [ordered]@{ ok = $false; detail = if ($result) { [string]$result.output } else { 'docker_probe_no_output' }; version = $null; os_type = $null; linux_pipe = $linuxPipe }
 }
 
+function Invoke-CompanionStatusProbe {
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if (-not $curl) {
+        return [ordered]@{ ok = $false; stalled = $false; detail = 'curl_not_found' }
+    }
+
+    $output = & curl.exe -fsS --max-time 5 http://127.0.0.1:8080/api/v0/companion/status 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        try {
+            $status = ($output | Out-String) | ConvertFrom-Json
+            return [ordered]@{
+                ok = $true
+                stalled = $false
+                detail = 'companion_status_ready'
+                valheim_found = [bool]$status.valheim.found
+            }
+        } catch {
+            return [ordered]@{ ok = $false; stalled = $false; detail = 'companion_status_unreadable' }
+        }
+    }
+
+    return [ordered]@{
+        ok = $false
+        stalled = ($exitCode -eq 28)
+        detail = "companion_status_curl_exit_$exitCode"
+    }
+}
+
+function Test-CompanionContainerExists {
+    if (-not (Test-Path -LiteralPath $docker)) { return $false }
+    $ids = & $docker ps -aq --filter 'name=lumberjacks-companion-companion' 2>$null
+    return $LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($ids | Out-String))
+}
+
 function Wait-DockerLinux {
     param([int]$Seconds)
 
@@ -97,38 +135,80 @@ function Get-DockerProcessSummary {
         Select-Object ProcessName,Id)
 }
 
+function Start-DockerDesktopDurably {
+    $task = Get-ScheduledTask -TaskName $dockerDesktopTask -ErrorAction SilentlyContinue
+    if ($task) {
+        $settings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable `
+            -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -MultipleInstances IgnoreNew
+        Set-ScheduledTask -TaskName $dockerDesktopTask -Settings $settings | Out-Null
+        Start-ScheduledTask -TaskName $dockerDesktopTask
+        return 'scheduled_task'
+    }
+    if (Test-Path -LiteralPath $dockerDesktop) {
+        Start-Process -WindowStyle Hidden $dockerDesktop -ErrorAction SilentlyContinue
+        return 'ssh_child_process_fallback'
+    }
+    return 'docker_desktop_executable_missing'
+}
+
 $events = @()
 $initialService = Get-Service com.docker.service -ErrorAction SilentlyContinue
 $initialProbe = Invoke-DockerProbe -TimeoutSeconds 10
+$initialCompanionProbe = Invoke-CompanionStatusProbe
+$initialCompanionExists = Test-CompanionContainerExists
 $events += [ordered]@{
     action = 'initial_probe'
     service_status = if ($initialService) { [string]$initialService.Status } else { 'missing' }
     probe = $initialProbe
+    companion_probe = $initialCompanionProbe
+    companion_container_exists = $initialCompanionExists
     processes = Get-DockerProcessSummary
 }
 
 $probe = $initialProbe
-if (-not $probe.ok) {
+$companionProbe = $initialCompanionProbe
+$companionExists = $initialCompanionExists
+if (-not $probe.ok -or ($companionExists -and -not $companionProbe.ok)) {
     Restart-Service com.docker.service -Force -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath $dockerDesktop) {
-        Start-Process -WindowStyle Hidden $dockerDesktop -ErrorAction SilentlyContinue
-    }
+    $startMode = Start-DockerDesktopDurably
     $probe = Wait-DockerLinux -Seconds $waitSeconds
-    $events += [ordered]@{ action = 'soft_recovery'; probe = $probe; processes = Get-DockerProcessSummary }
+    $companionProbe = if ($probe.ok) { Invoke-CompanionStatusProbe } else { $companionProbe }
+    $companionExists = if ($probe.ok) { Test-CompanionContainerExists } else { $companionExists }
+    $events += [ordered]@{
+        action = 'soft_recovery'
+        trigger = if ($initialCompanionExists -and -not $initialCompanionProbe.ok) { 'companion_bind_mount_unresponsive' } else { 'docker_engine_unavailable' }
+        start_mode = $startMode
+        probe = $probe
+        companion_probe = $companionProbe
+        companion_container_exists = $companionExists
+        processes = Get-DockerProcessSummary
+    }
 }
 
-if (-not $probe.ok) {
+if (-not $probe.ok -or ($companionExists -and -not $companionProbe.ok)) {
     Get-Process | Where-Object { $_.ProcessName -in @('Docker Desktop','com.docker.backend','com.docker.build','docker-agent') } |
         Stop-Process -Force -ErrorAction SilentlyContinue
     Restart-Service com.docker.service -Force -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath $dockerDesktop) {
-        Start-Process -WindowStyle Hidden $dockerDesktop -ErrorAction SilentlyContinue
-    }
+    $startMode = Start-DockerDesktopDurably
     $probe = Wait-DockerLinux -Seconds $waitSeconds
-    $events += [ordered]@{ action = 'hard_recovery'; probe = $probe; processes = Get-DockerProcessSummary }
+    $companionProbe = if ($probe.ok) { Invoke-CompanionStatusProbe } else { $companionProbe }
+    $companionExists = if ($probe.ok) { Test-CompanionContainerExists } else { $companionExists }
+    $events += [ordered]@{
+        action = 'hard_recovery'
+        trigger = if ($initialCompanionExists -and -not $initialCompanionProbe.ok) { 'companion_bind_mount_unresponsive' } else { 'docker_engine_unavailable' }
+        start_mode = $startMode
+        probe = $probe
+        companion_probe = $companionProbe
+        companion_container_exists = $companionExists
+        processes = Get-DockerProcessSummary
+    }
 }
 
-$companion = [ordered]@{ attempted = $false; ok = $false; detail = 'not_requested'; status = $null; init = $null }
+$companion = [ordered]@{ attempted = $false; ok = $false; detail = 'not_requested'; status = $null; init = $null; compose_output = $null }
 if ($probe.ok -and -not $noCompanionStart) {
     $companion.attempted = $true
     $compose = Join-Path $remoteRoot 'tools\companion\docker-compose.yml'
@@ -140,7 +220,11 @@ if ($probe.ok -and -not $noCompanionStart) {
         $companion.detail = 'companion_compose_inputs_missing'
     } else {
         Set-Location $remoteRoot
-        & $docker compose -p lumberjacks-companion --env-file $envFile -f '.\tools\companion\docker-compose.yml' -f '.\tools\companion\docker-compose.valheim.yml' up -d --build --force-recreate 2>&1 | Out-String | Out-Null
+        $composeOutput = (& $docker compose -p lumberjacks-companion --env-file $envFile -f '.\tools\companion\docker-compose.yml' -f '.\tools\companion\docker-compose.valheim.yml' up -d --build --force-recreate 2>&1 | Out-String).Trim()
+        if ($composeOutput.Length -gt 4000) {
+            $composeOutput = $composeOutput.Substring($composeOutput.Length - 4000)
+        }
+        $companion.compose_output = $composeOutput
         if ($LASTEXITCODE -ne 0) {
             $companion.detail = "docker_compose_failed_exit_$LASTEXITCODE"
         } else {

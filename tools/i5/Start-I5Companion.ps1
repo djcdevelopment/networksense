@@ -104,11 +104,25 @@ function Wait-DockerServer {
     return $state
 }
 
+function Start-DockerDesktopTask {
+    $taskName = 'LumberjacksDockerDesktop'
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if (-not $task) { return $false }
+
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -MultipleInstances IgnoreNew
+    Set-ScheduledTask -TaskName $taskName -Settings $settings | Out-Null
+    Start-ScheduledTask -TaskName $taskName
+    return $true
+}
+
 $dockerState = Test-DockerServer -TimeoutSeconds 8
 if (-not $dockerState.Ok) {
-    $task = schtasks /Query /TN LumberjacksDockerDesktop /FO LIST 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        schtasks /Run /TN LumberjacksDockerDesktop | Out-Null
+    if (Start-DockerDesktopTask) {
         $dockerState = Wait-DockerServer -Seconds 45
     }
 }

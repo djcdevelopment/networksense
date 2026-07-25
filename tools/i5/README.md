@@ -110,9 +110,10 @@ Host i5
 ## Companion persistence
 
 When i5 is enrolled as a Docker-backed Companion client, its `admin` console session owns a
-scheduled task named `LumberjacksDockerDesktop`. It starts Docker Desktop at logon; the Companion
-compose service uses `restart: unless-stopped`, so its loopback dashboard returns after Docker is
-ready. Verify the recovery path without touching Valheim:
+scheduled task named `LumberjacksDockerDesktop`. It starts Docker Desktop at logon, permits starts
+on battery, does not stop when the laptop changes to battery power, and has no task execution time
+limit. The Companion compose service uses `restart: unless-stopped`, so its loopback dashboard
+returns after Docker is ready. Verify the recovery path without touching Valheim:
 
 Always start the i5 Companion through `Start-I5Companion.ps1` or the equivalent compose command with
 both compose files:
@@ -140,15 +141,20 @@ then exits with a clear error. Do not work around that by launching only the bas
 compose file; that recreates the read-only dashboard with no `/valheim` mount.
 
 If Docker Desktop is installed but the Linux engine is missing, Docker CLI calls
-hang, or the Companion container is stuck in `Created`/zombie state, run:
+hang, the Companion container is stuck in `Created`/zombie state, or `/health`
+works after sleep while `/api/v0/companion/status` blocks on the Valheim bind
+mount, run:
 
 ```powershell
 .\Repair-I5DockerDesktop.ps1
 ```
 
 The repair script runs over SSH, restarts only Docker Desktop service/processes
-when required, waits for `docker info --format '{{.OSType}}'` to return `linux`,
-then recreates the Companion with both compose files and verifies:
+when required, and recognizes a non-answering status route even when the Docker
+API itself is healthy. It starts Docker through the interactive scheduled task
+so the engine survives the SSH session, corrects that task's battery/time-limit
+settings, waits for `docker info --format '{{.OSType}}'` to return `linux`, then
+recreates the Companion with both compose files and verifies:
 
 - `/api/v0/companion/status` is readable;
 - `/api/v0/companion/wave0/packet` is readable;
