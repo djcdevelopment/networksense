@@ -24,6 +24,10 @@ Capture label suffix. A timestamp and machine label are added automatically.
 Optional local directory where both evidence bundle zips should be collected. If omitted, bundles
 remain in each Companion and can be downloaded from that machine's dashboard.
 
+.PARAMETER CollectPhaseSummaries
+Collect both evidence bundles and run the bounded motion-phase analyzer against each machine's
+samples.jsonl. If BundleDirectory is omitted, a timestamped directory under captures is used.
+
 .PARAMETER SummaryOnly
 Print only the compact operator summary. By default the command prints the summary followed by the
 full JSON result.
@@ -47,6 +51,8 @@ param(
 
     [string]$BundleDirectory,
 
+    [switch]$CollectPhaseSummaries,
+
     [switch]$SummaryOnly,
 
     [string]$OutputJson
@@ -59,6 +65,11 @@ $captureTimeoutSeconds = [Math]::Max(60, $DurationSeconds + 45)
 $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
 $safeLabel = ($Label -replace '[^A-Za-z0-9._-]', '-').Trim('-')
 if ([string]::IsNullOrWhiteSpace($safeLabel)) { $safeLabel = 'two-client' }
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$phaseBundleScript = Join-Path $repoRoot 'fieldlab\scripts\Summarize-TwoClientMotionPhaseBundles.ps1'
+if ($CollectPhaseSummaries -and [string]::IsNullOrWhiteSpace($BundleDirectory)) {
+    $BundleDirectory = Join-Path $repoRoot "captures\motion-phase\$stamp-$safeLabel"
+}
 
 function New-RemoteCaptureScript {
     param([string]$Machine)
@@ -249,6 +260,7 @@ function Compare-Captures {
 
 $comparison = Compare-Captures $local $remote $localError $remoteError
 $bundles = @()
+$bundleRoot = $null
 
 if ($BundleDirectory) {
     $bundleRoot = [IO.Path]::GetFullPath($BundleDirectory)
@@ -290,6 +302,39 @@ Get-Item -LiteralPath '$remoteTemp' | Select-Object -ExpandProperty Length
     }
 }
 
+$motionPhase = [ordered]@{
+    requested = [bool]$CollectPhaseSummaries
+    ready = $null
+    machines = [ordered]@{}
+}
+if ($CollectPhaseSummaries) {
+    $phaseRoot = Join-Path $bundleRoot 'motion-phase'
+    New-Item -ItemType Directory -Force -Path $phaseRoot | Out-Null
+    $phaseReceiptPath = Join-Path $phaseRoot 'motion-phase-receipt.json'
+    $phaseArguments = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', $phaseBundleScript,
+        '-OutputDirectory', $phaseRoot,
+        '-OutputJson', $phaseReceiptPath
+    )
+    foreach ($machine in 'omen', 'i5') {
+        $bundle = @($bundles | Where-Object { $_.machine -eq $machine } | Select-Object -First 1)
+        if ($bundle.Count -gt 0) {
+            $phaseArguments += if ($machine -eq 'omen') { '-OmenBundlePath' } else { '-I5BundlePath' }
+            $phaseArguments += [string]$bundle[0].path
+        }
+    }
+    $phaseProcessOutput = (& powershell.exe @phaseArguments 2>&1 | Out-String).Trim()
+    $phaseExitCode = $LASTEXITCODE
+    if (Test-Path -LiteralPath $phaseReceiptPath -PathType Leaf) {
+        $motionPhase = Get-Content -LiteralPath $phaseReceiptPath -Raw | ConvertFrom-Json
+    } else {
+        $motionPhase.ready = $false
+        $motionPhase.error = if ($phaseProcessOutput) { $phaseProcessOutput } else { "bundle analyzer exited $phaseExitCode without a receipt" }
+    }
+}
+
 $result = [ordered]@{
     schema_version = 1
     started_label = "$stamp-$safeLabel"
@@ -298,6 +343,7 @@ $result = [ordered]@{
     timeout_seconds = $captureTimeoutSeconds
     comparison = $comparison
     bundles = $bundles
+    motion_phase = $motionPhase
     omen = if ($localError) { @{ ok = $false; error = $localError } } else { $local }
     i5 = if ($remoteError) { @{ ok = $false; error = $remoteError } } else { $remote }
 }
@@ -339,6 +385,25 @@ function Write-CaptureSummary {
             Write-Host ("  {0}: {1} ({2} bytes)" -f $bundle.machine, $bundle.path, $bundle.bytes)
         }
     }
+    if ($Result.motion_phase.requested) {
+        Write-Host ("Motion phase: ready={0}" -f $Result.motion_phase.ready)
+        foreach ($machine in 'omen', 'i5') {
+            $phase = $Result.motion_phase.machines.$machine
+            if (-not $phase) { continue }
+            if (-not $phase.ok) {
+                Write-Host ("  {0}: ERROR {1}" -f $machine, $phase.error)
+                continue
+            }
+            $derived = $phase.summary.derived
+            Write-Host ("  {0}: received={1} applies/received={2} mean_bind_us={3} mean_late_update_us={4} displacement_over_50mm={5}" -f `
+                $machine,
+                $derived.received_samples,
+                $derived.applies_per_received_sample,
+                $derived.mean_bind_us,
+                $derived.mean_late_update_us,
+                $derived.interframe_over_50mm_ratio)
+        }
+    }
     Write-Host ''
 }
 
@@ -353,4 +418,7 @@ if ($OutputJson) {
 }
 if (-not $SummaryOnly) {
     $json
+}
+if ($CollectPhaseSummaries -and -not $motionPhase.ready) {
+    exit 1
 }

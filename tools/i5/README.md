@@ -74,6 +74,9 @@ Host i5
 # Also collect both evidence bundle zips into a local folder
 .\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter -BundleDirectory .\captures\sprint-stutter
 
+# Collect both bundles and fail closed unless both motion-phase summaries are readable
+.\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label phase-baseline -CollectPhaseSummaries
+
 # Fast operator readout without the full JSON body
 .\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter -SummaryOnly
 
@@ -234,11 +237,13 @@ sequence without querying either machine. Use `-SkipReadiness` only when a curre
 is already known to be valid. The detailed account-role and experiment strategy is in
 `plans/m7-physical-feel-lane-strategy.md`.
 
-`-CollectPhaseSummaries` implies bundle collection, extracts each machine's raw
-`samples.jsonl`, and runs the CRE-E06 analyzer. Each window retains separate OMEN and
-i5 summaries for receive spacing, drain/coalescing, binding, LateUpdate work, target
-error, and source-agnostic interframe displacement. It fails closed per machine when
-the installed mod predates the phase contract.
+`-CollectPhaseSummaries` is implemented by the shared `Start-TwoClientCapture.ps1`
+path. It implies bundle collection, extracts each machine's raw `samples.jsonl`, and
+runs the CRE-E06 analyzer. The formal Wave 0 live gate and the physical feel window
+therefore retain the same OMEN/i5 summaries for receive spacing, drain/coalescing,
+binding, LateUpdate work, target error, and source-agnostic interframe displacement.
+The capture exits nonzero when either machine is missing the phase contract or a
+summary cannot be produced.
 
 ### Connected-player evidence handoff
 
