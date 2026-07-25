@@ -187,6 +187,10 @@ Before asking for a live course, run the read-only seam gates in this order:
    readable motion telemetry, and the optional i5 lane in one receipt. If i5 is offline,
    the script records `WAIT` and prints the exact return-test list instead of failing the
    whole preflight.
+   The public package pointer may advance independently of the admitted mod identity.
+   Readiness therefore requires each Companion's `installed.release` to match the public
+   package release, `installed.mod_release` to match the Gateway release, and the package
+   SHA-256 to match; it does not require the package and Gateway release labels to be equal.
 3. Confirm Gateway, server mod, and both Companion package releases agree.
 4. Confirm each client has an enrollment, access-key presence, partition/region, and active
    WebSocket/UDP readiness without printing secret values.

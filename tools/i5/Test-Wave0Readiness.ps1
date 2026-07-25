@@ -83,15 +83,18 @@ function Find-HeartbeatAgeCapture {
 }
 
 function Get-PlayerTestList {
-    param([string]$ExpectedRelease)
+    param(
+        [string]$ExpectedModRelease,
+        [string]$ExpectedPackageRelease
+    )
 
     @(
         [ordered]@{
             id = 'i5-online-install'
             who = 'agent'
             requires_derek = $false
-            task = "When i5 is online, run Sync-I5Companion.ps1 if needed and install/check $ExpectedRelease through i5 Companion."
-            expected = "i5 Companion status installed.mod_release == $ExpectedRelease and package hash matches P7."
+            task = "When i5 is online, run Sync-I5Companion.ps1 if needed and install/check package $ExpectedPackageRelease through i5 Companion."
+            expected = "i5 Companion status installed.release == $ExpectedPackageRelease, installed.mod_release == $ExpectedModRelease, and package hash matches P7."
         },
         [ordered]@{
             id = 'two-client-join'
@@ -104,8 +107,8 @@ function Get-PlayerTestList {
             id = 'idle-two-client-capture'
             who = 'agent'
             requires_derek = $false
-            task = "Run Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label $ExpectedRelease-idle."
-            expected = "Both summaries have bad_sample_count 0, Gateway $ExpectedRelease identity, and peer count above zero."
+            task = "Run Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label $ExpectedPackageRelease-idle."
+            expected = "Both summaries have bad_sample_count 0, Gateway $ExpectedModRelease identity, and peer count above zero."
         },
         [ordered]@{
             id = 'apply-observe-course'
@@ -135,6 +138,7 @@ $omenStatus = Get-Json "$omenRoot/api/v0/companion/status"
 $omenCaptures = Get-Json "$omenRoot/api/v0/companion/transport-capture"
 
 $expectedRelease = [string]$manifest.mod_release
+$expectedPackageRelease = [string]$manifest.release
 $expectedPackageHash = [string]$manifest.package.sha256
 $heartbeatAgeCapture = Find-HeartbeatAgeCapture $omenCaptures.captures $expectedRelease
 
@@ -145,10 +149,16 @@ if ($i5StatusResult.ok) {
 }
 
 $checks = @()
-$checks += New-Check 'p7-public-manifest' ($manifest.release -eq $expectedRelease -and $manifest.package.sha256) ("release=$($manifest.release) mod_release=$expectedRelease sha256=$expectedPackageHash")
+$manifestReady = -not [string]::IsNullOrWhiteSpace($expectedPackageRelease) -and
+    -not [string]::IsNullOrWhiteSpace($expectedRelease) -and
+    -not [string]::IsNullOrWhiteSpace($expectedPackageHash)
+$checks += New-Check 'p7-public-package-pointer' $manifestReady ("package_release=$expectedPackageRelease admitted_mod_release=$expectedRelease sha256=$expectedPackageHash")
 $checks += New-Check 'p7-gateway-deployment' ([string]$deployment.lumberjacks_version -eq $expectedRelease) ("gateway=$($deployment.lumberjacks_version)")
 $checks += New-Check 'p7-valheim-ready' (-not [bool]$valheim.stale -and [string]$valheim.heartbeat.server_state -eq 'ready') ("stale=$($valheim.stale) server_state=$($valheim.heartbeat.server_state) peers=$($valheim.heartbeat.peer_count)")
-$checks += New-Check 'omen-installed-package' ([string]$omenStatus.installed.mod_release -eq $expectedRelease -and [string]$omenStatus.installed.package_sha256 -eq $expectedPackageHash) ("omen=$($omenStatus.installed.mod_release) sha256=$($omenStatus.installed.package_sha256)")
+$omenPackageOk = [string]$omenStatus.installed.release -eq $expectedPackageRelease -and
+    [string]$omenStatus.installed.mod_release -eq $expectedRelease -and
+    [string]$omenStatus.installed.package_sha256 -eq $expectedPackageHash
+$checks += New-Check 'omen-installed-package' $omenPackageOk ("package=$($omenStatus.installed.release) mod=$($omenStatus.installed.mod_release) sha256=$($omenStatus.installed.package_sha256)")
 $checks += New-Check 'omen-profile-and-config' ([bool]$omenStatus.profile.linked -and [bool]$omenStatus.valheim.config_found) ("profile_linked=$($omenStatus.profile.linked) config_found=$($omenStatus.valheim.config_found)")
 if ($heartbeatAgeCapture) {
     $checks += New-Check 'heartbeat-age-capture-field' $true ("run=$($heartbeatAgeCapture.run_id)")
@@ -159,10 +169,11 @@ $checks += New-Check 'motion-endpoint-readable' ($null -ne $motion.received -and
 
 if ($i5StatusResult.ok) {
     $i5 = $i5StatusResult.value
-    $i5Ok = [string]$i5.installed.mod_release -eq $expectedRelease -and
+    $i5Ok = [string]$i5.installed.release -eq $expectedPackageRelease -and
+        [string]$i5.installed.mod_release -eq $expectedRelease -and
         [string]$i5.installed.package_sha256 -eq $expectedPackageHash -and
         [bool]$i5.profile.linked -and [bool]$i5.valheim.config_found
-    $checks += New-Check 'i5-installed-package' $i5Ok ("i5=$($i5.installed.mod_release) sha256=$($i5.installed.package_sha256)")
+    $checks += New-Check 'i5-installed-package' $i5Ok ("package=$($i5.installed.release) mod=$($i5.installed.mod_release) sha256=$($i5.installed.package_sha256)")
 } else {
     $checks += New-Check 'i5-installed-package' $false ($i5StatusResult.error) 'wait'
 }
@@ -175,6 +186,8 @@ $result = [ordered]@{
     schema_version = 1
     generated_utc = [DateTimeOffset]::UtcNow.ToString('o')
     expected_release = $expectedRelease
+    expected_mod_release = $expectedRelease
+    expected_package_release = $expectedPackageRelease
     expected_package_sha256 = $expectedPackageHash
     verdict = if ($failed.Count -gt 0) { 'blocked_by_failed_preflight' }
         elseif ($waiting.Count -gt 0) { 'waiting_for_optional_i5_or_real_clients' }
@@ -204,14 +217,14 @@ $result = [ordered]@{
     } else {
         [ordered]@{ ok = $false; error = $i5StatusResult.error }
     }
-    derek_return_tests = Get-PlayerTestList $expectedRelease
+    derek_return_tests = Get-PlayerTestList $expectedRelease $expectedPackageRelease
 }
 
 function Write-Summary {
     param($Receipt)
 
     Write-Host ("Wave 0 readiness: {0}" -f $Receipt.verdict)
-    Write-Host ("Expected release: {0}" -f $Receipt.expected_release)
+    Write-Host ("Expected package/mod: {0} / {1}" -f $Receipt.expected_package_release, $Receipt.expected_mod_release)
     foreach ($check in $Receipt.checks) {
         $mark = if ($check.ok) { 'OK' } elseif ($check.level -eq 'wait') { 'WAIT' } elseif ($check.level -eq 'warn') { 'WARN' } else { 'FAIL' }
         Write-Host ("[{0}] {1} - {2}" -f $mark, $check.name, $check.detail)
