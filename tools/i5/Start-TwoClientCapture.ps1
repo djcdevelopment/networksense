@@ -387,6 +387,14 @@ function Write-CaptureSummary {
     }
     if ($Result.motion_phase.requested) {
         Write-Host ("Motion phase: ready={0}" -f $Result.motion_phase.ready)
+        if ($Result.motion_phase.attribution) {
+            $attribution = $Result.motion_phase.attribution
+            Write-Host ("  attribution: status={0} verdict={1} apply={2} observe={3}" -f `
+                $attribution.status,
+                $attribution.verdict,
+                $attribution.apply_machine,
+                $attribution.observe_machine)
+        }
         foreach ($machine in 'omen', 'i5') {
             $phase = $Result.motion_phase.machines.$machine
             if (-not $phase) { continue }
