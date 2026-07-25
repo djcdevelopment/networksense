@@ -45,6 +45,8 @@ param(
 
     [switch]$CollectBundles,
 
+    [switch]$CollectPhaseSummaries,
+
     [switch]$DryRun,
 
     [string]$OutputJson
@@ -69,6 +71,7 @@ $readinessScript = Join-Path $PSScriptRoot 'Test-Wave0Readiness.ps1'
 $captureScript = Join-Path $PSScriptRoot 'Start-TwoClientCapture.ps1'
 $motionScript = Join-Path $PSScriptRoot 'Start-TwoClientMotionTest.ps1'
 $rolesScript = Join-Path $PSScriptRoot 'Set-TwoClientApplyRoles.ps1'
+$phaseSummaryScript = Join-Path $repoRoot 'fieldlab\scripts\Summarize-MotionPhaseCapture.ps1'
 
 function Get-SafeName([string]$Value) {
     $safe = ($Value -replace '[^A-Za-z0-9._-]', '-').Trim('-')
@@ -179,6 +182,48 @@ function Read-JsonFile([string]$Path) {
     }
 }
 
+function New-MotionPhaseSummaries {
+    param(
+        [Parameter(Mandatory = $true)][string]$BundleDirectory,
+        [Parameter(Mandatory = $true)][string]$OutputDirectory
+    )
+
+    $result = [ordered]@{}
+    foreach ($machine in 'omen', 'i5') {
+        $bundle = Get-ChildItem -LiteralPath $BundleDirectory -Filter "$machine-*.zip" -File |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+        if (-not $bundle) {
+            $result[$machine] = [ordered]@{ ok = $false; error = 'capture_bundle_missing' }
+            continue
+        }
+
+        $extractRoot = Join-Path $OutputDirectory $machine
+        Expand-Archive -LiteralPath $bundle.FullName -DestinationPath $extractRoot -Force
+        $samplesPath = Join-Path $extractRoot 'samples.jsonl'
+        $summaryPath = Join-Path $OutputDirectory "$machine-motion-phase-summary.json"
+        try {
+            & $phaseSummaryScript -SamplesPath $samplesPath -OutputPath $summaryPath | Out-Null
+            $summary = Read-JsonFile $summaryPath
+            if (-not $summary) { throw 'phase summary was not readable' }
+            $result[$machine] = [ordered]@{
+                ok = $true
+                samples_path = $samplesPath
+                summary_path = $summaryPath
+                summary = $summary
+            }
+        } catch {
+            $result[$machine] = [ordered]@{
+                ok = $false
+                samples_path = $samplesPath
+                summary_path = $summaryPath
+                error = $_.Exception.Message
+            }
+        }
+    }
+    return $result
+}
+
 function Invoke-StopMotion {
     param([string]$Id)
 
@@ -276,7 +321,7 @@ foreach ($windowApplyClient in $sequence) {
         '-SummaryOnly',
         '-OutputJson', $capturePath
     )
-    if ($CollectBundles) {
+    if ($CollectBundles -or $CollectPhaseSummaries) {
         $bundlePath = Join-Path $windowRoot 'bundles'
         $captureArguments += @('-BundleDirectory', $bundlePath)
     }
@@ -310,6 +355,12 @@ foreach ($windowApplyClient in $sequence) {
         $capture = Read-JsonFile $capturePath
         $roles = Read-JsonFile $rolesPath
         $motion = Read-JsonFile $motionPath
+        $phaseSummaries = $null
+        if ($CollectPhaseSummaries) {
+            $phaseSummaries = New-MotionPhaseSummaries `
+                -BundleDirectory $bundlePath `
+                -OutputDirectory (Join-Path $windowRoot 'motion-phase')
+        }
         $windowRecord = [ordered]@{
             schema_version = 1
             window = $windowName
@@ -319,6 +370,7 @@ foreach ($windowApplyClient in $sequence) {
             capture = $capture
             roles = $roles
             motion = $motion
+            motion_phase = $phaseSummaries
             process = [ordered]@{
                 capture = $captureRun
                 motion = $motionRun
@@ -328,6 +380,7 @@ foreach ($windowApplyClient in $sequence) {
                 capture_json = $capturePath
                 roles_json = $rolesPath
                 motion_json = $motionPath
+                motion_phase_directory = if ($CollectPhaseSummaries) { Join-Path $windowRoot 'motion-phase' } else { $null }
                 capture_stdout = $captureRun.stdout_path
                 capture_stderr = $captureRun.stderr_path
             }

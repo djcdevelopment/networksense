@@ -96,6 +96,10 @@ Host i5
 .\Start-TwoClientFeelWindow.ps1 -Pattern straight_north -MotionDurationSeconds 10 `
   -ApplyClient omen -RoleReversal -Label sprint-role-reversal -CollectBundles
 
+# Same bounded run, plus receive/drain/bind/render phase summaries from both clients
+.\Start-TwoClientFeelWindow.ps1 -Pattern straight_north -MotionDurationSeconds 10 `
+  -ApplyClient omen -RoleReversal -Label cre-e06 -CollectPhaseSummaries
+
 # See the plan without copying
 .\Deploy-ToI5.ps1 -Path .\bundle\ -DryRun
 ```
@@ -225,6 +229,12 @@ whether the result followed APPLY, and the first felt correction. Use `-DryRun` 
 sequence without querying either machine. Use `-SkipReadiness` only when a current readiness receipt
 is already known to be valid. The detailed account-role and experiment strategy is in
 `plans/m7-physical-feel-lane-strategy.md`.
+
+`-CollectPhaseSummaries` implies bundle collection, extracts each machine's raw
+`samples.jsonl`, and runs the CRE-E06 analyzer. Each window retains separate OMEN and
+i5 summaries for receive spacing, drain/coalescing, binding, LateUpdate work, target
+error, and source-agnostic interframe displacement. It fails closed per machine when
+the installed mod predates the phase contract.
 
 ### Connected-player evidence handoff
 
