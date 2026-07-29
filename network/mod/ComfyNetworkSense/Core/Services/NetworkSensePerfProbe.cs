@@ -16,6 +16,10 @@ public sealed class NetworkSensePerfProbe : IDisposable {
   readonly Dictionary<string, ProfilerMarker> _markers = [];
   readonly object _markerSync = new();
   readonly object _engineLogSync = new();
+  readonly Dictionary<string, PatchLoadStat> _patchLoadStats = [];
+  readonly object _patchLoadSync = new();
+  float _lastPatchLoadFlushAt;
+  long _lastPatchLoadFlushTicks;
 
   long _lastFrameTicks;
   float _lastEngineLogSampleAt;
@@ -53,6 +57,13 @@ public sealed class NetworkSensePerfProbe : IDisposable {
     return probe != null && probe.IsEnabled ? probe.StartSection(sectionName) : default;
   }
 
+  public static PatchLoadSection MeasurePatchLoad(string patchName) {
+    NetworkSensePerfProbe probe = _active;
+    return probe != null && probe.IsPatchLoadEnabled
+        ? new PatchLoadSection(probe, patchName, Stopwatch.GetTimestamp(), true)
+        : default;
+  }
+
   public static void SetRouteState(string routeState, string routeStopId = "", string routePhase = "") {
     _active?.UpdateRouteState(routeState, routeStopId, routePhase);
   }
@@ -62,6 +73,11 @@ public sealed class NetworkSensePerfProbe : IDisposable {
           && PluginConfig.PerfProbeEnabled != null
           && PluginConfig.PerfProbeEnabled.Value
           && PluginConfig.WriteTelemetryLogs.Value;
+
+  public bool IsPatchLoadEnabled =>
+      IsEnabled
+          && PluginConfig.PerfPatchLoadRollupEnabled != null
+          && PluginConfig.PerfPatchLoadRollupEnabled.Value;
 
   public void SetRuntimeContext(string regionId, bool benchmarkRunning) {
     _latestRegionId = regionId ?? string.Empty;
@@ -131,6 +147,12 @@ public sealed class NetworkSensePerfProbe : IDisposable {
       _lastEngineLogSampleAt = Time.unscaledTime;
       WriteEngineLogSample(logCount, warningCount);
     }
+
+    if (IsPatchLoadEnabled
+        && Time.unscaledTime - _lastPatchLoadFlushAt >= Mathf.Max(0.1f, PluginConfig.PerfSampleIntervalSeconds.Value)) {
+      _lastPatchLoadFlushAt = Time.unscaledTime;
+      FlushPatchLoadRollup(nowTicks);
+    }
   }
 
   public void Dispose() {
@@ -178,6 +200,62 @@ public sealed class NetworkSensePerfProbe : IDisposable {
         ["writer_queue_depth"] = _writer?.QueueDepth ?? 0,
         ["writer_dropped_rows"] = _writer?.DroppedRows ?? 0
     });
+  }
+
+  void CompletePatchLoad(string patchName, long startedTicks) {
+    long elapsedTicks = Stopwatch.GetTimestamp() - startedTicks;
+    lock (_patchLoadSync) {
+      if (!_patchLoadStats.TryGetValue(patchName, out PatchLoadStat stat)) {
+        stat = new PatchLoadStat();
+        _patchLoadStats[patchName] = stat;
+      }
+
+      stat.Calls++;
+      stat.TotalTicks += elapsedTicks;
+      if (elapsedTicks > stat.MaxTicks) {
+        stat.MaxTicks = elapsedTicks;
+      }
+    }
+  }
+
+  void FlushPatchLoadRollup(long nowTicks) {
+    List<KeyValuePair<string, PatchLoadStat>> snapshot;
+    lock (_patchLoadSync) {
+      if (_patchLoadStats.Count == 0) {
+        _lastPatchLoadFlushTicks = nowTicks;
+        return;
+      }
+
+      snapshot = new List<KeyValuePair<string, PatchLoadStat>>(_patchLoadStats);
+      _patchLoadStats.Clear();
+    }
+
+    double intervalSeconds = _lastPatchLoadFlushTicks > 0
+        ? TicksToMilliseconds(nowTicks - _lastPatchLoadFlushTicks) / 1000.0
+        : 0.0;
+    _lastPatchLoadFlushTicks = nowTicks;
+    string timestampUtc = DateTime.UtcNow.ToString("o");
+
+    foreach (KeyValuePair<string, PatchLoadStat> entry in snapshot) {
+      PatchLoadStat stat = entry.Value;
+      double totalMs = TicksToMilliseconds(stat.TotalTicks);
+      _writer?.Write("perf-patchload.jsonl", new Dictionary<string, object> {
+          ["timestamp_utc"] = timestampUtc,
+          ["session_id"] = _sessionId,
+          ["build_version"] = ComfyNetworkSense.PluginVersion,
+          ["section"] = entry.Key,
+          ["interval_seconds"] = Math.Round(intervalSeconds, 3),
+          ["calls"] = stat.Calls,
+          ["total_ms"] = Math.Round(totalMs, 4),
+          ["max_ms"] = Math.Round(TicksToMilliseconds(stat.MaxTicks), 4),
+          ["mean_us"] = stat.Calls > 0 ? Math.Round(totalMs * 1000.0 / stat.Calls, 2) : 0.0,
+          ["route_state"] = _routeState,
+          ["route_stop_id"] = _routeStopId,
+          ["route_phase"] = _routePhase,
+          ["region_id"] = _latestRegionId,
+          ["benchmark_running"] = _benchmarkRunning
+      });
+    }
   }
 
   ProfilerMarker GetMarker(string sectionName) {
@@ -322,6 +400,36 @@ public sealed class NetworkSensePerfProbe : IDisposable {
 
     value = value.Replace("\r", " ").Replace("\n", " ");
     return value.Length <= 240 ? value : value.Substring(0, 240);
+  }
+
+  sealed class PatchLoadStat {
+    public long Calls;
+    public long TotalTicks;
+    public long MaxTicks;
+  }
+
+  public readonly struct PatchLoadSection : IDisposable {
+    readonly NetworkSensePerfProbe _probe;
+    readonly string _patchName;
+    readonly long _startedTicks;
+    readonly bool _active;
+
+    public PatchLoadSection(
+        NetworkSensePerfProbe probe,
+        string patchName,
+        long startedTicks,
+        bool active) {
+      _probe = probe;
+      _patchName = patchName;
+      _startedTicks = startedTicks;
+      _active = active;
+    }
+
+    public void Dispose() {
+      if (_active) {
+        _probe?.CompletePatchLoad(_patchName, _startedTicks);
+      }
+    }
   }
 
   public readonly struct Section : IDisposable {

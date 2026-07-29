@@ -355,18 +355,24 @@ static class NetcodeProbePatches {
   [HarmonyPostfix]
   [HarmonyPatch("RPC_ZDOData")]
   static void RpcZdoDataPostfix(ZPackage pkg) {
-    NetcodeProbeRunner.ObserveReceive(pkg);
+    using (NetworkSensePerfProbe.MeasurePatchLoad("Patch.ZDOMan.RPC_ZDOData.ProbePostfix")) {
+      NetcodeProbeRunner.ObserveReceive(pkg);
+    }
   }
 
   [HarmonyPostfix]
   [HarmonyPatch("SendZDOs")]
   static void SendZDOsPostfix(bool __result) {
-    NetcodeProbeRunner.ObserveSendZDOs(__result);
+    using (NetworkSensePerfProbe.MeasurePatchLoad("Patch.ZDOMan.SendZDOs.ProbePostfix")) {
+      NetcodeProbeRunner.ObserveSendZDOs(__result);
+    }
   }
 
   [HarmonyPostfix]
   [HarmonyPatch("CreateSyncList")]
   static void CreateSyncListPostfix(List<ZDO> toSync) {
-    NetcodeProbeRunner.ObserveCreateSyncList(toSync);
+    using (NetworkSensePerfProbe.MeasurePatchLoad("Patch.ZDOMan.CreateSyncList.ProbePostfix")) {
+      NetcodeProbeRunner.ObserveCreateSyncList(toSync);
+    }
   }
 }

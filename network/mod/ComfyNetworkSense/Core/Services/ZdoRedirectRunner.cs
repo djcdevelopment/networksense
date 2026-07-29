@@ -1223,6 +1223,8 @@ static class ZdoRedirectPatches {
   [HarmonyPriority(Priority.High)]
   [HarmonyPatch("CreateSyncList")]
   static void CreateSyncListPostfix(object peer, List<ZDO> toSync) {
-    ZdoRedirectRunner.HandleCreateSyncList(peer, toSync);
+    using (NetworkSensePerfProbe.MeasurePatchLoad("Patch.ZDOMan.CreateSyncList.RedirectPostfix")) {
+      ZdoRedirectRunner.HandleCreateSyncList(peer, toSync);
+    }
   }
 }

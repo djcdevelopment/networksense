@@ -24,6 +24,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> PerfEngineLogProbeEnabled { get; private set; }
   public static ConfigEntry<bool> PerfWorldZdoCountOnSevereHitchEnabled { get; private set; }
   public static ConfigEntry<float> PerfSampleIntervalSeconds { get; private set; }
+  public static ConfigEntry<bool> PerfPatchLoadRollupEnabled { get; private set; }
   public static ConfigEntry<bool> PortalConnectionCacheEnabled { get; private set; }
   public static ConfigEntry<float> PortalConnectionCacheIntervalSeconds { get; private set; }
   public static ConfigEntry<float> PortalConnectionCacheLogIntervalSeconds { get; private set; }
@@ -336,6 +337,13 @@ public static class PluginConfig {
             "perfSampleIntervalSeconds",
             1.0f,
             "Minimum seconds between perf-engine-log.jsonl aggregate rows.");
+
+    PerfPatchLoadRollupEnabled =
+        config.Bind(
+            "Perf",
+            "perfPatchLoadRollupEnabled",
+            false,
+            "Accumulate per-call timing inside Harmony patch bodies and write per-interval rollups to perf-patchload.jsonl. Lab measurement aid; keep disabled for volunteers.");
 
     PortalConnectionCacheEnabled =
         config.Bind(

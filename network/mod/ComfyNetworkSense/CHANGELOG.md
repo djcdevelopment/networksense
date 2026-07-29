@@ -1,5 +1,15 @@
 ## Changelog
 
+### Unreleased
+
+- Add a Harmony patch-load rollup: hot patch bodies (`ZDOMan` probe/redirect postfixes and
+  the send-cadence call site) accumulate per-call timing and write per-interval rows to
+  `perf-patchload.jsonl` when `[Perf] perfPatchLoadRollupEnabled` is on (new key, default
+  off — lab measurement aid, volunteers unaffected). See
+  `fieldlab/docs/runbook-patchload-ab-benchmark.md`.
+- Correct COMMANDS.md: the `[Netcode]` probe auto-start keys were removed in the
+  config-surface cull; the netcode probe is console-started only.
+
 ### 0.5.35
 
 - Keep the side `NET SHOW` recovery tab visible even when an older local config has

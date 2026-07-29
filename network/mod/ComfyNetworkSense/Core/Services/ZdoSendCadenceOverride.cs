@@ -40,6 +40,10 @@ public static class ZdoSendCadenceOverride {
   public static MethodInfo VanillaSendToPeers => VanillaSendToPeersMethod;
 
   public static void SendZDOToPeers(ZDOMan zdoManager, float dt) {
+    // Times the whole rewritten call site (override and vanilla-delegation branches alike), so
+    // perf-patchload.jsonl rows are comparable with the prefix/postfix patch sections.
+    using NetworkSensePerfProbe.PatchLoadSection _ =
+        NetworkSensePerfProbe.MeasurePatchLoad("Patch.ZDOMan.Update.SendCadenceCallSite");
     _calls++;
 
     if (!PluginConfig.ZdoSendCadenceOverrideEnabled.Value) {
