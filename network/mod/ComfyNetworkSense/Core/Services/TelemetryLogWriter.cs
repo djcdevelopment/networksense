@@ -11,6 +11,7 @@ using BepInEx;
 
 public sealed class TelemetryLogWriter : IDisposable {
   const int MaxQueuedWrites = 8192;
+  const int SharingRetryCount = 3;
 
   readonly string _rootPath;
   readonly BlockingCollection<PendingWrite> _writeQueue = new(MaxQueuedWrites);
@@ -85,12 +86,27 @@ public sealed class TelemetryLogWriter : IDisposable {
 
   void WriterLoop() {
     foreach (PendingWrite write in _writeQueue.GetConsumingEnumerable()) {
-      try {
-        File.AppendAllText(write.FilePath, write.Line);
-        Interlocked.Increment(ref _writtenRows);
-      } catch (Exception exception) {
+      Exception terminal = null;
+      for (int attempt = 0; attempt <= SharingRetryCount; attempt++) {
+        try {
+          File.AppendAllText(write.FilePath, write.Line);
+          Interlocked.Increment(ref _writtenRows);
+          terminal = null;
+          break;
+        } catch (IOException exception) when (attempt < SharingRetryCount) {
+          terminal = exception;
+          // Windows antivirus, log collection, or the prior process's final flush can hold the
+          // append handle briefly across an unattended relaunch. Retry only on this background
+          // worker; Unity's thread never waits.
+          Thread.Sleep(25 * (1 << attempt));
+        } catch (Exception exception) {
+          terminal = exception;
+          break;
+        }
+      }
+      if (terminal != null) {
         Interlocked.Increment(ref _faultCount);
-        ComfyNetworkSense.LogWarning($"Telemetry write failed: {exception.Message}");
+        ComfyNetworkSense.LogWarning($"Telemetry write failed: {terminal.Message}");
       }
     }
   }

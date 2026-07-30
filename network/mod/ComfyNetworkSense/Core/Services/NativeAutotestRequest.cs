@@ -26,13 +26,19 @@ public sealed class NativeAutotestRequest {
   public string server;
   public string created_utc;
   public string expires_utc;
+  public bool native_network_poison;
 
   string _path;
+  static string _activeRunId = string.Empty;
+  static string _activeClient = string.Empty;
 
   public string RunId => run_id ?? string.Empty;
   public string Client => client ?? string.Empty;
   public string Character => character ?? string.Empty;
   public string Server => server ?? string.Empty;
+  public bool NativeNetworkPoison => native_network_poison;
+  public static string ActiveRunId => _activeRunId;
+  public static string ActiveClient => _activeClient;
 
   public static bool TryLoad(out NativeAutotestRequest request, out string detail) {
     request = null;
@@ -81,6 +87,10 @@ public sealed class NativeAutotestRequest {
       }
 
       parsed._path = path;
+      _activeRunId = parsed.RunId;
+      _activeClient = parsed.Client;
+      NativeNetworkLedger.SetRunContext(parsed.RunId, parsed.Client);
+      NativeNetworkLedger.SetPoisonOverride(parsed.NativeNetworkPoison);
       request = parsed;
       detail = "request_ready";
       return true;

@@ -98,6 +98,9 @@ public static class PluginConfig {
   public static ConfigEntry<string> HandshakeResponderWindowId { get; private set; }
   public static ConfigEntry<float> HandshakeResponderPollSeconds { get; private set; }
   public static ConfigEntry<float> HandshakeResponderActiveSeconds { get; private set; }
+  public static ConfigEntry<bool> NativeNetworkLedgerEnabled { get; private set; }
+  public static ConfigEntry<bool> NativeNetworkPoisonEnabled { get; private set; }
+  public static ConfigEntry<string> NativeNetworkEvidenceRunId { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -914,6 +917,32 @@ public static class PluginConfig {
             + "2026-07-21, which meant new players joining after the 90s mark hit native Valheim "
             + "admission instead of the Lumberjacks responder. A shorter window still gives the "
             + "in-window rollback rehearsal, but it is now opt-in rather than the default.");
+
+    NativeNetworkLedgerEnabled =
+        config.Bind(
+            "NativeCutover",
+            "nativeNetworkLedgerEnabled",
+            true,
+            "Record sampled native-network funnel use plus exact periodic counts to "
+            + "BepInEx/config/comfy-network-sense/native-network-use.jsonl. Keep enabled through "
+            + "the final cutover so zero is an observed invariant, not an absent log.");
+
+    NativeNetworkPoisonEnabled =
+        config.Bind(
+            "NativeCutover",
+            "nativeNetworkPoisonEnabled",
+            false,
+            "When true, refuse mapped native peer, Steam socket, handshake, ZDOData, and RoutedRPC "
+            + "network calls after recording them. Development and final-proof guard; fail-safe "
+            + "default OFF until the Lumberjacks replacement for each boundary is ready.");
+
+    NativeNetworkEvidenceRunId =
+        config.Bind(
+            "NativeCutover",
+            "nativeNetworkEvidenceRunId",
+            "",
+            "Safe run token stamped into dedicated-server native-network receipts. Physical client "
+            + "runs take their id from the short-lived native-autotest request.");
 
     ServerRuntimeControlEnabled =
         config.Bind(

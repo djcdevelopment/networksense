@@ -3,6 +3,7 @@ namespace ComfyNetworkSense;
 using System;
 using System.Collections;
 using System.Globalization;
+using System.Linq;
 using System.Reflection;
 
 using HarmonyLib;
@@ -64,7 +65,8 @@ public static class LabAutoJoinPatches
         _armed = true;
         _nativeRequest?.Record("ready",
             "renderer=" + SafeMarker(SystemInfo.graphicsDeviceName)
-            + " renderer_type=" + SafeMarker(SystemInfo.graphicsDeviceType.ToString()));
+            + " renderer_type=" + SafeMarker(SystemInfo.graphicsDeviceType.ToString())
+            + " native_poison=" + (_nativeRequest.NativeNetworkPoison ? "true" : "false"));
         __instance.StartCoroutine(Drive(__instance));
     }
 
@@ -108,8 +110,22 @@ public static class LabAutoJoinPatches
         }
 
         int index = ResolveProfileIndex(profiles);
+        if (index < 0 && TryRecoverInterruptedCloudProfile())
+        {
+            _nativeRequest?.Record("profile_recovered", "relaunch_required");
+            yield break;
+        }
+        while (index < 0 && Time.realtimeSinceStartup < deadline)
+        {
+            yield return new WaitForSeconds(poll);
+            Invoke(_updateCharacterList, fejd, "UpdateCharacterList");
+            profiles = Profiles(fejd);
+            index = ResolveProfileIndex(profiles);
+        }
         if (index < 0)
         {
+            ComfyNetworkSense.LogWarning(
+                $"Native autotest character '{_nativeRequest?.Character}' did not become available before timeout.");
             _nativeRequest?.Record("failed", "reason=requested_character_not_found");
             yield break;
         }
@@ -126,6 +142,46 @@ public static class LabAutoJoinPatches
         _nativeRequest?.Record("character_selected", "profile_index=" + index);
     }
 
+    private static bool TryRecoverInterruptedCloudProfile()
+    {
+        string requestedName = _nativeRequest?.Character?.Trim();
+        if (string.IsNullOrWhiteSpace(requestedName)
+            || requestedName.Length > 64
+            || requestedName.Any(c => !char.IsLetterOrDigit(c) && c is not '-' and not '_'))
+            return false;
+
+        string stem = requestedName.ToLowerInvariant();
+        foreach (string prefix in new[] { "characters/", "/characters/" })
+        {
+            string saveFile = prefix + stem + ".fch";
+            string newFile = saveFile + ".new";
+            string oldFile = saveFile + ".old";
+            try
+            {
+                if (FileHelpers.FileExistsCloud(saveFile)
+                    || !FileHelpers.FileExistsCloud(newFile))
+                    continue;
+                FileHelpers.ReplaceOldFile(
+                    saveFile, newFile, oldFile, FileHelpers.FileSource.Cloud);
+                SaveSystem.ForceRefreshCache();
+                bool recovered = FileHelpers.FileExistsCloud(saveFile);
+                ComfyNetworkSense.LogWarning(
+                    "Native autotest interrupted cloud save recovery "
+                    + (recovered ? "completed" : "did_not_complete")
+                    + " for requested character.");
+                return recovered;
+            }
+            catch (Exception exception)
+            {
+                ComfyNetworkSense.LogWarning(
+                    "Native autotest interrupted cloud save recovery failed: "
+                    + exception.GetType().Name);
+                return false;
+            }
+        }
+        return false;
+    }
+
     private static IList Profiles(FejdStartup fejd) => _profilesField?.GetValue(fejd) as IList;
 
     private static int ResolveProfileIndex(IList profiles)
@@ -140,7 +196,6 @@ public static class LabAutoJoinPatches
                 if (profiles[i] is PlayerProfile candidate && string.Equals(SafeName(candidate), requestedName.Trim(), StringComparison.OrdinalIgnoreCase)) return i;
             if (_nativeRequest != null)
             {
-                ComfyNetworkSense.LogWarning($"Native autotest character '{requestedName}' was not found; refusing fallback selection.");
                 return -1;
             }
             ComfyNetworkSense.LogWarning($"Lab auto-join character '{requestedName}' was not found; falling back to index.");

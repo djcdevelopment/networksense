@@ -52,12 +52,14 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
   LumberjacksMotionRunner _lumberjacksMotionRunner;
   MotionTestController _motionTestController;
+  NativeCutoverScenarioController _nativeCutoverScenarioController;
   NetcodeProbeRunner _netcodeProbeRunner;
   ZdoRedirectRunner _zdoRedirectRunner;
   GameplayEventProducer _gameplayEventProducer;
   ZdoAuthoritativeConsumerRunner _zdoAuthoritativeConsumerRunner;
   HandshakeResponderRunner _handshakeResponderRunner;
   ServerRuntimeControlRunner _serverRuntimeControlRunner;
+  NativeNetworkLedger _nativeNetworkLedger;
   readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
   bool _routeRunning;
@@ -89,6 +91,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     PluginConfig.Bind(Config);
     AlphaTransportSwitches.Reset(PluginConfig.LumberjacksMotionApplyEnabled.Value);
+    _nativeNetworkLedger = new();
 
     _coordinator = new();
     _lumberjacksBridgeProbe = new();
@@ -101,6 +104,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = new();
     _lumberjacksMotionRunner = new();
     _motionTestController = new(RecordTransportControl);
+    _nativeCutoverScenarioController = new();
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
@@ -205,6 +209,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       result["zdo_probe_recv_calls"] = netcode.TryGetValue("recv_funnel_calls", out object recvCalls) ? recvCalls : null;
       result["zdo_probe_create_sync_calls"] = netcode.TryGetValue("create_sync_list_calls", out object syncCalls) ? syncCalls : null;
     }
+    Dictionary<string, object> nativeNetwork = _nativeNetworkLedger?.Snapshot();
+    if (nativeNetwork != null) {
+      foreach (var pair in nativeNetwork) result["native_network_" + pair.Key] = pair.Value;
+    }
     Dictionary<string, object> sendCadence = ZdoSendCadenceOverride.Snapshot();
     foreach (var pair in sendCadence) result[pair.Key] = pair.Value;
     return result;
@@ -219,6 +227,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     float deltaTime = Time.unscaledDeltaTime;
     float now = Time.unscaledTime;
+    _nativeNetworkLedger?.Update(now);
     _serverRuntimeControlRunner?.Update(now, _coordinator);
     _zdoRedirectRunner?.MaintainPrimaryWindow(now);
     TryEnsurePrimaryRedirect(now);
@@ -257,6 +266,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.MotionTestController.Update")) {
       _motionTestController?.Update();
+    }
+
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.NativeCutoverScenarioController.Update")) {
+      _nativeCutoverScenarioController?.Update(now);
     }
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ZdoInjectionRunner.Update")) {
@@ -414,6 +427,29 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             : "effective_on_next_responder_start";
         result = RuntimeControlApplyResult.Applied(
             oldWindow, PluginConfig.HandshakeResponderWindowId.Value, windowEffect);
+        break;
+
+      case "nativeNetworkPoisonEnabled":
+        if (!bool.TryParse(requestedValue, out bool poisonEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldPoison = PluginConfig.NativeNetworkPoisonEnabled.Value;
+        PluginConfig.NativeNetworkPoisonEnabled.Value = poisonEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldPoison), Bool(PluginConfig.NativeNetworkPoisonEnabled.Value),
+            "effective_on_next_native_funnel_call");
+        break;
+
+      case "nativeNetworkEvidenceRunId":
+        if (!IsSafeRuntimeToken(requestedValue)) {
+          return RuntimeControlApplyResult.Refused("run_id_must_be_safe_token");
+        }
+        string oldRunId = PluginConfig.NativeNetworkEvidenceRunId.Value ?? string.Empty;
+        PluginConfig.NativeNetworkEvidenceRunId.Value = requestedValue.Trim();
+        NativeNetworkLedger.SetRunContext(PluginConfig.NativeNetworkEvidenceRunId.Value, "server");
+        result = RuntimeControlApplyResult.Applied(
+            oldRunId, PluginConfig.NativeNetworkEvidenceRunId.Value,
+            "effective_on_next_native_ledger_row");
         break;
 
       default:
@@ -675,6 +711,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksMotionRunner = null;
     _motionTestController?.Dispose();
     _motionTestController = null;
+    _nativeCutoverScenarioController?.Dispose();
+    _nativeCutoverScenarioController = null;
     _netcodeProbeRunner?.Dispose();
     _netcodeProbeRunner = null;
     _zdoRedirectRunner?.Dispose();
@@ -689,6 +727,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator = null;
     _harmony?.UnpatchSelf();
     _harmony = null;
+    _nativeNetworkLedger?.Dispose();
+    _nativeNetworkLedger = null;
 
     if (Instance == this) {
       Instance = null;

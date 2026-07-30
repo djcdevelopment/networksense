@@ -2,6 +2,14 @@
 
 ### Unreleased
 
+- Add an exact run-scoped native-network funnel ledger, connection-stage timing, and
+  a poison gate that blocks forbidden Steam/Valheim connection, RPC, and ZDO receive
+  paths before their original methods run.
+- Add a bounded two-physical-client cutover scenario driver with fixed in-process
+  actions, disconnect/fresh-process resume, correlated server/client evidence, and a
+  machine-readable native-use gate summary.
+- Recover a completed interrupted Steam Cloud character transaction through Valheim's
+  Cloud API during unattended autojoin, then relaunch once against the final profile.
 - Add a request-scoped native Windows autojoin seam for persisted lab characters, with
   deterministic renderer and joined receipts; normal players remain untouched when no
   short-lived request file exists.
