@@ -104,6 +104,7 @@ public static class PluginConfig {
   public static ConfigEntry<string> NativeNetworkEvidenceRunId { get; private set; }
   public static ConfigEntry<bool> DirectControlCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> RoutedRpcCutoverEnabled { get; private set; }
+  public static ConfigEntry<bool> ZdoJournalCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -973,6 +974,16 @@ public static class PluginConfig {
             "C2b gate: route the fixed allow-list of selected ZRoutedRpc methods over the "
             + "canonical Lumberjacks session and fail closed instead of using native delivery. "
             + "Default OFF until the C2b boundary is deliberately armed.");
+
+    ZdoJournalCutoverEnabled =
+        config.Bind(
+            "NativeCutover",
+            "zdoJournalCutoverEnabled",
+            false,
+            "C3 gate: capture run-tagged ZDO mutations before CreateSyncList, publish them to "
+            + "the durable Lumberjacks journal, and apply typed snapshot/delta/tombstone "
+            + "deliveries on the client without RPC_ZDOData. Default OFF until the C3 "
+            + "boundary is deliberately armed.");
 
     ServerRuntimeControlEnabled =
         config.Bind(

@@ -35,6 +35,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly HashSet<string> _completedActionIds = new(StringComparer.Ordinal);
   readonly LumberjacksGameSessionRunner _gameSession;
   readonly RoutedRpcCutoverRunner _routedRpc;
+  readonly ZdoJournalCutoverRunner _zdoJournal;
 
   NativeCutoverScenarioManifest _manifest;
   NativeCutoverScenarioAction[] _actions = Array.Empty<NativeCutoverScenarioAction>();
@@ -51,9 +52,11 @@ public sealed class NativeCutoverScenarioController : IDisposable {
 
   public NativeCutoverScenarioController(
       LumberjacksGameSessionRunner gameSession,
-      RoutedRpcCutoverRunner routedRpc) {
+      RoutedRpcCutoverRunner routedRpc,
+      ZdoJournalCutoverRunner zdoJournal) {
     _gameSession = gameSession;
     _routedRpc = routedRpc;
+    _zdoJournal = zdoJournal;
     Directory.CreateDirectory(_directory);
     _manifestPath = Path.Combine(_directory, ManifestFileName);
     _receiptPath = Path.Combine(_directory, ReceiptFileName);
@@ -144,7 +147,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       if (action == null || !SafeToken(action.id, 80) || !ids.Add(action.id))
         return "manifest_action_id_invalid";
       if (!SafeClient(action.client)) return "manifest_action_client_invalid";
-      if (action.deadline_seconds is < 1.0f or > 120.0f)
+      if (action.deadline_seconds is < 1.0f or > 300.0f)
         return "manifest_action_deadline_invalid";
       switch ((action.kind ?? string.Empty).Trim().ToLowerInvariant()) {
         case "wait":
@@ -182,6 +185,8 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "routed_broadcast":
         case "routed_target_zdo":
         case "routed_withhold":
+        case "zdo_journal_drive":
+        case "zdo_journal_observe":
           break;
         default:
           return "manifest_action_kind_invalid";
@@ -322,6 +327,28 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         if (!_routedRpc.TryGetProbeResult(
                 _active.id, out bool terminal, out bool success, out string probeDetail)
             || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "zdo_journal_drive":
+      case "zdo_journal_observe": {
+        if (!_sessionProbeStarted) {
+          string mode =
+              kind == "zdo_journal_drive" ? "drive" : "observe";
+          if (!_zdoJournal.BeginProbe(
+                  _active.id, mode,
+                  Mathf.Max(5.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail == "zdo_journal_client_not_ready") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_zdoJournal.TryGetProbeResult(
+                _active.id, out bool terminal, out bool success,
+                out string probeDetail) || !terminal) return;
         if (success) CompleteActive(probeDetail);
         else FailActive(probeDetail);
         break;

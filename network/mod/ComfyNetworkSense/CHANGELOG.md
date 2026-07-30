@@ -2,6 +2,18 @@
 
 ### Unreleased
 
+- Add C3's Lumberjacks-owned durable ZDO mutation journal, explicit recipient
+  interest, snapshot/delta/tombstone envelopes, and direct typed main-thread apply.
+- Add retained tripwires proving the selected object is neither sourced by
+  `CreateSyncList` nor applied through network `RPC_ZDOData`.
+- Decode JSON string escapes on the canonical game-session receive path so routed
+  RPC payloads containing serializer-escaped Base64 characters remain byte-exact.
+- Keep private-plane C3 journal consumers isolated by an explicit bounded recipient
+  identity while enrolled public consumers remain self-scoped by enrollment.
+- Defer client journal interest until its bounded C3 action starts so the late
+  observer's first durable snapshot is retained inside the measured boundary.
+- Identify the C3 probe tag inside observed native `ZDOData` bodies, closing the
+  pre-snapshot interval in the selected-object native receive tripwire.
 - Add one canonical Lumberjacks game-session WebSocket/UDP binding with explicit
   server/world identity, stable connection id, ordered reliable control, cumulative
   acknowledgement, bounded queues, deduplication, and socket resume epochs.

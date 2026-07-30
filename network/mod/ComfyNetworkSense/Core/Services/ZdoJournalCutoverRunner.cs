@@ -1,0 +1,1043 @@
+namespace ComfyNetworkSense;
+
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Reflection;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+
+using HarmonyLib;
+
+using UnityEngine;
+
+/// <summary>
+/// C3's semantic ZDO path. The server captures a complete body at the mutation boundary, before
+/// Valheim chooses a peer's CreateSyncList. Enrolled clients declare explicit zone interest,
+/// poll Lumberjacks snapshots/deltas/tombstones off-thread, and apply them directly on Unity's
+/// main thread. No delivery is sourced by CreateSyncList and no apply calls RPC_ZDOData.
+/// </summary>
+public sealed class ZdoJournalCutoverRunner : IDisposable {
+  public const string RequestMethod = RoutedRpcCutoverRunner.JournalRequestMethod;
+  public const string ReceiptFileName = "zdo-journal-cutover.jsonl";
+  public const string ProbeTagName = "ComfyNetworkSense_C3Tag";
+  public const string ProbeValueName = "ComfyNetworkSense_C3Value";
+
+  const int MaxBodyBytes = 4 * 1024 * 1024;
+  const int MaxResponseBytes = 16 * 1024 * 1024;
+  const int HttpTimeoutMs = 5000;
+  const int ResponseDeadlineMs = 5000;
+  const float InterestSeconds = 2.0f;
+  const float WorkerSeconds = 0.20f;
+  const int ApplyPerUpdate = 32;
+  const int InterestRadiusZones = 32;
+
+  static readonly int ProbeTagHash = ProbeTagName.GetStableHashCode();
+  static readonly int ProbeValueHash = ProbeValueName.GetStableHashCode();
+  static readonly int ProbePrefabHash =
+      "ComfyNetworkSense_C3Probe".GetStableHashCode();
+  static readonly MethodInfo CreateNewZdoMethod =
+      AccessTools.Method(
+          typeof(ZDOMan), "CreateNewZDO",
+          new[] { typeof(ZDOID), typeof(Vector3), typeof(int) });
+  static readonly MethodInfo HandleDestroyedZdoMethod =
+      AccessTools.Method(typeof(ZDOMan), "HandleDestroyedZDO",
+          new[] { typeof(ZDOID) });
+
+  static ZdoJournalCutoverRunner _active;
+
+  readonly ConcurrentQueue<JournalObject> _serverOutbound = new();
+  readonly ConcurrentQueue<JournalDelivery> _clientInbound = new();
+  readonly ConcurrentQueue<long> _clientAcks = new();
+  readonly Dictionary<string, long> _appliedRevisions =
+      new(StringComparer.Ordinal);
+  readonly TelemetryLogWriter _writer = new();
+  readonly object _gate = new();
+
+  ZRoutedRpc _registeredRpc;
+  DriveState _drive;
+  ClientProbe _probe;
+  string _worldEpoch = string.Empty;
+  string _runId = string.Empty;
+  string _endpoint = string.Empty;
+  string _recipientId = string.Empty;
+  string _watchedZdo = string.Empty;
+  string _role = "starting";
+  float _nextWorker;
+  float _nextInterest;
+  int _workerInFlight;
+  int _interestedRecipients;
+  int _interestZoneX;
+  int _interestZoneY;
+  long _sourceSequence;
+  long _createSyncLists;
+  long _nativeCandidates;
+  long _nativeRpcDeliveries;
+  long _snapshotsApplied;
+  long _deltasApplied;
+  long _tombstonesApplied;
+  long _staleRejected;
+  long _malformedRejected;
+  long _superseded;
+  long _applyFailures;
+  bool _disposed;
+
+  public ZdoJournalCutoverRunner() {
+    ZdoJournalCutoverRunner previous = Interlocked.Exchange(ref _active, this);
+    previous?.Dispose();
+  }
+
+  public void Update(float now) {
+    if (_disposed) return;
+    EnsureHandler();
+    if (!Enabled()) return;
+    RefreshContext();
+    bool server = IsServer();
+    if (string.IsNullOrWhiteSpace(_endpoint)
+        || string.IsNullOrWhiteSpace(_runId)
+        || string.IsNullOrWhiteSpace(_worldEpoch)
+        || (!server && string.IsNullOrWhiteSpace(_recipientId))) return;
+
+    if (server) {
+      DriveServer(now);
+    } else {
+      DrainClient();
+      EvaluateProbe();
+      if (Player.m_localPlayer == null ||
+          ZNet.instance == null ||
+          (ZNet.instance.GetPeers()?.Count ?? 0) == 0)
+        return;
+    }
+
+    if (now >= _nextWorker
+        && Interlocked.CompareExchange(ref _workerInFlight, 1, 0) == 0) {
+      try {
+        _nextWorker = now + WorkerSeconds;
+        bool registerInterest =
+            !server && _probe != null && !_probe.Terminal &&
+            now >= _nextInterest;
+        if (registerInterest) {
+          _nextInterest = now + InterestSeconds;
+          Vector3 position =
+              ((Component) Player.m_localPlayer).transform.position;
+          Vector2i zone = ZoneSystem.GetZone(position);
+          Volatile.Write(ref _interestZoneX, zone.x);
+          Volatile.Write(ref _interestZoneY, zone.y);
+        }
+        _ = Task.Run(() => Work(server, registerInterest));
+      } catch {
+        Interlocked.Exchange(ref _workerInFlight, 0);
+        throw;
+      }
+    }
+  }
+
+  public bool BeginProbe(
+      string actionId, string mode, float deadlineSeconds, out string detail) {
+    detail = string.Empty;
+    if (!SafeToken(actionId, 80) || mode is not ("drive" or "observe")) {
+      detail = "zdo_journal_probe_parameters_invalid";
+      return false;
+    }
+    if (!Enabled()) {
+      detail = "zdo_journal_cutover_not_enabled";
+      return false;
+    }
+    if (IsServer() || Player.m_localPlayer == null ||
+        ZRoutedRpc.instance == null) {
+      detail = "zdo_journal_client_not_ready";
+      return false;
+    }
+    if (_probe != null && !_probe.Terminal) {
+      detail = "another_zdo_journal_probe_active";
+      return false;
+    }
+    _probe = new() {
+        ActionId = actionId,
+        Mode = mode,
+        DeadlineAt = Time.unscaledTime + Mathf.Clamp(deadlineSeconds, 5.0f, 300.0f),
+        Snapshots = Interlocked.Read(ref _snapshotsApplied),
+        Deltas = Interlocked.Read(ref _deltasApplied),
+        Tombstones = Interlocked.Read(ref _tombstonesApplied),
+        Stale = Interlocked.Read(ref _staleRejected),
+        Malformed = Interlocked.Read(ref _malformedRejected)
+    };
+    Write("probe_started", actionId, "mode=" + mode);
+    if (mode == "observe") return true;
+
+    ZNetPeer server = ZNet.instance?.GetServerPeer();
+    if (server == null || server.m_uid == 0) {
+      detail = "zdo_journal_server_peer_missing";
+      _probe.Terminal = true;
+      return false;
+    }
+    Vector3 origin = ((Component) Player.m_localPlayer).transform.position;
+    ZPackage request = new();
+    request.Write(_runId);
+    request.Write(actionId);
+    request.Write("drive");
+    request.Write(origin);
+    request.SetPos(0);
+    ZRoutedRpc.instance.InvokeRoutedRPC(
+        server.m_uid, RequestMethod, new object[] { request });
+    return true;
+  }
+
+  public bool TryGetProbeResult(
+      string actionId,
+      out bool terminal,
+      out bool success,
+      out string detail) {
+    if (_probe == null ||
+        !string.Equals(_probe.ActionId, actionId, StringComparison.Ordinal)) {
+      terminal = false;
+      success = false;
+      detail = "zdo_journal_probe_not_found";
+      return false;
+    }
+    terminal = _probe.Terminal;
+    success = _probe.Success;
+    detail = _probe.Detail ?? string.Empty;
+    return true;
+  }
+
+  public static void CaptureMutation(ZDO zdo) {
+    ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || !Enabled() || !IsServer() || zdo == null) return;
+    try {
+      string runId = zdo.GetString(ProbeTagHash, string.Empty);
+      if (!SafeToken(runId, 80) ||
+          !string.Equals(runId, active._runId, StringComparison.Ordinal)) return;
+      active._serverOutbound.Enqueue(active.Snapshot(zdo, tombstone: false));
+    } catch (Exception exception) {
+      active.Write("capture_failed", "mutation",
+          exception.GetType().Name + ":" + exception.Message);
+    }
+  }
+
+  public static void CaptureTombstone(ZDOID uid) {
+    ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || !Enabled() || !IsServer() ||
+        ZDOMan.instance == null) return;
+    try {
+      ZDO zdo = ZDOMan.instance.GetZDO(uid);
+      if (zdo == null) return;
+      string runId = zdo.GetString(ProbeTagHash, string.Empty);
+      if (!string.Equals(runId, active._runId, StringComparison.Ordinal)) return;
+      JournalObject tombstone = active.Snapshot(zdo, tombstone: true);
+      tombstone.object_revision++;
+      tombstone.source_seq = Interlocked.Increment(ref active._sourceSequence);
+      active._serverOutbound.Enqueue(tombstone);
+      active.Write("tombstone_captured", "server",
+          "uid=" + uid + " object_revision=" + tombstone.object_revision);
+    } catch (Exception exception) {
+      active.Write("capture_failed", "tombstone",
+          exception.GetType().Name + ":" + exception.Message);
+    }
+  }
+
+  public static void ObserveCreateSyncList(List<ZDO> toSync) {
+    ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || !Enabled() || !IsServer()) return;
+    Interlocked.Increment(ref active._createSyncLists);
+    if (toSync == null) return;
+    foreach (ZDO zdo in toSync) {
+      if (zdo == null) continue;
+      try {
+        if (string.Equals(
+                zdo.GetString(ProbeTagHash, string.Empty),
+                active._runId, StringComparison.Ordinal))
+          Interlocked.Increment(ref active._nativeCandidates);
+      } catch { }
+    }
+  }
+
+  public static void ObserveNativeZdoData(ZPackage package) {
+    ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || !Enabled() || IsServer() || package == null ||
+        string.IsNullOrWhiteSpace(active._watchedZdo)) return;
+    try {
+      ZPackage copy = new(package.GetArray());
+      int invalid = copy.ReadInt();
+      if (invalid is < 0 or > 100000) return;
+      for (int i = 0; i < invalid; i++) copy.ReadZDOID();
+      while (copy.GetPos() < copy.Size()) {
+        ZDOID uid = copy.ReadZDOID();
+        if (uid.IsNone()) break;
+        copy.ReadUShort();
+        copy.ReadUInt();
+        copy.ReadLong();
+        copy.ReadVector3();
+        ZPackage body = copy.ReadPackage();
+        if (!string.Equals(uid.ToString(), active._watchedZdo,
+                StringComparison.Ordinal) &&
+            !BodyHasProbeTag(body, active._runId)) continue;
+        active._watchedZdo = uid.ToString();
+        Interlocked.Increment(ref active._nativeRpcDeliveries);
+        active.Write("native_rpc_zdo_data_tripwire", "client",
+            "uid=" + uid);
+      }
+    } catch {
+      // Observe-only parser. A malformed native packet remains the native handler's decision.
+    }
+  }
+
+  void EnsureHandler() {
+    ZRoutedRpc rpc = ZRoutedRpc.instance;
+    if (rpc == null || ReferenceEquals(rpc, _registeredRpc)) return;
+    rpc.Register<ZPackage>(RequestMethod, HandleDriveRequest);
+    _registeredRpc = rpc;
+  }
+
+  static void HandleDriveRequest(long senderPeerId, ZPackage package) {
+    ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || !Enabled() || !IsServer()) return;
+    try {
+      package.SetPos(0);
+      string runId = package.ReadString();
+      string actionId = package.ReadString();
+      string mode = package.ReadString();
+      Vector3 origin = package.ReadVector3();
+      if (!SafeToken(runId, 80) || !SafeToken(actionId, 80) ||
+          mode != "drive" || !Finite(origin) ||
+          !string.Equals(runId, active._runId, StringComparison.Ordinal))
+        throw new InvalidDataException("drive_request_invalid");
+      active.StartDrive(runId, actionId, origin);
+    } catch (Exception exception) {
+      active.Write("drive_request_rejected", "server",
+          exception.GetType().Name + ":" + exception.Message);
+    }
+  }
+
+  void StartDrive(string runId, string actionId, Vector3 origin) {
+    if (_drive != null && !_drive.Complete) {
+      Write("drive_request_duplicate", actionId, "existing_drive_active");
+      return;
+    }
+    // Four zones east: inside Lumberjacks' explicit C3 interest but outside Valheim's
+    // near/distant CreateSyncList rings. This is the acceptance object's negative control.
+    Vector3 position = origin + new Vector3(256.0f, 0.0f, 0.0f);
+    ZDO zdo = ZDOMan.instance.CreateNewZDO(position, ProbePrefabHash);
+    _watchedZdo = zdo.m_uid.ToString();
+    _drive = new() {
+        RunId = runId,
+        ActionId = actionId,
+        Zdo = zdo,
+        Phase = "waiting_for_second_interest",
+        NextAt = Time.unscaledTime + 1.0f
+    };
+    zdo.Set(ProbeTagHash, runId);
+    zdo.Set(ProbeValueHash, 1);
+    Write("drive_created", actionId,
+        "uid=" + zdo.m_uid + " zone=" + zdo.GetSector().x + "," + zdo.GetSector().y
+        + " value=1");
+  }
+
+  void DriveServer(float now) {
+    if (_drive == null || _drive.Complete || now < _drive.NextAt) return;
+    if (_drive.Phase == "waiting_for_second_interest") {
+      if (Volatile.Read(ref _interestedRecipients) < 2) {
+        _drive.NextAt = now + 0.5f;
+        return;
+      }
+      JournalObject current = Snapshot(_drive.Zdo, tombstone: false);
+      JournalObject stale = Clone(current);
+      stale.delivery_only = true;
+      stale.source_seq = Interlocked.Increment(ref _sourceSequence);
+      stale.object_revision = Math.Max(1, current.object_revision - 1);
+      _serverOutbound.Enqueue(stale);
+
+      JournalObject malformed = Clone(current);
+      malformed.delivery_only = true;
+      malformed.source_seq = Interlocked.Increment(ref _sourceSequence);
+      malformed.object_revision = current.object_revision + 1;
+      malformed.body_b64 = "%%%C3-MALFORMED%%%";
+      _serverOutbound.Enqueue(malformed);
+
+      _drive.Zdo.Set(ProbeValueHash, 2);
+      _drive.Phase = "waiting_to_destroy";
+      _drive.NextAt = now + 3.0f;
+      Write("drive_faults_and_valid_queued", _drive.ActionId,
+          "interested_recipients=" + _interestedRecipients + " value=2");
+      return;
+    }
+    if (_drive.Phase == "waiting_to_destroy") {
+      ZDOID uid = _drive.Zdo.m_uid;
+      HandleDestroyedZdoMethod.Invoke(ZDOMan.instance, new object[] { uid });
+      _drive.Complete = true;
+      Write("drive_complete", _drive.ActionId,
+          "uid=" + uid
+          + " create_sync_lists=" + Interlocked.Read(ref _createSyncLists)
+          + " native_candidates=" + Interlocked.Read(ref _nativeCandidates));
+    }
+  }
+
+  JournalObject Snapshot(ZDO zdo, bool tombstone) {
+    Vector3 position = zdo.GetPosition();
+    Vector2i zone = zdo.GetSector();
+    ZPackage body = new();
+    if (!tombstone) zdo.Serialize(body);
+    return new() {
+        run_id = _runId,
+        world_epoch = _worldEpoch,
+        zone_epoch = 1,
+        source_seq = Interlocked.Increment(ref _sourceSequence),
+        object_revision = Revision(zdo.DataRevision, zdo.OwnerRevision),
+        uid_user = zdo.m_uid.UserID,
+        uid_id = zdo.m_uid.ID,
+        prefab = zdo.GetPrefab(),
+        owner = zdo.GetOwner(),
+        owner_rev = zdo.OwnerRevision,
+        data_rev = zdo.DataRevision,
+        position_x = position.x,
+        position_y = position.y,
+        position_z = position.z,
+        zone_x = zone.x,
+        zone_y = zone.y,
+        body_b64 = tombstone ? string.Empty : body.GetBase64(),
+        tombstone = tombstone,
+        delivery_only = false
+    };
+  }
+
+  void Work(bool server, bool registerInterest) {
+    try {
+      if (server) {
+        PostServerMutations();
+        PollRunStatus();
+      } else {
+        if (registerInterest) PostInterest();
+        FlushAcks();
+        PollClient();
+      }
+    } catch (Exception exception) {
+      Write("http_cycle_failed", server ? "server" : "client",
+          exception.GetType().Name + ":" + exception.Message);
+    } finally {
+      Interlocked.Exchange(ref _workerInFlight, 0);
+    }
+  }
+
+  void PostServerMutations() {
+    int sent = 0;
+    while (sent++ < 32 && _serverOutbound.TryDequeue(out JournalObject value)) {
+      try {
+        Send(_endpoint + "/valheim/zdo-journal/mutations", "POST",
+            JsonLineSerializer.Serialize(ToDictionary(value)), credentials: false);
+        Write("mutation_posted", "server",
+            "source_seq=" + value.source_seq
+            + " object_revision=" + value.object_revision
+            + " tombstone=" + value.tombstone
+            + " delivery_only=" + value.delivery_only);
+      } catch {
+        _serverOutbound.Enqueue(value);
+        throw;
+      }
+    }
+  }
+
+  void PollRunStatus() {
+    if (_drive == null || _drive.Complete) return;
+    string response = Send(
+        _endpoint + "/valheim/zdo-journal/status/" + _runId + "/" + _worldEpoch,
+        "GET", string.Empty, credentials: false);
+    Match match = Regex.Match(response,
+        "\"interested_recipients\"\\s*:\\s*(\\d+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    if (match.Success &&
+        int.TryParse(match.Groups[1].Value, NumberStyles.None,
+            CultureInfo.InvariantCulture, out int count))
+      Volatile.Write(ref _interestedRecipients, count);
+  }
+
+  void PostInterest() {
+    int zoneX = Volatile.Read(ref _interestZoneX);
+    int zoneY = Volatile.Read(ref _interestZoneY);
+    Dictionary<string, object> interest = new() {
+        ["recipient_id"] = _recipientId,
+        ["run_id"] = _runId,
+        ["world_epoch"] = _worldEpoch,
+        ["zone_epoch"] = 1,
+        ["zone_x"] = zoneX,
+        ["zone_y"] = zoneY,
+        ["radius_zones"] = InterestRadiusZones,
+        ["refresh"] = false
+    };
+    string response = Send(
+        _endpoint + "/valheim/zdo-journal/interest", "POST",
+        JsonLineSerializer.Serialize(interest), credentials: true);
+    Write("interest_registered", "client",
+        "zone=" + zoneX + "," + zoneY + " response=" + Compact(response));
+  }
+
+  void PollClient() {
+    string response = Send(
+        _endpoint + "/valheim/zdo-journal/pending/" + _worldEpoch
+        + "?recipient_id=" + _recipientId + "&limit=64",
+        "GET", string.Empty, credentials: true);
+    JournalPendingResponse parsed = Deserialize<JournalPendingResponse>(response);
+    if (parsed?.deliveries == null) return;
+    foreach (JournalDelivery delivery in parsed.deliveries)
+      if (delivery?.@object != null && delivery.seq > 0)
+        _clientInbound.Enqueue(delivery);
+  }
+
+  void FlushAcks() {
+    List<long> sequences = new();
+    while (sequences.Count < 256 && _clientAcks.TryDequeue(out long sequence))
+      sequences.Add(sequence);
+    if (sequences.Count == 0) return;
+    try {
+      string body =
+          "{\"recipient_id\":\"" + Escape(_recipientId)
+          + "\",\"world_epoch\":\"" + Escape(_worldEpoch)
+          + "\",\"sequences\":[" + string.Join(",", sequences) + "]}";
+      Send(_endpoint + "/valheim/zdo-journal/ack", "POST", body,
+          credentials: true);
+    } catch {
+      foreach (long sequence in sequences) _clientAcks.Enqueue(sequence);
+      throw;
+    }
+  }
+
+  void DrainClient() {
+    int count = 0;
+    while (count++ < ApplyPerUpdate &&
+        _clientInbound.TryDequeue(out JournalDelivery delivery))
+      Apply(delivery);
+  }
+
+  void Apply(JournalDelivery delivery) {
+    JournalObject value = delivery.@object;
+    string key = value.uid_user + ":" + value.uid_id;
+    _watchedZdo = key;
+    try {
+      if (!string.Equals(value.run_id, _runId, StringComparison.Ordinal) ||
+          !string.Equals(value.world_epoch, _worldEpoch, StringComparison.Ordinal))
+        throw new InvalidDataException("delivery_scope_mismatch");
+      if (value.object_revision <= 0)
+        throw new InvalidDataException("object_revision_invalid");
+
+      byte[] body = null;
+      if (!value.tombstone) {
+        try { body = Convert.FromBase64String(value.body_b64 ?? string.Empty); }
+        catch { throw new InvalidDataException("body_base64_invalid"); }
+        ValidateBody(body, value.prefab);
+      }
+
+      long previous;
+      lock (_gate) _appliedRevisions.TryGetValue(key, out previous);
+      ZDOID uid = new(value.uid_user, checked((uint) value.uid_id));
+      ZDO existing = ZDOMan.instance.GetZDO(uid);
+      long actualRevision = existing == null
+          ? 0 : Revision(existing.DataRevision, existing.OwnerRevision);
+      long current = Math.Max(previous, actualRevision);
+      if (value.object_revision <= current) {
+        if (delivery.kind == "snapshot") {
+          Interlocked.Increment(ref _superseded);
+          Write("snapshot_superseded", _probe?.ActionId ?? "client",
+              "seq=" + delivery.seq + " uid=" + key
+              + " incoming=" + value.object_revision + " current=" + current);
+        } else {
+          Interlocked.Increment(ref _staleRejected);
+          Write("stale_rejected_before_mutation", _probe?.ActionId ?? "client",
+              "seq=" + delivery.seq + " uid=" + key
+              + " incoming=" + value.object_revision + " current=" + current);
+        }
+        _clientAcks.Enqueue(delivery.seq);
+        return;
+      }
+
+      if (value.tombstone) {
+        if (existing != null)
+          HandleDestroyedZdoMethod.Invoke(ZDOMan.instance, new object[] { uid });
+        if (ZDOMan.instance.GetZDO(uid) != null)
+          throw new InvalidOperationException("tombstone_readback_present");
+        lock (_gate) _appliedRevisions[key] = value.object_revision;
+        Interlocked.Increment(ref _tombstonesApplied);
+        _clientAcks.Enqueue(delivery.seq);
+        Write("tombstone_applied_typed", _probe?.ActionId ?? "client",
+            "seq=" + delivery.seq + " uid=" + key);
+        return;
+      }
+
+      Vector3 position =
+          new(value.position_x, value.position_y, value.position_z);
+      ZDO target = existing ??
+          (ZDO) CreateNewZdoMethod.Invoke(
+              ZDOMan.instance, new object[] { uid, position, value.prefab });
+      target.OwnerRevision = checked((ushort) value.owner_rev);
+      target.DataRevision = checked((uint) value.data_rev);
+      target.SetOwnerInternal(value.owner);
+      target.InternalSetPosition(position);
+      target.Deserialize(new ZPackage(body));
+      if (target.GetPrefab() != value.prefab ||
+          target.DataRevision != checked((uint) value.data_rev) ||
+          target.OwnerRevision != checked((ushort) value.owner_rev) ||
+          target.GetOwner() != value.owner)
+        throw new InvalidOperationException("typed_apply_readback_mismatch");
+      lock (_gate) _appliedRevisions[key] = value.object_revision;
+      if (delivery.kind == "snapshot")
+        Interlocked.Increment(ref _snapshotsApplied);
+      else
+        Interlocked.Increment(ref _deltasApplied);
+      _clientAcks.Enqueue(delivery.seq);
+      Write(
+          delivery.kind == "snapshot"
+              ? "snapshot_applied_typed" : "delta_applied_typed",
+          _probe?.ActionId ?? "client",
+          "seq=" + delivery.seq + " uid=" + key
+          + " object_revision=" + value.object_revision
+          + " value=" + target.GetInt(ProbeValueHash, -1));
+    } catch (InvalidDataException exception) {
+      Interlocked.Increment(ref _malformedRejected);
+      _clientAcks.Enqueue(delivery.seq);
+      Write("malformed_rejected_before_mutation",
+          _probe?.ActionId ?? "client",
+          "seq=" + delivery.seq + " uid=" + key
+          + " error=" + exception.Message);
+    } catch (Exception exception) {
+      Interlocked.Increment(ref _applyFailures);
+      Write("typed_apply_failed", _probe?.ActionId ?? "client",
+          "seq=" + delivery.seq + " uid=" + key
+          + " error=" + (exception.InnerException ?? exception).GetType().Name
+          + ":" + (exception.InnerException ?? exception).Message);
+    }
+  }
+
+  static void ValidateBody(byte[] body, int expectedPrefab) {
+    if (body == null || body.Length is < 6 or > MaxBodyBytes)
+      throw new InvalidDataException("body_size_invalid");
+    try {
+      ZPackage package = new(body);
+      ushort flags = package.ReadUShort();
+      if ((flags & 0xE000) != 0)
+        throw new InvalidDataException("body_flags_invalid");
+      int prefab = package.ReadInt();
+      if (prefab != expectedPrefab)
+        throw new InvalidDataException("body_prefab_mismatch");
+      if ((flags & 0x1000) != 0) package.ReadVector3();
+      if ((flags & 1) != 0) {
+        package.ReadByte();
+        package.ReadZDOID();
+      }
+      ReadEntries(package, flags, 2, 8, p => { p.ReadInt(); p.ReadSingle(); });
+      ReadEntries(package, flags, 4, 16, p => { p.ReadInt(); p.ReadVector3(); });
+      ReadEntries(package, flags, 8, 20, p => { p.ReadInt(); p.ReadQuaternion(); });
+      ReadEntries(package, flags, 0x10, 8, p => { p.ReadInt(); p.ReadInt(); });
+      ReadEntries(package, flags, 0x20, 12, p => { p.ReadInt(); p.ReadLong(); });
+      ReadEntries(package, flags, 0x40, 5, p => { p.ReadInt(); p.ReadString(); });
+      ReadEntries(package, flags, 0x80, 8, p => { p.ReadInt(); p.ReadByteArray(); });
+      if (package.GetPos() != package.Size())
+        throw new InvalidDataException("body_trailing_bytes");
+    } catch (InvalidDataException) {
+      throw;
+    } catch (Exception exception) {
+      throw new InvalidDataException(
+          "body_parse_failed:" + exception.GetType().Name, exception);
+    }
+  }
+
+  static void ReadEntries(
+      ZPackage package, ushort flags, int flag, int minimumBytes,
+      Action<ZPackage> read) {
+    if ((flags & flag) == 0) return;
+    int count = package.ReadByte();
+    if (count <= 0 || count > 255 ||
+        package.Size() - package.GetPos() < count * minimumBytes)
+      throw new InvalidDataException("body_entry_count_invalid");
+    for (int i = 0; i < count; i++) read(package);
+  }
+
+  static bool BodyHasProbeTag(ZPackage package, string runId) {
+    if (package == null || !SafeToken(runId, 80)) return false;
+    package.SetPos(0);
+    ushort flags = package.ReadUShort();
+    package.ReadInt();
+    if ((flags & 0x1000) != 0) package.ReadVector3();
+    if ((flags & 1) != 0) {
+      package.ReadByte();
+      package.ReadZDOID();
+    }
+    ReadEntries(package, flags, 2, 8, value => {
+      value.ReadInt();
+      value.ReadSingle();
+    });
+    ReadEntries(package, flags, 4, 16, value => {
+      value.ReadInt();
+      value.ReadVector3();
+    });
+    ReadEntries(package, flags, 8, 20, value => {
+      value.ReadInt();
+      value.ReadQuaternion();
+    });
+    ReadEntries(package, flags, 0x10, 8, value => {
+      value.ReadInt();
+      value.ReadInt();
+    });
+    ReadEntries(package, flags, 0x20, 12, value => {
+      value.ReadInt();
+      value.ReadLong();
+    });
+    if ((flags & 0x40) == 0) return false;
+    int count = package.ReadByte();
+    if (count <= 0 || count > 255) return false;
+    for (int index = 0; index < count; index++) {
+      int key = package.ReadInt();
+      string value = package.ReadString();
+      if (key == ProbeTagHash &&
+          string.Equals(value, runId, StringComparison.Ordinal))
+        return true;
+    }
+    return false;
+  }
+
+  void EvaluateProbe() {
+    if (_probe == null || _probe.Terminal) return;
+    long snapshot = Interlocked.Read(ref _snapshotsApplied) - _probe.Snapshots;
+    long delta = Interlocked.Read(ref _deltasApplied) - _probe.Deltas;
+    long tombstone = Interlocked.Read(ref _tombstonesApplied) - _probe.Tombstones;
+    long stale = Interlocked.Read(ref _staleRejected) - _probe.Stale;
+    long malformed = Interlocked.Read(ref _malformedRejected) - _probe.Malformed;
+    bool positive = _probe.Mode == "observe" ? snapshot >= 1 && delta >= 1 : delta >= 1;
+    if (positive && tombstone >= 1 && stale >= 1 && malformed >= 1 &&
+        Interlocked.Read(ref _nativeRpcDeliveries) == 0 &&
+        Interlocked.Read(ref _applyFailures) == 0) {
+      _probe.Terminal = true;
+      _probe.Success = true;
+      _probe.Detail =
+          "typed_journal_sequence_applied snapshot=" + snapshot
+          + " delta=" + delta + " stale=" + stale
+          + " malformed=" + malformed + " tombstone=" + tombstone
+          + " native_rpc_zdo_data=0";
+      Write("probe_passed", _probe.ActionId, _probe.Detail);
+      return;
+    }
+    if (Time.unscaledTime <= _probe.DeadlineAt) return;
+    _probe.Terminal = true;
+    _probe.Success = false;
+    _probe.Detail =
+        "zdo_journal_deadline snapshot=" + snapshot
+        + " delta=" + delta + " stale=" + stale
+        + " malformed=" + malformed + " tombstone=" + tombstone
+        + " native_rpc_zdo_data=" + Interlocked.Read(ref _nativeRpcDeliveries)
+        + " apply_failures=" + Interlocked.Read(ref _applyFailures);
+    Write("probe_failed", _probe.ActionId, _probe.Detail);
+  }
+
+  void RefreshContext() {
+    bool server = IsServer();
+    _role = server ? "server" : "client";
+    string runId = server
+        ? PluginConfig.NativeNetworkEvidenceRunId?.Value
+        : NativeAutotestRequest.ActiveRunId;
+    if (SafeToken(runId, 80)) _runId = runId.Trim();
+    if (!server) {
+      string client = NativeAutotestRequest.ActiveClient;
+      string recipient = _runId + "." + client;
+      if (SafeToken(client, 24) && SafeToken(recipient, 96))
+        _recipientId = recipient;
+    }
+    string configured = server
+        ? PluginConfig.LumberjacksGatewayUrl?.Value
+        : NativeAutotestRequest.ActiveGatewayUrl;
+    if (!string.IsNullOrWhiteSpace(configured))
+      _endpoint = configured.Trim().TrimEnd('/')
+          .Replace("ws://", "http://").Replace("wss://", "https://");
+    try {
+      if (ZNet.instance != null)
+        _worldEpoch =
+            "world-" + unchecked((ulong) ZNet.instance.GetWorldUID())
+                .ToString("x16", CultureInfo.InvariantCulture);
+    } catch { }
+  }
+
+  static bool Enabled() =>
+      PluginConfig.ZdoJournalCutoverEnabled?.Value == true ||
+      NativeAutotestRequest.ActiveZdoJournalCutover;
+
+  static bool IsServer() {
+    try { return ZNet.instance != null && ZNet.instance.IsServer(); }
+    catch { return false; }
+  }
+
+  static bool Finite(Vector3 value) =>
+      !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
+      !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
+      !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+
+  static long Revision(uint dataRevision, ushort ownerRevision) =>
+      ((long) dataRevision << 16) | ownerRevision;
+
+  static JournalObject Clone(JournalObject value) =>
+      new() {
+          run_id = value.run_id,
+          world_epoch = value.world_epoch,
+          zone_epoch = value.zone_epoch,
+          source_seq = value.source_seq,
+          object_revision = value.object_revision,
+          uid_user = value.uid_user,
+          uid_id = value.uid_id,
+          prefab = value.prefab,
+          owner = value.owner,
+          owner_rev = value.owner_rev,
+          data_rev = value.data_rev,
+          position_x = value.position_x,
+          position_y = value.position_y,
+          position_z = value.position_z,
+          zone_x = value.zone_x,
+          zone_y = value.zone_y,
+          body_b64 = value.body_b64,
+          tombstone = value.tombstone,
+          delivery_only = value.delivery_only
+      };
+
+  static Dictionary<string, object> ToDictionary(JournalObject value) =>
+      new() {
+          ["run_id"] = value.run_id,
+          ["world_epoch"] = value.world_epoch,
+          ["zone_epoch"] = value.zone_epoch,
+          ["source_seq"] = value.source_seq,
+          ["object_revision"] = value.object_revision,
+          ["uid_user"] = value.uid_user,
+          ["uid_id"] = value.uid_id,
+          ["prefab"] = value.prefab,
+          ["owner"] = value.owner,
+          ["owner_rev"] = value.owner_rev,
+          ["data_rev"] = value.data_rev,
+          ["position_x"] = value.position_x,
+          ["position_y"] = value.position_y,
+          ["position_z"] = value.position_z,
+          ["zone_x"] = value.zone_x,
+          ["zone_y"] = value.zone_y,
+          ["body_b64"] = value.body_b64 ?? string.Empty,
+          ["tombstone"] = value.tombstone,
+          ["delivery_only"] = value.delivery_only
+      };
+
+  static T Deserialize<T>(string raw) where T : class {
+    DataContractJsonSerializer serializer = new(typeof(T));
+    using MemoryStream stream =
+        new(Encoding.UTF8.GetBytes(raw ?? string.Empty));
+    return serializer.ReadObject(stream) as T;
+  }
+
+  static string Send(
+      string url, string method, string body, bool credentials) {
+    if (!AlphaTransportSwitches.LumberjacksHttpEnabled)
+      throw new InvalidOperationException("Lumberjacks HTTP paused");
+    Uri uri = new(url);
+    byte[] bytes = Encoding.UTF8.GetBytes(body ?? string.Empty);
+    string request =
+        method + " " + uri.PathAndQuery + " HTTP/1.1\r\n"
+        + "Host: " + uri.Host + ":" + uri.Port + "\r\n"
+        + "Content-Type: application/json\r\n"
+        + "Accept: application/json\r\n"
+        + "Content-Length: " + bytes.Length + "\r\n"
+        + (credentials &&
+           !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksClientAccessKey.Value)
+            ? "X-Lumberjacks-Client-Key: "
+              + PluginConfig.LumberjacksClientAccessKey.Value + "\r\n"
+            : string.Empty)
+        + (credentials &&
+           !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value)
+            ? "X-Lumberjacks-Enrollment-Id: "
+              + PluginConfig.LumberjacksEnrollmentId.Value + "\r\n"
+            : string.Empty)
+        + "Connection: close\r\n\r\n";
+    string raw = BoundedRawHttp.SendBounded(
+        uri, Encoding.ASCII.GetBytes(request), bytes,
+        HttpTimeoutMs, ResponseDeadlineMs, MaxResponseBytes);
+    string status = raw.Length == 0 ? string.Empty : raw.Split('\n')[0].Trim();
+    if (!status.StartsWith("HTTP/1.1 2", StringComparison.Ordinal))
+      throw new InvalidOperationException("http_status:" + status);
+    int split = raw.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+    if (split < 0) return string.Empty;
+    string headers = raw.Substring(0, split);
+    string payload = raw.Substring(split + 4);
+    if (headers.IndexOf(
+            "transfer-encoding: chunked",
+            StringComparison.OrdinalIgnoreCase) >= 0)
+      return DecodeChunked(payload);
+    return payload;
+  }
+
+  static string DecodeChunked(string payload) {
+    StringBuilder result = new();
+    int offset = 0;
+    while (offset < payload.Length) {
+      int end = payload.IndexOf("\r\n", offset, StringComparison.Ordinal);
+      if (end < 0) break;
+      int size = Convert.ToInt32(
+          payload.Substring(offset, end - offset).Trim(), 16);
+      if (size == 0) break;
+      offset = end + 2;
+      if (offset + size > payload.Length)
+        throw new InvalidDataException("chunked_body_truncated");
+      result.Append(payload, offset, size);
+      offset += size + 2;
+    }
+    return result.ToString();
+  }
+
+  void Write(string state, string actionId, string detail) {
+    _writer.Write(
+        ReceiptFileName,
+        new Dictionary<string, object> {
+            ["schema_version"] = 1,
+            ["timestamp_utc"] =
+                DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+            ["state"] = state,
+            ["run_id"] = SafeToken(_runId, 80) ? _runId : "unscoped",
+            ["role"] = _role,
+            ["client"] = NativeAutotestRequest.ActiveClient,
+            ["action_id"] = actionId ?? string.Empty,
+            ["world_epoch"] = _worldEpoch,
+            ["watched_zdo"] = _watchedZdo,
+            ["native_create_sync_candidates"] =
+                Interlocked.Read(ref _nativeCandidates),
+            ["native_rpc_zdo_data"] =
+                Interlocked.Read(ref _nativeRpcDeliveries),
+            ["detail"] = detail ?? string.Empty
+        });
+  }
+
+  static bool SafeToken(string value, int maxLength) {
+    if (string.IsNullOrWhiteSpace(value) || value.Length > maxLength) return false;
+    foreach (char character in value)
+      if (!char.IsLetterOrDigit(character)
+          && character is not '-' and not '_' and not '.')
+        return false;
+    return true;
+  }
+
+  static string Escape(string value) =>
+      (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+  static string Compact(string value) =>
+      string.IsNullOrWhiteSpace(value)
+          ? "empty"
+          : value.Replace('\r', ' ').Replace('\n', ' ')
+              .Substring(0, Math.Min(160, value.Length));
+
+  public Dictionary<string, object> Snapshot() =>
+      new() {
+          ["enabled"] = Enabled(),
+          ["world_epoch"] = _worldEpoch,
+          ["run_id"] = _runId,
+          ["create_sync_lists"] = Interlocked.Read(ref _createSyncLists),
+          ["native_candidates"] = Interlocked.Read(ref _nativeCandidates),
+          ["native_rpc_zdo_data"] = Interlocked.Read(ref _nativeRpcDeliveries),
+          ["snapshots_applied"] = Interlocked.Read(ref _snapshotsApplied),
+          ["deltas_applied"] = Interlocked.Read(ref _deltasApplied),
+          ["tombstones_applied"] = Interlocked.Read(ref _tombstonesApplied),
+          ["stale_rejected"] = Interlocked.Read(ref _staleRejected),
+          ["malformed_rejected"] = Interlocked.Read(ref _malformedRejected),
+          ["apply_failures"] = Interlocked.Read(ref _applyFailures)
+      };
+
+  public void Dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    Interlocked.CompareExchange(ref _active, null, this);
+    _writer.Dispose();
+  }
+
+  [DataContract]
+  sealed class JournalPendingResponse {
+    [DataMember(Name = "deliveries")]
+    public JournalDelivery[] deliveries { get; set; }
+  }
+
+  [DataContract]
+  sealed class JournalDelivery {
+    [DataMember(Name = "seq")]
+    public long seq { get; set; }
+
+    [DataMember(Name = "kind")]
+    public string kind { get; set; }
+
+    [DataMember(Name = "object")]
+    public JournalObject @object { get; set; }
+  }
+
+  [DataContract]
+  sealed class JournalObject {
+    [DataMember(Name = "run_id")] public string run_id;
+    [DataMember(Name = "world_epoch")] public string world_epoch;
+    [DataMember(Name = "zone_epoch")] public long zone_epoch;
+    [DataMember(Name = "source_seq")] public long source_seq;
+    [DataMember(Name = "object_revision")] public long object_revision;
+    [DataMember(Name = "uid_user")] public long uid_user;
+    [DataMember(Name = "uid_id")] public long uid_id;
+    [DataMember(Name = "prefab")] public int prefab;
+    [DataMember(Name = "owner")] public long owner;
+    [DataMember(Name = "owner_rev")] public int owner_rev;
+    [DataMember(Name = "data_rev")] public long data_rev;
+    [DataMember(Name = "position_x")] public float position_x;
+    [DataMember(Name = "position_y")] public float position_y;
+    [DataMember(Name = "position_z")] public float position_z;
+    [DataMember(Name = "zone_x")] public int zone_x;
+    [DataMember(Name = "zone_y")] public int zone_y;
+    [DataMember(Name = "body_b64")] public string body_b64;
+    [DataMember(Name = "tombstone")] public bool tombstone;
+    [DataMember(Name = "delivery_only")] public bool delivery_only;
+  }
+
+  sealed class DriveState {
+    public string RunId;
+    public string ActionId;
+    public ZDO Zdo;
+    public string Phase;
+    public float NextAt;
+    public bool Complete;
+  }
+
+  sealed class ClientProbe {
+    public string ActionId;
+    public string Mode;
+    public float DeadlineAt;
+    public long Snapshots;
+    public long Deltas;
+    public long Tombstones;
+    public long Stale;
+    public long Malformed;
+    public bool Terminal;
+    public bool Success;
+    public string Detail = string.Empty;
+  }
+}
+
+[HarmonyPatch]
+static class ZdoJournalCutoverPatches {
+  [HarmonyPatch(typeof(ZDO), "IncreaseDataRevision")]
+  [HarmonyPostfix]
+  static void DataRevisionPostfix(ZDO __instance) =>
+      ZdoJournalCutoverRunner.CaptureMutation(__instance);
+
+  [HarmonyPatch(typeof(ZDO), "IncreaseOwnerRevision")]
+  [HarmonyPostfix]
+  static void OwnerRevisionPostfix(ZDO __instance) =>
+      ZdoJournalCutoverRunner.CaptureMutation(__instance);
+
+  [HarmonyPatch(typeof(ZDOMan), "HandleDestroyedZDO")]
+  [HarmonyPrefix]
+  static void DestroyPrefix(ZDOID uid) =>
+      ZdoJournalCutoverRunner.CaptureTombstone(uid);
+
+  [HarmonyPatch(typeof(ZDOMan), "CreateSyncList")]
+  [HarmonyPostfix]
+  static void CreateSyncListPostfix(List<ZDO> toSync) =>
+      ZdoJournalCutoverRunner.ObserveCreateSyncList(toSync);
+
+  [HarmonyPatch(typeof(ZDOMan), "RPC_ZDOData")]
+  [HarmonyPrefix]
+  static void RpcZdoDataPrefix(ZPackage pkg) =>
+      ZdoJournalCutoverRunner.ObserveNativeZdoData(pkg);
+}

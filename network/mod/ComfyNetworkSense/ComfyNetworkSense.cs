@@ -22,7 +22,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.35";
+  public const string PluginVersion = "0.5.40";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -63,6 +63,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   NativeNetworkLedger _nativeNetworkLedger;
   DirectControlCutoverRunner _directControlCutoverRunner;
   RoutedRpcCutoverRunner _routedRpcCutoverRunner;
+  ZdoJournalCutoverRunner _zdoJournalCutoverRunner;
   readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
   bool _routeRunning;
@@ -108,10 +109,14 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = new();
     _lumberjacksGameSessionRunner = new();
     _routedRpcCutoverRunner = new(_lumberjacksGameSessionRunner);
+    _zdoJournalCutoverRunner = new();
     _lumberjacksMotionRunner = new();
     _motionTestController = new(RecordTransportControl);
     _nativeCutoverScenarioController =
-        new(_lumberjacksGameSessionRunner, _routedRpcCutoverRunner);
+        new(
+            _lumberjacksGameSessionRunner,
+            _routedRpcCutoverRunner,
+            _zdoJournalCutoverRunner);
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
@@ -226,6 +231,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     if (directControl != null) {
       foreach (var pair in directControl) result["direct_control_" + pair.Key] = pair.Value;
     }
+    IDictionary<string, object> journal = _zdoJournalCutoverRunner?.Snapshot();
+    if (journal != null) {
+      foreach (var pair in journal) result["zdo_journal_" + pair.Key] = pair.Value;
+    }
     Dictionary<string, object> sendCadence = ZdoSendCadenceOverride.Snapshot();
     foreach (var pair in sendCadence) result[pair.Key] = pair.Value;
     return result;
@@ -276,6 +285,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
       _lumberjacksGameSessionRunner?.Update(now);
+      // Register the typed C3 handler before the routed adapter drains a just-arrived request.
+      _zdoJournalCutoverRunner?.Update(now);
       _routedRpcCutoverRunner?.Update(now);
       _lumberjacksMotionRunner?.Update(now);
     }
@@ -509,6 +520,19 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             routedRpcEnabled
                 ? "selected_routed_rpc_methods_fail_closed_to_lumberjacks"
                 : "selected_routed_rpc_native_path_restored");
+        break;
+
+      case "zdoJournalCutoverEnabled":
+        if (!bool.TryParse(requestedValue, out bool zdoJournalEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldZdoJournal = PluginConfig.ZdoJournalCutoverEnabled.Value;
+        PluginConfig.ZdoJournalCutoverEnabled.Value = zdoJournalEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldZdoJournal), Bool(PluginConfig.ZdoJournalCutoverEnabled.Value),
+            zdoJournalEnabled
+                ? "mutation_journal_and_typed_apply_armed"
+                : "mutation_journal_capture_stopped");
         break;
 
       default:
@@ -774,6 +798,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksGameSessionRunner = null;
     _routedRpcCutoverRunner?.Dispose();
     _routedRpcCutoverRunner = null;
+    _zdoJournalCutoverRunner?.Dispose();
+    _zdoJournalCutoverRunner = null;
     _lumberjacksMotionRunner?.Dispose();
     _lumberjacksMotionRunner = null;
     _motionTestController?.Dispose();

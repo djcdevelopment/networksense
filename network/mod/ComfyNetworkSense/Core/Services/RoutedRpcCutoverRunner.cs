@@ -25,6 +25,8 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
   public const string TargetReceiptMethod =
       "ComfyNetworkSense_CutoverRoutedTargetReceipt";
   public const string ResetClothMethod = "RPC_ResetCloth";
+  public const string JournalRequestMethod =
+      "ComfyNetworkSense_CutoverZdoJournalRequest";
 
   const string ReceiptFileName = "routed-rpc-cutover.jsonl";
   const int MaxSeenRoutes = 1024;
@@ -529,7 +531,8 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         BroadcastRequestMethod,
         BroadcastMethod,
         TargetReceiptMethod,
-        ResetClothMethod
+        ResetClothMethod,
+        JournalRequestMethod
     }) result[method.GetStableHashCode()] = method;
     return result;
   }

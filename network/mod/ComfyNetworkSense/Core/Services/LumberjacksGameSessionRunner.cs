@@ -835,7 +835,49 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         json ?? string.Empty,
         "\"" + Regex.Escape(name) + "\"\\s*:\\s*\"(?<value>(?:\\\\.|[^\"])*)\"",
         RegexOptions.IgnoreCase);
-    return match.Success ? match.Groups["value"].Value : string.Empty;
+    return match.Success ? DecodeJsonString(match.Groups["value"].Value) : string.Empty;
+  }
+
+  static string DecodeJsonString(string value) {
+    if (string.IsNullOrEmpty(value) || value.IndexOf('\\') < 0) return value;
+
+    StringBuilder decoded = new(value.Length);
+    for (int index = 0; index < value.Length; index++) {
+      char character = value[index];
+      if (character != '\\') {
+        decoded.Append(character);
+        continue;
+      }
+
+      if (++index >= value.Length)
+        throw new InvalidDataException("JSON string ended inside an escape sequence");
+
+      switch (value[index]) {
+        case '"': decoded.Append('"'); break;
+        case '\\': decoded.Append('\\'); break;
+        case '/': decoded.Append('/'); break;
+        case 'b': decoded.Append('\b'); break;
+        case 'f': decoded.Append('\f'); break;
+        case 'n': decoded.Append('\n'); break;
+        case 'r': decoded.Append('\r'); break;
+        case 't': decoded.Append('\t'); break;
+        case 'u':
+          if (index + 4 >= value.Length
+              || !ushort.TryParse(
+                  value.Substring(index + 1, 4),
+                  NumberStyles.AllowHexSpecifier,
+                  CultureInfo.InvariantCulture,
+                  out ushort codeUnit)) {
+            throw new InvalidDataException("JSON string contains an invalid Unicode escape");
+          }
+          decoded.Append((char)codeUnit);
+          index += 4;
+          break;
+        default:
+          throw new InvalidDataException("JSON string contains an unsupported escape");
+      }
+    }
+    return decoded.ToString();
   }
 
   static long ExtractJsonLong(string json, string name) {
