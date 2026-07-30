@@ -61,6 +61,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   HandshakeResponderRunner _handshakeResponderRunner;
   ServerRuntimeControlRunner _serverRuntimeControlRunner;
   NativeNetworkLedger _nativeNetworkLedger;
+  DirectControlCutoverRunner _directControlCutoverRunner;
   readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
   bool _routeRunning;
@@ -93,6 +94,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     PluginConfig.Bind(Config);
     AlphaTransportSwitches.Reset(PluginConfig.LumberjacksMotionApplyEnabled.Value);
     _nativeNetworkLedger = new();
+    _directControlCutoverRunner = new();
 
     _coordinator = new();
     _lumberjacksBridgeProbe = new();
@@ -217,6 +219,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     if (nativeNetwork != null) {
       foreach (var pair in nativeNetwork) result["native_network_" + pair.Key] = pair.Value;
     }
+    IDictionary<string, object> directControl = _directControlCutoverRunner?.Snapshot();
+    if (directControl != null) {
+      foreach (var pair in directControl) result["direct_control_" + pair.Key] = pair.Value;
+    }
     Dictionary<string, object> sendCadence = ZdoSendCadenceOverride.Snapshot();
     foreach (var pair in sendCadence) result[pair.Key] = pair.Value;
     return result;
@@ -232,6 +238,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     float deltaTime = Time.unscaledDeltaTime;
     float now = Time.unscaledTime;
     _nativeNetworkLedger?.Update(now);
+    _directControlCutoverRunner?.Update(now);
     _serverRuntimeControlRunner?.Update(now, _coordinator);
     _zdoRedirectRunner?.MaintainPrimaryWindow(now);
     TryEnsurePrimaryRedirect(now);
@@ -455,6 +462,19 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         result = RuntimeControlApplyResult.Applied(
             oldRunId, PluginConfig.NativeNetworkEvidenceRunId.Value,
             "effective_on_next_native_ledger_row");
+        break;
+
+      case "directControlCutoverEnabled":
+        if (!bool.TryParse(requestedValue, out bool directControlEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldDirectControl = PluginConfig.DirectControlCutoverEnabled.Value;
+        PluginConfig.DirectControlCutoverEnabled.Value = directControlEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldDirectControl), Bool(PluginConfig.DirectControlCutoverEnabled.Value),
+            directControlEnabled
+                ? "selected_native_direct_pulse_suppressed"
+                : "native_direct_pulse_generator_stopped");
         break;
 
       default:
@@ -740,6 +760,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _harmony = null;
     _nativeNetworkLedger?.Dispose();
     _nativeNetworkLedger = null;
+    _directControlCutoverRunner?.Dispose();
+    _directControlCutoverRunner = null;
 
     if (Instance == this) {
       Instance = null;

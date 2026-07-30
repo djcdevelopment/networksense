@@ -102,6 +102,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> NativeNetworkLedgerEnabled { get; private set; }
   public static ConfigEntry<bool> NativeNetworkPoisonEnabled { get; private set; }
   public static ConfigEntry<string> NativeNetworkEvidenceRunId { get; private set; }
+  public static ConfigEntry<bool> DirectControlCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -953,6 +954,15 @@ public static class PluginConfig {
             "",
             "Safe run token stamped into dedicated-server native-network receipts. Physical client "
             + "runs take their id from the short-lived native-autotest request.");
+
+    DirectControlCutoverEnabled =
+        config.Bind(
+            "NativeCutover",
+            "directControlCutoverEnabled",
+            false,
+            "C2a gate: make the Lumberjacks reliable lane authoritative for the selected "
+            + "post-join direct control pulse and suppress that exact native ZRpc method. "
+            + "Default OFF until the C2a boundary is deliberately armed.");
 
     ServerRuntimeControlEnabled =
         config.Bind(

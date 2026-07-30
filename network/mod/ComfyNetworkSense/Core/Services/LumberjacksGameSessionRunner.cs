@@ -24,6 +24,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   const int ReceiveBufferBytes = 8192;
   const int MaxOutboundFrames = 256;
   const string ReceiptFileName = "lumberjacks-game-session.jsonl";
+  static LumberjacksGameSessionRunner _active;
 
   readonly object _gate = new();
   readonly ConcurrentQueue<SessionEvent> _events = new();
@@ -35,6 +36,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   ClientWebSocket _socket;
   UdpClient _udp;
   SessionProbe _probe;
+  DirectPulseProbe _directProbe;
   string _state = "idle";
   string _lastError = string.Empty;
   string _serverInstanceId = string.Empty;
@@ -56,6 +58,11 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   public string State { get { lock (_gate) return _state; } }
   public string LastError { get { lock (_gate) return _lastError; } }
 
+  public LumberjacksGameSessionRunner() {
+    LumberjacksGameSessionRunner previous = Interlocked.Exchange(ref _active, this);
+    previous?.Dispose();
+  }
+
   public void Update(float now) {
     if (_disposed) return;
     if (!ShouldRun()) {
@@ -65,6 +72,81 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     if (!IsRunning && now >= _nextConnectAt) Start(now);
     DrainEvents();
     EvaluateProbeDeadline(now);
+    EvaluateDirectProbeDeadline(now);
+  }
+
+  public bool BeginDirectPulseProbe(
+      string actionId,
+      string mode,
+      float deadlineSeconds,
+      out string detail) {
+    detail = string.Empty;
+    if (!SafeToken(actionId, 80) || mode is not ("deliver" or "withhold")) {
+      detail = "direct_pulse_parameters_invalid";
+      return false;
+    }
+    string runId = NativeAutotestRequest.ActiveRunId;
+    if (!SafeToken(runId, 80)) {
+      detail = "native_autotest_run_missing";
+      return false;
+    }
+    lock (_gate) {
+      if (!_webSocketConnected || string.IsNullOrEmpty(_connectionId)) {
+        detail = "lumberjacks_session_not_connected";
+        return false;
+      }
+      if (_directProbe != null && !_directProbe.Terminal) {
+        detail = "another_direct_pulse_probe_active";
+        return false;
+      }
+      _directProbe = new DirectPulseProbe {
+          ActionId = actionId,
+          RunId = runId,
+          Mode = mode,
+          DeadlineAt = Time.unscaledTime + Mathf.Clamp(deadlineSeconds, 1.0f, 30.0f)
+      };
+      if (!TryQueue(BuildEnvelope(
+              "valheim_direct_pulse_probe",
+              NextClientSequence(),
+              "\"run_id\":\"" + Escape(runId)
+              + "\",\"action_id\":\"" + Escape(actionId)
+              + "\",\"mode\":\"" + Escape(mode) + "\""))) {
+        _directProbe = null;
+        detail = "client_send_queue_full";
+        return false;
+      }
+      WriteReceipt(
+          "direct_pulse_probe_started", actionId,
+          "mode=" + mode + " connection_id=" + _connectionId);
+      return true;
+    }
+  }
+
+  public bool TryGetDirectPulseProbeResult(
+      string actionId,
+      out bool terminal,
+      out bool success,
+      out string detail) {
+    lock (_gate) {
+      if (_directProbe == null
+          || !string.Equals(_directProbe.ActionId, actionId, StringComparison.Ordinal)) {
+        terminal = false;
+        success = false;
+        detail = "direct_pulse_probe_not_found";
+        return false;
+      }
+      terminal = _directProbe.Terminal;
+      success = _directProbe.Success;
+      detail = _directProbe.Detail ?? string.Empty;
+      return true;
+    }
+  }
+
+  public static void NotifyNativeDirectPulse(string runId, long sequence) {
+    LumberjacksGameSessionRunner active = Volatile.Read(ref _active);
+    active?._events.Enqueue(new SessionEvent(
+        "native_direct_pulse_received", sequence, string.Empty,
+        "run_id=" + (runId ?? string.Empty) + " unexpected_native_fallback"));
   }
 
   public bool BeginProbe(
@@ -156,6 +238,12 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
               ? "none"
               : (_probe.Terminal ? (_probe.Success ? "passed" : "failed") : "running"),
           ["probe_detail"] = _probe?.Detail ?? string.Empty,
+          ["direct_probe_state"] = _directProbe == null
+              ? "none"
+              : (_directProbe.Terminal
+                  ? (_directProbe.Success ? "passed" : "failed")
+                  : "running"),
+          ["direct_probe_detail"] = _directProbe?.Detail ?? string.Empty,
           ["last_error"] = _lastError
       };
     }
@@ -236,6 +324,10 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         }
         if (string.Equals(type, "valheim_control_receipt", StringComparison.OrdinalIgnoreCase)) {
           HandleControlReceiptWorker(text);
+          continue;
+        }
+        if (string.Equals(type, "valheim_direct_pulse", StringComparison.OrdinalIgnoreCase)) {
+          HandleDirectPulseWorker(text);
         }
       }
     } finally {
@@ -410,6 +502,26 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         + " resume_epoch=" + epoch));
   }
 
+  void HandleDirectPulseWorker(string text) {
+    string runId = ExtractJsonString(text, "run_id");
+    string actionId = ExtractJsonString(text, "action_id");
+    string connectionId = ExtractJsonString(text, "connection_id");
+    long sequence = ExtractJsonLong(text, "seq");
+    DirectPulseProbe probe;
+    lock (_gate) probe = _directProbe;
+    if (probe == null || probe.Terminal
+        || probe.Mode != "deliver"
+        || !string.Equals(probe.RunId, runId, StringComparison.Ordinal)
+        || !string.Equals(probe.ActionId, actionId, StringComparison.Ordinal)
+        || !string.Equals(_connectionId, connectionId, StringComparison.Ordinal)
+        || sequence <= 0) {
+      throw new InvalidDataException("direct pulse did not match the active typed control probe");
+    }
+    _events.Enqueue(new SessionEvent(
+        "lumberjacks_direct_pulse_received", sequence, connectionId,
+        "run_id=" + runId + " action_id=" + actionId, actionId));
+  }
+
   void DrainEvents() {
     while (_events.TryDequeue(out SessionEvent item)) {
       switch (item.Kind) {
@@ -431,8 +543,45 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             }
           }
           break;
+        case "lumberjacks_direct_pulse_received":
+          lock (_gate) {
+            if (_directProbe != null && !_directProbe.Terminal) {
+              _directProbe.LumberjacksReceived++;
+              _directProbe.Terminal = true;
+              _directProbe.Success = _directProbe.Mode == "deliver";
+              _directProbe.Detail =
+                  "lumberjacks_direct_pulse_applied sequence=" + item.Sequence;
+              if (item.Sequence > _lastServerSequence)
+                _lastServerSequence = item.Sequence;
+            }
+          }
+          // The worker only banks the frame. Acknowledge reliable delivery after the
+          // selected typed handler has run on Unity's main thread.
+          TryQueue(BuildEnvelope(
+              "reliable_ack",
+              NextClientSequence(),
+              "\"through_sequence\":"
+              + item.Sequence.ToString(CultureInfo.InvariantCulture)));
+          break;
+        case "native_direct_pulse_received":
+          lock (_gate) {
+            if (_directProbe != null && !_directProbe.Terminal) {
+              _directProbe.NativeReceived++;
+              _directProbe.Terminal = true;
+              _directProbe.Success = false;
+              _directProbe.Detail = "unexpected_native_direct_pulse";
+            }
+          }
+          break;
       }
-      WriteReceipt(item.Kind, _probe?.ActionId ?? string.Empty,
+      string actionId = !string.IsNullOrEmpty(item.ActionId)
+          ? item.ActionId
+          : (_probe != null && !_probe.Terminal
+              ? _probe.ActionId
+              : (_directProbe != null && !_directProbe.Terminal
+                  ? _directProbe.ActionId
+                  : string.Empty));
+      WriteReceipt(item.Kind, actionId,
           "sequence=" + item.Sequence + " connection_id=" + item.ConnectionId
           + (string.IsNullOrEmpty(item.Detail) ? string.Empty : " " + item.Detail));
     }
@@ -450,6 +599,25 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         _probe.Success = false;
         _probe.Detail = "probe_deadline_exceeded";
         WriteReceipt("probe_failed", _probe.ActionId, _probe.Detail);
+      }
+    }
+  }
+
+  void EvaluateDirectProbeDeadline(float now) {
+    lock (_gate) {
+      if (_directProbe == null || _directProbe.Terminal || now <= _directProbe.DeadlineAt)
+        return;
+      _directProbe.Terminal = true;
+      if (_directProbe.Mode == "withhold"
+          && _directProbe.NativeReceived == 0
+          && _directProbe.LumberjacksReceived == 0) {
+        _directProbe.Success = true;
+        _directProbe.Detail = "direct_pulse_stale_no_native_fallback";
+        WriteReceipt("direct_pulse_expected_stale", _directProbe.ActionId, _directProbe.Detail);
+      } else {
+        _directProbe.Success = false;
+        _directProbe.Detail = "direct_pulse_deadline_exceeded";
+        WriteReceipt("direct_pulse_failed", _directProbe.ActionId, _directProbe.Detail);
       }
     }
   }
@@ -600,6 +768,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     if (_disposed) return;
     _disposed = true;
     Stop();
+    Interlocked.CompareExchange(ref _active, null, this);
     _writer.Dispose();
   }
 
@@ -620,16 +789,35 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     public string Detail = string.Empty;
   }
 
+  sealed class DirectPulseProbe {
+    public string ActionId;
+    public string RunId;
+    public string Mode;
+    public float DeadlineAt;
+    public int NativeReceived;
+    public int LumberjacksReceived;
+    public bool Terminal;
+    public bool Success;
+    public string Detail = string.Empty;
+  }
+
   sealed class SessionEvent {
     public readonly string Kind;
     public readonly long Sequence;
     public readonly string ConnectionId;
     public readonly string Detail;
-    public SessionEvent(string kind, long sequence, string connectionId, string detail) {
+    public readonly string ActionId;
+    public SessionEvent(
+        string kind,
+        long sequence,
+        string connectionId,
+        string detail,
+        string actionId = "") {
       Kind = kind;
       Sequence = sequence;
       ConnectionId = connectionId;
       Detail = detail;
+      ActionId = actionId;
     }
   }
 

@@ -40,8 +40,10 @@ static class NativeHandshakeLedgerPatches {
 
   [HarmonyPatch("OnNewConnection")]
   [HarmonyPostfix]
-  static void OnNewConnectionPostfix() =>
-      NativeNetworkLedger.Stage("on_new_connection_exit");
+  static void OnNewConnectionPostfix(ZNetPeer __0) {
+    DirectControlCutoverRunner.RegisterPeer(__0);
+    NativeNetworkLedger.Stage("on_new_connection_exit");
+  }
 
   [HarmonyPatch("RPC_ServerHandshake")]
   [HarmonyPrefix]
@@ -98,6 +100,14 @@ static class NativeHandshakeLedgerPatches {
   [HarmonyPostfix]
   static void RpcPeerInfoPostfix() =>
       NativeNetworkLedger.Stage("rpc_peer_info_exit");
+}
+
+[HarmonyPatch(typeof(ZRpc), nameof(ZRpc.Invoke))]
+static class DirectControlNativeInvokePatch {
+  [HarmonyPrefix]
+  [HarmonyPriority(Priority.First)]
+  static bool InvokePrefix(string method, object[] parameters) =>
+      !DirectControlCutoverRunner.SuppressNativeInvoke(method, parameters);
 }
 
 [HarmonyPatch(typeof(ZDOMan))]

@@ -172,6 +172,8 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           break;
         case "session_resume_probe":
         case "session_timeout_probe":
+        case "direct_control_pulse":
+        case "direct_control_withhold":
           break;
         default:
           return "manifest_action_kind_invalid";
@@ -261,6 +263,26 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           _sessionProbeStarted = true;
         }
         if (!_gameSession.TryGetProbeResult(
+                _active.id, out bool terminal, out bool success, out string probeDetail)
+            || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "direct_control_pulse":
+      case "direct_control_withhold": {
+        if (!_sessionProbeStarted) {
+          string mode = kind == "direct_control_pulse" ? "deliver" : "withhold";
+          if (!_gameSession.BeginDirectPulseProbe(
+                  _active.id, mode, Mathf.Max(1.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail == "lumberjacks_session_not_connected") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_gameSession.TryGetDirectPulseProbeResult(
                 _active.id, out bool terminal, out bool success, out string probeDetail)
             || !terminal) return;
         if (success) CompleteActive(probeDetail);
