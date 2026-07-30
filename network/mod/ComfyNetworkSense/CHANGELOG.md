@@ -2,6 +2,14 @@
 
 ### Unreleased
 
+- Add one canonical Lumberjacks game-session WebSocket/UDP binding with explicit
+  server/world identity, stable connection id, ordered reliable control, cumulative
+  acknowledgement, bounded queues, deduplication, and socket resume epochs.
+- Add unattended durable-session failure cells: abort before ack/response and require
+  exact replay with one accepted response, then withhold the receipt and require a
+  bounded timeout with no native control fallback.
+- Disable the legacy motion-only socket while the canonical game session is enabled;
+  motion moves onto the shared binding in the post-native-authority slice.
 - Add an exact run-scoped native-network funnel ledger, connection-stage timing, and
   a poison gate that blocks forbidden Steam/Valheim connection, RPC, and ZDO receive
   paths before their original methods run.

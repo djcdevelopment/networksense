@@ -33,6 +33,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly string _manifestPath;
   readonly string _receiptPath;
   readonly HashSet<string> _completedActionIds = new(StringComparer.Ordinal);
+  readonly LumberjacksGameSessionRunner _gameSession;
 
   NativeCutoverScenarioManifest _manifest;
   NativeCutoverScenarioAction[] _actions = Array.Empty<NativeCutoverScenarioAction>();
@@ -44,9 +45,11 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   Vector2i _originZone;
   int _inventoryBefore;
   object _ownershipTarget;
+  bool _sessionProbeStarted;
   bool _terminal;
 
-  public NativeCutoverScenarioController() {
+  public NativeCutoverScenarioController(LumberjacksGameSessionRunner gameSession) {
+    _gameSession = gameSession;
     Directory.CreateDirectory(_directory);
     _manifestPath = Path.Combine(_directory, ManifestFileName);
     _receiptPath = Path.Combine(_directory, ReceiptFileName);
@@ -167,6 +170,9 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "disconnect":
         case "disconnect_resume":
           break;
+        case "session_resume_probe":
+        case "session_timeout_probe":
+          break;
         default:
           return "manifest_action_kind_invalid";
       }
@@ -182,6 +188,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
     _originZone = ZoneSystem.GetZone(_origin);
     _inventoryBefore = InventoryCount();
     _ownershipTarget = null;
+    _sessionProbeStarted = false;
     WriteReceipt("action_started", action.id, "kind=" + action.kind);
 
     switch (action.kind.Trim().ToLowerInvariant()) {
@@ -238,6 +245,26 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           CompleteActive(
               "zone_changed_from=" + _originZone.x + "," + _originZone.y
               + "_to=" + currentZone.x + "," + currentZone.y);
+        break;
+      }
+      case "session_resume_probe":
+      case "session_timeout_probe": {
+        if (!_sessionProbeStarted) {
+          string mode = kind == "session_resume_probe" ? "resume" : "withhold_receipt";
+          if (!_gameSession.BeginProbe(
+                  _active.id, mode, Mathf.Max(1.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail == "lumberjacks_session_not_connected") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_gameSession.TryGetProbeResult(
+                _active.id, out bool terminal, out bool success, out string probeDetail)
+            || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
         break;
       }
     }

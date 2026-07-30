@@ -268,6 +268,9 @@ public sealed class LumberjacksMotionRunner : IDisposable {
 
   bool ShouldRun() {
     if (!PluginConfig.LumberjacksMotionEnabled.Value || IsDedicatedServer()) return false;
+    // C1 establishes one canonical game-session connection. The motion-only socket cannot run
+    // beside it; C6 moves motion frames onto that shared binding after the reliable semantics land.
+    if (PluginConfig.LumberjacksGameSessionEnabled?.Value == true) return false;
     if (!AlphaTransportSwitches.LumberjacksWebSocketEnabled) return false;
     if (Player.m_localPlayer == null || ZNet.instance == null || ZNet.instance.IsServer()) return false;
     return !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value)

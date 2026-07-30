@@ -50,6 +50,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   LumberjacksPriorityProbeRunner _lumberjacksPriorityProbeRunner;
   LumberjacksPriorityMirrorRunner _lumberjacksPriorityMirrorRunner;
   LumberjacksPriorityManifestListener _lumberjacksPriorityManifestListener;
+  LumberjacksGameSessionRunner _lumberjacksGameSessionRunner;
   LumberjacksMotionRunner _lumberjacksMotionRunner;
   MotionTestController _motionTestController;
   NativeCutoverScenarioController _nativeCutoverScenarioController;
@@ -102,9 +103,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator.SetLumberjacksPriorityMirror(_lumberjacksPriorityMirrorRunner);
     _coordinator.SetLumberjacksReplacementTelemetryProvider(GetLumberjacksReplacementTelemetry);
     _lumberjacksPriorityManifestListener = new();
+    _lumberjacksGameSessionRunner = new();
     _lumberjacksMotionRunner = new();
     _motionTestController = new(RecordTransportControl);
-    _nativeCutoverScenarioController = new();
+    _nativeCutoverScenarioController = new(_lumberjacksGameSessionRunner);
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
@@ -202,6 +204,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     if (authoritative != null) foreach (var pair in authoritative) result["zdo_authoritative_" + (pair.Key == "authoritative_enabled" ? "enabled" : pair.Key)] = pair.Value;
     IDictionary<string, object> motion = _lumberjacksMotionRunner?.Snapshot();
     if (motion != null) foreach (var pair in motion) result["motion_" + pair.Key] = pair.Value;
+    IDictionary<string, object> gameSession = _lumberjacksGameSessionRunner?.Snapshot();
+    if (gameSession != null) foreach (var pair in gameSession) result["game_session_" + pair.Key] = pair.Value;
     if (netcode != null) {
       result["zdo_probe_running"] = netcode.TryGetValue("running", out object running) ? running : null;
       result["zdo_probe_recv_rows"] = netcode.TryGetValue("recv_zdo_rows", out object recv) ? recv : null;
@@ -261,6 +265,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     }
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
+      _lumberjacksGameSessionRunner?.Update(now);
       _lumberjacksMotionRunner?.Update(now);
     }
 
@@ -591,8 +596,12 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         LumberjacksHttpEnabled = AlphaTransportSwitches.LumberjacksHttpEnabled,
         LumberjacksWebSocketEnabled = AlphaTransportSwitches.LumberjacksWebSocketEnabled,
         LumberjacksUdpEnabled = AlphaTransportSwitches.LumberjacksUdpEnabled,
-        LumberjacksWebSocketConnected = _lumberjacksMotionRunner?.WebSocketConnected == true,
-        LumberjacksUdpReady = _lumberjacksMotionRunner?.UdpReady == true,
+        LumberjacksWebSocketConnected =
+            _lumberjacksGameSessionRunner?.WebSocketConnected == true
+            || _lumberjacksMotionRunner?.WebSocketConnected == true,
+        LumberjacksUdpReady =
+            _lumberjacksGameSessionRunner?.UdpReady == true
+            || _lumberjacksMotionRunner?.UdpReady == true,
         MotionState = _lumberjacksMotionRunner?.State ?? "not-created",
         MotionLastError = _lumberjacksMotionRunner?.LastError,
         MotionApplyEnabled = AlphaTransportSwitches.MotionApplyEnabled,
@@ -707,6 +716,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityMirrorRunner = null;
     _lumberjacksPriorityManifestListener?.Dispose();
     _lumberjacksPriorityManifestListener = null;
+    _lumberjacksGameSessionRunner?.Dispose();
+    _lumberjacksGameSessionRunner = null;
     _lumberjacksMotionRunner?.Dispose();
     _lumberjacksMotionRunner = null;
     _motionTestController?.Dispose();

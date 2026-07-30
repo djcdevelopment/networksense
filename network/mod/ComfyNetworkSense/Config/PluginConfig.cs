@@ -52,6 +52,7 @@ public static class PluginConfig {
   public static ConfigEntry<string> LumberjacksClientAccessKey { get; private set; }
   public static ConfigEntry<string> LumberjacksRegionId { get; private set; }
   public static ConfigEntry<bool> LumberjacksMotionEnabled { get; private set; }
+  public static ConfigEntry<bool> LumberjacksGameSessionEnabled { get; private set; }
   public static ConfigEntry<bool> LumberjacksMotionApplyEnabled { get; private set; }
   public static ConfigEntry<float> LumberjacksMotionSendHz { get; private set; }
   public static ConfigEntry<float> LumberjacksMotionSmoothing { get; private set; }
@@ -490,6 +491,15 @@ public static class PluginConfig {
             "lumberjacksRegionId",
             "region-spawn",
             "Lumberjacks region id used by network_sense_lumberjacks_probe unless supplied on the console command.");
+
+    LumberjacksGameSessionEnabled =
+        config.Bind(
+            "LumberjacksGameSession",
+            "lumberjacksGameSessionEnabled",
+            true,
+            "Own one authenticated, ordered, resumable Lumberjacks WebSocket/UDP game session. "
+            + "When enabled this canonical connection supersedes the legacy motion-only socket; "
+            + "later cutover adapters reuse it instead of opening subsystem connections.");
 
     LumberjacksMotionEnabled =
         config.Bind(

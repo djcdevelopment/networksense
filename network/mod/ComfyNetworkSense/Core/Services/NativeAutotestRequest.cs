@@ -24,6 +24,7 @@ public sealed class NativeAutotestRequest {
   public string client;
   public string character;
   public string server;
+  public string lumberjacks_gateway_url;
   public string created_utc;
   public string expires_utc;
   public bool native_network_poison;
@@ -31,14 +32,17 @@ public sealed class NativeAutotestRequest {
   string _path;
   static string _activeRunId = string.Empty;
   static string _activeClient = string.Empty;
+  static string _activeGatewayUrl = string.Empty;
 
   public string RunId => run_id ?? string.Empty;
   public string Client => client ?? string.Empty;
   public string Character => character ?? string.Empty;
   public string Server => server ?? string.Empty;
+  public string LumberjacksGatewayUrl => lumberjacks_gateway_url ?? string.Empty;
   public bool NativeNetworkPoison => native_network_poison;
   public static string ActiveRunId => _activeRunId;
   public static string ActiveClient => _activeClient;
+  public static string ActiveGatewayUrl => _activeGatewayUrl;
 
   public static bool TryLoad(out NativeAutotestRequest request, out string detail) {
     request = null;
@@ -67,6 +71,10 @@ public sealed class NativeAutotestRequest {
         detail = "request_target_invalid";
         return false;
       }
+      if (!IsSafeGatewayUrl(parsed.LumberjacksGatewayUrl)) {
+        detail = "request_gateway_invalid";
+        return false;
+      }
       if (!DateTimeOffset.TryParseExact(
               parsed.expires_utc ?? string.Empty, "o", CultureInfo.InvariantCulture,
               DateTimeStyles.RoundtripKind, out DateTimeOffset expires)) {
@@ -89,6 +97,7 @@ public sealed class NativeAutotestRequest {
       parsed._path = path;
       _activeRunId = parsed.RunId;
       _activeClient = parsed.Client;
+      _activeGatewayUrl = parsed.LumberjacksGatewayUrl;
       NativeNetworkLedger.SetRunContext(parsed.RunId, parsed.Client);
       NativeNetworkLedger.SetPoisonOverride(parsed.NativeNetworkPoison);
       request = parsed;
@@ -166,6 +175,16 @@ public sealed class NativeAutotestRequest {
       && value.Length <= 255
       && value.Contains(':')
       && value.All(c => !char.IsWhiteSpace(c) && !char.IsControl(c) && c is not '"' and not '\\');
+
+  static bool IsSafeGatewayUrl(string value) {
+    if (string.IsNullOrWhiteSpace(value)) return true;
+    if (value.Length > 240
+        || !Uri.TryCreate(value.Trim(), UriKind.Absolute, out Uri parsed))
+      return false;
+    return parsed.Scheme is "http" or "https" or "ws" or "wss"
+        && !string.IsNullOrWhiteSpace(parsed.Host)
+        && string.IsNullOrEmpty(parsed.UserInfo);
+  }
 
   static string SafeLog(string value) =>
       new((value ?? string.Empty)
