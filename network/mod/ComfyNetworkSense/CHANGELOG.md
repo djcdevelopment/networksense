@@ -2,6 +2,14 @@
 
 ### Unreleased
 
+- Move C3 ZDO mutation, interest, delivery, and acknowledgement traffic onto the
+  durable C1 game-session binding; retain HTTP only as the explicitly disabled
+  rollback transport.
+- Give each Valheim server and client a stable opaque logical-peer identity derived
+  from its authenticated scope, independent of WebSocket connection incarnation and
+  Gateway process lifetime.
+- Preserve same-process C1 resume semantics while allowing a fresh transport
+  incarnation after Gateway restart only when the stable logical peer is unchanged.
 - Add C3's Lumberjacks-owned durable ZDO mutation journal, explicit recipient
   interest, snapshot/delta/tombstone envelopes, and direct typed main-thread apply.
 - Add retained tripwires proving the selected object is neither sourced by

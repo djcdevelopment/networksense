@@ -22,7 +22,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.40";
+  public const string PluginVersion = "0.5.41";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -109,7 +109,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = new();
     _lumberjacksGameSessionRunner = new();
     _routedRpcCutoverRunner = new(_lumberjacksGameSessionRunner);
-    _zdoJournalCutoverRunner = new();
+    _zdoJournalCutoverRunner = new(_lumberjacksGameSessionRunner);
     _lumberjacksMotionRunner = new();
     _motionTestController = new(RecordTransportControl);
     _nativeCutoverScenarioController =
@@ -533,6 +533,20 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             zdoJournalEnabled
                 ? "mutation_journal_and_typed_apply_armed"
                 : "mutation_journal_capture_stopped");
+        break;
+
+      case "zdoJournalCanonicalSessionEnabled":
+        if (!bool.TryParse(requestedValue, out bool zdoCanonicalEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldZdoCanonical = PluginConfig.ZdoJournalCanonicalSessionEnabled.Value;
+        PluginConfig.ZdoJournalCanonicalSessionEnabled.Value = zdoCanonicalEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldZdoCanonical),
+            Bool(PluginConfig.ZdoJournalCanonicalSessionEnabled.Value),
+            zdoCanonicalEnabled
+                ? "zdo_semantics_bound_to_canonical_session"
+                : "zdo_semantics_restored_to_http_lab_seam");
         break;
 
       default:

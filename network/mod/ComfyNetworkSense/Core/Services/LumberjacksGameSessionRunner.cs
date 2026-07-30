@@ -42,6 +42,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   string _serverInstanceId = string.Empty;
   string _worldId = string.Empty;
   string _connectionId = string.Empty;
+  string _logicalPeerId = string.Empty;
   string _resumeToken = string.Empty;
   long _resumeEpoch = -1;
   long _lastServerSequence;
@@ -59,6 +60,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   public bool UdpReady { get { lock (_gate) return _udpReady; } }
   public string State { get { lock (_gate) return _state; } }
   public string LastError { get { lock (_gate) return _lastError; } }
+  public string LogicalPeerId { get { lock (_gate) return _logicalPeerId; } }
 
   public LumberjacksGameSessionRunner() {
     LumberjacksGameSessionRunner previous = Interlocked.Exchange(ref _active, this);
@@ -209,6 +211,25 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           "\"through_sequence\":"
           + serverSequence.ToString(CultureInfo.InvariantCulture)));
 
+  public bool TryQueueZdoJournalMutation(string payloadFields) =>
+      TryQueueSemantic("valheim_zdo_mutation", payloadFields);
+
+  public bool TryQueueZdoJournalInterest(string payloadFields) =>
+      TryQueueSemantic("valheim_zdo_interest", payloadFields);
+
+  public bool QueueZdoJournalAck(
+      string worldEpoch, long journalSequence, long reliableSequence) {
+    if (!SafeToken(worldEpoch, 96) ||
+        journalSequence <= 0 || reliableSequence <= 0) return false;
+    bool journal = TryQueueSemantic(
+        "valheim_zdo_ack",
+        "\"world_epoch\":\"" + Escape(worldEpoch)
+        + "\",\"sequences\":[" + journalSequence.ToString(CultureInfo.InvariantCulture)
+        + "]");
+    bool reliable = QueueReliableAck(reliableSequence);
+    return journal && reliable;
+  }
+
   public bool BeginProbe(
       string actionId,
       string mode,
@@ -290,6 +311,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           ["server_instance_id"] = _serverInstanceId,
           ["world_id"] = _worldId,
           ["connection_id"] = _connectionId,
+          ["logical_peer_id"] = _logicalPeerId,
           ["resume_epoch"] = _resumeEpoch,
           ["last_server_sequence"] = _lastServerSequence,
           ["next_client_sequence"] = _nextClientSequence,
@@ -399,6 +421,25 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         }
         if (string.Equals(type, "valheim_routed_rpc", StringComparison.OrdinalIgnoreCase)) {
           HandleRoutedRpcWorker(text);
+          continue;
+        }
+        if (string.Equals(type, "valheim_zdo_delivery", StringComparison.OrdinalIgnoreCase)) {
+          ZdoJournalCutoverRunner.EnqueueCanonicalDelivery(text);
+          continue;
+        }
+        if (string.Equals(type, "valheim_zdo_mutation_receipt",
+                StringComparison.OrdinalIgnoreCase)) {
+          HandleZdoMutationReceiptWorker(text);
+          continue;
+        }
+        if (string.Equals(type, "valheim_zdo_interest_receipt",
+                StringComparison.OrdinalIgnoreCase)) {
+          HandleZdoInterestReceiptWorker(text);
+          continue;
+        }
+        if (string.Equals(type, "valheim_zdo_interest_status",
+                StringComparison.OrdinalIgnoreCase)) {
+          HandleZdoInterestStatusWorker(text);
         }
       }
     } finally {
@@ -427,33 +468,53 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     string serverInstance = ExtractJsonString(text, "server_instance_id");
     string world = ExtractJsonString(text, "world_id");
     string connection = ExtractJsonString(text, "client_connection_id");
+    string logicalPeer = ExtractJsonString(text, "logical_peer_id");
     string resumeToken = ExtractJsonString(text, "resume_token");
     long epoch = ExtractJsonLong(text, "resume_epoch");
     int udpPort = (int)ExtractJsonLong(text, "udp_port");
     string udpToken = ExtractJsonString(text, "udp_token");
     bool resumed = ExtractJsonBool(text, "resumed");
+    bool resumeRejected = ExtractJsonBool(text, "resume_rejected");
     string role = ExtractJsonString(text, "valheim_role");
-    if (!SafeToken(connection, 80) || string.IsNullOrWhiteSpace(resumeToken)
+    if (!SafeToken(connection, 80) || !SafeToken(logicalPeer, 80)
+        || string.IsNullOrWhiteSpace(resumeToken)
         || string.IsNullOrWhiteSpace(serverInstance) || string.IsNullOrWhiteSpace(world)
         || !string.Equals(role, _localRole, StringComparison.Ordinal)) {
       throw new InvalidDataException("session_started missing durable game-session fields");
     }
 
     string previousConnection;
+    string previousLogicalPeer;
     long previousEpoch;
     lock (_gate) {
       previousConnection = _connectionId;
+      previousLogicalPeer = _logicalPeerId;
       previousEpoch = _resumeEpoch;
       _serverInstanceId = serverInstance;
       _worldId = world;
       _connectionId = connection;
+      _logicalPeerId = logicalPeer;
       _resumeToken = resumeToken;
       _resumeEpoch = epoch;
     }
-    if (!string.IsNullOrEmpty(previousConnection)
-        && (!resumed || !string.Equals(previousConnection, connection, StringComparison.Ordinal)
-            || epoch <= previousEpoch)) {
-      throw new InvalidDataException("resume did not preserve connection id and advance epoch");
+    if (!string.IsNullOrEmpty(previousLogicalPeer) &&
+        !string.Equals(previousLogicalPeer, logicalPeer, StringComparison.Ordinal)) {
+      throw new InvalidDataException("logical peer identity changed across reconnect");
+    }
+    bool reincarnated = !string.IsNullOrEmpty(previousConnection) && !resumed;
+    if (!string.IsNullOrEmpty(previousConnection) && resumed &&
+        (!string.Equals(previousConnection, connection, StringComparison.Ordinal) ||
+         epoch <= previousEpoch)) {
+      throw new InvalidDataException("socket resume did not preserve connection id and advance epoch");
+    }
+    if (reincarnated) {
+      if (!resumeRejected)
+        throw new InvalidDataException("new transport incarnation was not caused by rejected resume");
+      ClearOutbound();
+      lock (_gate) {
+        _lastServerSequence = 0;
+        _nextClientSequence = 0;
+      }
     }
 
     try {
@@ -470,6 +531,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     _events.Enqueue(new SessionEvent(
         "session_started", epoch, connection,
         "resumed=" + (resumed ? "true" : "false")
+        + " reincarnated=" + (reincarnated ? "true" : "false")
+        + " logical_peer_id=" + logicalPeer
         + " server_instance_id=" + serverInstance
         + " world_id=" + world
         + " udp_ready=" + (_udp != null ? "true" : "false")));
@@ -634,6 +697,53 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         methodName, (int)methodHash, parameters);
   }
 
+  void HandleZdoMutationReceiptWorker(string text) {
+    long sequence = ExtractJsonLong(text, "seq");
+    string runId = ExtractJsonString(text, "run_id");
+    string worldEpoch = ExtractJsonString(text, "world_epoch");
+    long sourceSequence = ExtractJsonLong(text, "source_sequence");
+    bool accepted = ExtractJsonBool(text, "accepted");
+    string result = ExtractJsonString(text, "result");
+    long recipients = ExtractJsonLong(text, "recipient_count");
+    string logicalPeer = ExtractJsonString(text, "logical_peer_id");
+    if (sequence <= 0 || sourceSequence <= 0 ||
+        !SafeToken(runId, 80) || !SafeToken(worldEpoch, 96) ||
+        !SafeToken(logicalPeer, 80) ||
+        !string.Equals(logicalPeer, _logicalPeerId, StringComparison.Ordinal))
+      throw new InvalidDataException("invalid canonical ZDO mutation receipt");
+    ZdoJournalCutoverRunner.EnqueueCanonicalMutationReceipt(
+        sequence, runId, worldEpoch, sourceSequence, accepted, result, recipients);
+  }
+
+  void HandleZdoInterestReceiptWorker(string text) {
+    long sequence = ExtractJsonLong(text, "seq");
+    string runId = ExtractJsonString(text, "run_id");
+    string worldEpoch = ExtractJsonString(text, "world_epoch");
+    string logicalPeer = ExtractJsonString(text, "logical_peer_id");
+    long snapshots = ExtractJsonLong(text, "snapshot_count");
+    long pending = ExtractJsonLong(text, "pending");
+    if (sequence <= 0 || !SafeToken(runId, 80) ||
+        !SafeToken(worldEpoch, 96) || !SafeToken(logicalPeer, 80) ||
+        !string.Equals(logicalPeer, _logicalPeerId, StringComparison.Ordinal))
+      throw new InvalidDataException("invalid canonical ZDO interest receipt");
+    ZdoJournalCutoverRunner.EnqueueCanonicalInterestReceipt(
+        sequence, runId, worldEpoch, logicalPeer, snapshots, pending);
+  }
+
+  void HandleZdoInterestStatusWorker(string text) {
+    long sequence = ExtractJsonLong(text, "seq");
+    string runId = ExtractJsonString(text, "run_id");
+    string worldEpoch = ExtractJsonString(text, "world_epoch");
+    long interested = ExtractJsonLong(text, "interested_recipients");
+    long pending = ExtractJsonLong(text, "pending");
+    long durable = ExtractJsonLong(text, "durable_objects");
+    if (sequence <= 0 || !SafeToken(runId, 80) ||
+        !SafeToken(worldEpoch, 96) || interested < 0)
+      throw new InvalidDataException("invalid canonical ZDO interest status");
+    ZdoJournalCutoverRunner.EnqueueCanonicalInterestStatus(
+        sequence, runId, worldEpoch, interested, pending, durable);
+  }
+
   void DrainEvents() {
     while (_events.TryDequeue(out SessionEvent item)) {
       switch (item.Kind) {
@@ -744,6 +854,25 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     return true;
   }
 
+  bool TryQueueSemantic(string type, string payloadFields) {
+    if (type is not (
+            "valheim_zdo_mutation" or
+            "valheim_zdo_interest" or
+            "valheim_zdo_ack") ||
+        payloadFields == null || payloadFields.Length > 6 * 1024 * 1024)
+      return false;
+    lock (_gate) {
+      if (!_webSocketConnected || string.IsNullOrEmpty(_logicalPeerId))
+        return false;
+    }
+    return TryQueue(BuildEnvelope(type, NextClientSequence(), payloadFields));
+  }
+
+  void ClearOutbound() {
+    while (_outbound.TryDequeue(out _))
+      Interlocked.Decrement(ref _outboundCount);
+  }
+
   long NextClientSequence() {
     lock (_gate) return ++_nextClientSequence;
   }
@@ -752,7 +881,9 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     if (PluginConfig.LumberjacksGameSessionEnabled?.Value != true) return false;
     if (ZNet.instance == null) return false;
     if (ZNet.instance.IsServer())
-      return PluginConfig.RoutedRpcCutoverEnabled?.Value == true
+      return (PluginConfig.RoutedRpcCutoverEnabled?.Value == true ||
+              (PluginConfig.ZdoJournalCutoverEnabled?.Value == true &&
+               PluginConfig.ZdoJournalCanonicalSessionEnabled?.Value == true))
           && ZNet.GetUID() != 0;
     if (Player.m_localPlayer == null) return false;
     return !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value)
@@ -763,6 +894,19 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     string value = NormalizeGatewayUrl();
     value += (value.Contains("?") ? "&" : "?")
         + "valheim_role=" + Uri.EscapeDataString(_localRole);
+    if (_localRole == "client") {
+      string client = NativeAutotestRequest.ActiveClient;
+      if (SafeToken(client, 48))
+        value += "&valheim_client=" + Uri.EscapeDataString(client);
+      string character = NativeAutotestRequest.ActiveCharacter;
+      if (string.IsNullOrWhiteSpace(character)) {
+        try { character = Player.m_localPlayer?.GetPlayerName(); } catch { }
+      }
+      if (string.IsNullOrWhiteSpace(character))
+        character = PluginConfig.AutoJoinCharacterName?.Value;
+      if (!string.IsNullOrWhiteSpace(character))
+        value += "&valheim_character=" + Uri.EscapeDataString(character.Trim());
+    }
     if (!string.IsNullOrEmpty(resumeToken))
       value += "&resume=" + Uri.EscapeDataString(resumeToken);
     return value;
@@ -788,25 +932,33 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       + "\",\"payload\":{" + payloadFields + "}}";
 
   void WriteReceipt(string state, string actionId, string detail) {
+    string runId = EvidenceRunId();
     Dictionary<string, object> row = new() {
         ["schema_version"] = 1,
         ["timestamp_utc"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
         ["state"] = state,
-        ["run_id"] = NativeAutotestRequest.ActiveRunId,
-        ["client"] = NativeAutotestRequest.ActiveClient,
+        ["run_id"] = runId,
+        ["client"] = _localRole == "server"
+            ? "server" : NativeAutotestRequest.ActiveClient,
         ["action_id"] = actionId ?? string.Empty,
         ["connection_id"] = _connectionId,
+        ["logical_peer_id"] = _logicalPeerId,
         ["resume_epoch"] = _resumeEpoch,
         ["detail"] = detail ?? string.Empty
     };
     _writer.Write(ReceiptFileName, row);
     ComfyNetworkSense.LogInfo(
         "LUMBERJACKS_SESSION state=" + SafeMarker(state)
-        + " run_id=" + SafeMarker(NativeAutotestRequest.ActiveRunId)
+        + " run_id=" + SafeMarker(runId)
         + " client=" + SafeMarker(NativeAutotestRequest.ActiveClient)
         + " action=" + SafeMarker(actionId)
         + " detail=" + SafeMarker(detail));
   }
+
+  string EvidenceRunId() =>
+      _localRole == "server"
+          ? PluginConfig.NativeNetworkEvidenceRunId?.Value ?? string.Empty
+          : NativeAutotestRequest.ActiveRunId;
 
   void SetState(string state, bool websocket, bool udp, string error) {
     lock (_gate) {

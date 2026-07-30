@@ -30,13 +30,16 @@ public sealed class NativeAutotestRequest {
   public bool native_network_poison;
   public bool routed_rpc_cutover;
   public bool zdo_journal_cutover;
+  public bool zdo_journal_canonical_session;
 
   string _path;
   static string _activeRunId = string.Empty;
   static string _activeClient = string.Empty;
+  static string _activeCharacter = string.Empty;
   static string _activeGatewayUrl = string.Empty;
   static bool _activeRoutedRpcCutover;
   static bool _activeZdoJournalCutover;
+  static bool _activeZdoJournalCanonicalSession;
 
   public string RunId => run_id ?? string.Empty;
   public string Client => client ?? string.Empty;
@@ -46,11 +49,15 @@ public sealed class NativeAutotestRequest {
   public bool NativeNetworkPoison => native_network_poison;
   public bool RoutedRpcCutover => routed_rpc_cutover;
   public bool ZdoJournalCutover => zdo_journal_cutover;
+  public bool ZdoJournalCanonicalSession => zdo_journal_canonical_session;
   public static string ActiveRunId => _activeRunId;
   public static string ActiveClient => _activeClient;
+  public static string ActiveCharacter => _activeCharacter;
   public static string ActiveGatewayUrl => _activeGatewayUrl;
   public static bool ActiveRoutedRpcCutover => _activeRoutedRpcCutover;
   public static bool ActiveZdoJournalCutover => _activeZdoJournalCutover;
+  public static bool ActiveZdoJournalCanonicalSession =>
+      _activeZdoJournalCanonicalSession;
 
   public static bool TryLoad(out NativeAutotestRequest request, out string detail) {
     request = null;
@@ -105,9 +112,11 @@ public sealed class NativeAutotestRequest {
       parsed._path = path;
       _activeRunId = parsed.RunId;
       _activeClient = parsed.Client;
+      _activeCharacter = parsed.Character;
       _activeGatewayUrl = parsed.LumberjacksGatewayUrl;
       _activeRoutedRpcCutover = parsed.RoutedRpcCutover;
       _activeZdoJournalCutover = parsed.ZdoJournalCutover;
+      _activeZdoJournalCanonicalSession = parsed.ZdoJournalCanonicalSession;
       NativeNetworkLedger.SetRunContext(parsed.RunId, parsed.Client);
       NativeNetworkLedger.SetPoisonOverride(parsed.NativeNetworkPoison);
       request = parsed;

@@ -105,6 +105,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> DirectControlCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> RoutedRpcCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoJournalCutoverEnabled { get; private set; }
+  public static ConfigEntry<bool> ZdoJournalCanonicalSessionEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -983,7 +984,16 @@ public static class PluginConfig {
             "C3 gate: capture run-tagged ZDO mutations before CreateSyncList, publish them to "
             + "the durable Lumberjacks journal, and apply typed snapshot/delta/tombstone "
             + "deliveries on the client without RPC_ZDOData. Default OFF until the C3 "
-            + "boundary is deliberately armed.");
+             + "boundary is deliberately armed.");
+
+    ZdoJournalCanonicalSessionEnabled =
+        config.Bind(
+            "NativeCutover",
+            "zdoJournalCanonicalSessionEnabled",
+            false,
+            "C4 gate: carry the C3 journal mutation, interest, delivery and acknowledgement "
+            + "frames on the canonical authenticated Lumberjacks game session. Default OFF "
+            + "until durable logical-peer identity is deliberately proven.");
 
     ServerRuntimeControlEnabled =
         config.Bind(
