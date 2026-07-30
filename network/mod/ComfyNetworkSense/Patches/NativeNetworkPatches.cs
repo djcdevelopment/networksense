@@ -127,12 +127,21 @@ static class NativeZdoLedgerPatches {
 
 [HarmonyPatch(typeof(ZRoutedRpc))]
 static class NativeRoutedRpcLedgerPatches {
+  [HarmonyPatch("RouteRPC")]
+  [HarmonyPrefix]
+  [HarmonyPriority(Priority.First)]
+  static bool RouteRpcPrefix(ZRoutedRpc.RoutedRPCData rpcData) =>
+      RoutedRpcCutoverRunner.AllowNativeRoute(rpcData);
+
   [HarmonyPatch("RPC_RoutedRPC")]
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
-  static bool RpcRoutedRpcPrefix() =>
-      !NativeNetworkLedger.Observe(
-          "routed_rpc_receive", "inbound", "RoutedRPC");
+  static bool RpcRoutedRpcPrefix(ZPackage pkg) {
+    bool poison = NativeNetworkLedger.Observe(
+        "routed_rpc_receive", "inbound", "RoutedRPC");
+    bool selected = RoutedRpcCutoverRunner.SuppressNativeInbound(pkg);
+    return !poison && !selected;
+  }
 
   [HarmonyPatch(nameof(ZRoutedRpc.AddPeer))]
   [HarmonyPrefix]

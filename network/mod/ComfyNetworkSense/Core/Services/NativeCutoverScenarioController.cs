@@ -34,6 +34,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly string _receiptPath;
   readonly HashSet<string> _completedActionIds = new(StringComparer.Ordinal);
   readonly LumberjacksGameSessionRunner _gameSession;
+  readonly RoutedRpcCutoverRunner _routedRpc;
 
   NativeCutoverScenarioManifest _manifest;
   NativeCutoverScenarioAction[] _actions = Array.Empty<NativeCutoverScenarioAction>();
@@ -48,8 +49,11 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   bool _sessionProbeStarted;
   bool _terminal;
 
-  public NativeCutoverScenarioController(LumberjacksGameSessionRunner gameSession) {
+  public NativeCutoverScenarioController(
+      LumberjacksGameSessionRunner gameSession,
+      RoutedRpcCutoverRunner routedRpc) {
     _gameSession = gameSession;
+    _routedRpc = routedRpc;
     Directory.CreateDirectory(_directory);
     _manifestPath = Path.Combine(_directory, ManifestFileName);
     _receiptPath = Path.Combine(_directory, ReceiptFileName);
@@ -174,6 +178,10 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "session_timeout_probe":
         case "direct_control_pulse":
         case "direct_control_withhold":
+        case "routed_request":
+        case "routed_broadcast":
+        case "routed_target_zdo":
+        case "routed_withhold":
           break;
         default:
           return "manifest_action_kind_invalid";
@@ -283,6 +291,35 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           _sessionProbeStarted = true;
         }
         if (!_gameSession.TryGetDirectPulseProbeResult(
+                _active.id, out bool terminal, out bool success, out string probeDetail)
+            || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "routed_request":
+      case "routed_broadcast":
+      case "routed_target_zdo":
+      case "routed_withhold": {
+        if (!_sessionProbeStarted) {
+          string mode = kind switch {
+              "routed_request" => "request",
+              "routed_broadcast" => "broadcast",
+              "routed_target_zdo" => "target_zdo",
+              _ => "withhold"
+          };
+          if (!_routedRpc.BeginProbe(
+                  _active.id, mode,
+                  Mathf.Max(1.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail is "lumberjacks_session_not_connected"
+                or "routed_probe_client_not_ready") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_routedRpc.TryGetProbeResult(
                 _active.id, out bool terminal, out bool success, out string probeDetail)
             || !terminal) return;
         if (success) CompleteActive(probeDetail);

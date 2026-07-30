@@ -28,11 +28,13 @@ public sealed class NativeAutotestRequest {
   public string created_utc;
   public string expires_utc;
   public bool native_network_poison;
+  public bool routed_rpc_cutover;
 
   string _path;
   static string _activeRunId = string.Empty;
   static string _activeClient = string.Empty;
   static string _activeGatewayUrl = string.Empty;
+  static bool _activeRoutedRpcCutover;
 
   public string RunId => run_id ?? string.Empty;
   public string Client => client ?? string.Empty;
@@ -40,9 +42,11 @@ public sealed class NativeAutotestRequest {
   public string Server => server ?? string.Empty;
   public string LumberjacksGatewayUrl => lumberjacks_gateway_url ?? string.Empty;
   public bool NativeNetworkPoison => native_network_poison;
+  public bool RoutedRpcCutover => routed_rpc_cutover;
   public static string ActiveRunId => _activeRunId;
   public static string ActiveClient => _activeClient;
   public static string ActiveGatewayUrl => _activeGatewayUrl;
+  public static bool ActiveRoutedRpcCutover => _activeRoutedRpcCutover;
 
   public static bool TryLoad(out NativeAutotestRequest request, out string detail) {
     request = null;
@@ -98,6 +102,7 @@ public sealed class NativeAutotestRequest {
       _activeRunId = parsed.RunId;
       _activeClient = parsed.Client;
       _activeGatewayUrl = parsed.LumberjacksGatewayUrl;
+      _activeRoutedRpcCutover = parsed.RoutedRpcCutover;
       NativeNetworkLedger.SetRunContext(parsed.RunId, parsed.Client);
       NativeNetworkLedger.SetPoisonOverride(parsed.NativeNetworkPoison);
       request = parsed;

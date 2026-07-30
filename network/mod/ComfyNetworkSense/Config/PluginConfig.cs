@@ -103,6 +103,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> NativeNetworkPoisonEnabled { get; private set; }
   public static ConfigEntry<string> NativeNetworkEvidenceRunId { get; private set; }
   public static ConfigEntry<bool> DirectControlCutoverEnabled { get; private set; }
+  public static ConfigEntry<bool> RoutedRpcCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -963,6 +964,15 @@ public static class PluginConfig {
             "C2a gate: make the Lumberjacks reliable lane authoritative for the selected "
             + "post-join direct control pulse and suppress that exact native ZRpc method. "
             + "Default OFF until the C2a boundary is deliberately armed.");
+
+    RoutedRpcCutoverEnabled =
+        config.Bind(
+            "NativeCutover",
+            "routedRpcCutoverEnabled",
+            false,
+            "C2b gate: route the fixed allow-list of selected ZRoutedRpc methods over the "
+            + "canonical Lumberjacks session and fail closed instead of using native delivery. "
+            + "Default OFF until the C2b boundary is deliberately armed.");
 
     ServerRuntimeControlEnabled =
         config.Bind(

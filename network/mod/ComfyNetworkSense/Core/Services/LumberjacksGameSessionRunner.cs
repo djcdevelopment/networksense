@@ -51,6 +51,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   bool _webSocketConnected;
   bool _udpReady;
   bool _disposed;
+  string _localRole = "client";
+  long _localPeerUid;
 
   public bool IsRunning => _cts != null && !_cts.IsCancellationRequested;
   public bool WebSocketConnected { get { lock (_gate) return _webSocketConnected; } }
@@ -148,6 +150,64 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         "native_direct_pulse_received", sequence, string.Empty,
         "run_id=" + (runId ?? string.Empty) + " unexpected_native_fallback"));
   }
+
+  public bool TryQueueRoutedRpc(
+      string runId,
+      string actionId,
+      string routeId,
+      long messageId,
+      long senderPeerId,
+      long targetPeerId,
+      long targetZdoUserId,
+      uint targetZdoId,
+      string methodName,
+      int methodHash,
+      string parametersBase64,
+      string deliveryMode,
+      out string detail) {
+    detail = string.Empty;
+    lock (_gate) {
+      if (!_webSocketConnected || string.IsNullOrEmpty(_connectionId)) {
+        detail = "lumberjacks_session_not_connected";
+        return false;
+      }
+    }
+    if (!SafeToken(runId, 80) || !SafeToken(actionId, 80)
+        || !SafeToken(routeId, 192) || !SafeToken(methodName, 96)
+        || deliveryMode is not ("deliver" or "withhold")
+        || parametersBase64 == null || parametersBase64.Length > 48000) {
+      detail = "routed_rpc_parameters_invalid";
+      return false;
+    }
+    string fields =
+        "\"run_id\":\"" + Escape(runId)
+        + "\",\"action_id\":\"" + Escape(actionId)
+        + "\",\"route_id\":\"" + Escape(routeId)
+        + "\",\"message_id\":" + messageId.ToString(CultureInfo.InvariantCulture)
+        + ",\"sender_peer_id\":" + senderPeerId.ToString(CultureInfo.InvariantCulture)
+        + ",\"target_peer_id\":" + targetPeerId.ToString(CultureInfo.InvariantCulture)
+        + ",\"target_zdo_user_id\":"
+        + targetZdoUserId.ToString(CultureInfo.InvariantCulture)
+        + ",\"target_zdo_id\":" + targetZdoId.ToString(CultureInfo.InvariantCulture)
+        + ",\"method_name\":\"" + Escape(methodName)
+        + "\",\"method_hash\":" + methodHash.ToString(CultureInfo.InvariantCulture)
+        + ",\"parameters_base64\":\"" + Escape(parametersBase64)
+        + "\",\"delivery_mode\":\"" + deliveryMode + "\"";
+    if (!TryQueue(BuildEnvelope(
+            "valheim_routed_rpc_send", NextClientSequence(), fields))) {
+      detail = "client_send_queue_full";
+      return false;
+    }
+    detail = "lumberjacks_routed_rpc_queued";
+    return true;
+  }
+
+  public bool QueueReliableAck(long serverSequence) =>
+      serverSequence > 0 && TryQueue(BuildEnvelope(
+          "reliable_ack",
+          NextClientSequence(),
+          "\"through_sequence\":"
+          + serverSequence.ToString(CultureInfo.InvariantCulture)));
 
   public bool BeginProbe(
       string actionId,
@@ -251,6 +311,13 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
 
   void Start(float now) {
     Stop();
+    try {
+      _localRole = ZNet.instance != null && ZNet.instance.IsServer() ? "server" : "client";
+      _localPeerUid = ZNet.instance != null ? ZNet.GetUID() : 0;
+    } catch {
+      _localRole = "client";
+      _localPeerUid = 0;
+    }
     _nextConnectAt = now + 2.0f;
     _cts = new CancellationTokenSource();
     SetState("connecting", false, false, string.Empty);
@@ -328,6 +395,10 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         }
         if (string.Equals(type, "valheim_direct_pulse", StringComparison.OrdinalIgnoreCase)) {
           HandleDirectPulseWorker(text);
+          continue;
+        }
+        if (string.Equals(type, "valheim_routed_rpc", StringComparison.OrdinalIgnoreCase)) {
+          HandleRoutedRpcWorker(text);
         }
       }
     } finally {
@@ -361,8 +432,10 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     int udpPort = (int)ExtractJsonLong(text, "udp_port");
     string udpToken = ExtractJsonString(text, "udp_token");
     bool resumed = ExtractJsonBool(text, "resumed");
+    string role = ExtractJsonString(text, "valheim_role");
     if (!SafeToken(connection, 80) || string.IsNullOrWhiteSpace(resumeToken)
-        || string.IsNullOrWhiteSpace(serverInstance) || string.IsNullOrWhiteSpace(world)) {
+        || string.IsNullOrWhiteSpace(serverInstance) || string.IsNullOrWhiteSpace(world)
+        || !string.Equals(role, _localRole, StringComparison.Ordinal)) {
       throw new InvalidDataException("session_started missing durable game-session fields");
     }
 
@@ -400,6 +473,18 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         + " server_instance_id=" + serverInstance
         + " world_id=" + world
         + " udp_ready=" + (_udp != null ? "true" : "false")));
+    if (_localPeerUid == 0 || !TryQueue(BuildEnvelope(
+            "valheim_peer_bind",
+            NextClientSequence(),
+            "\"role\":\"" + _localRole
+            + "\",\"peer_uid\":"
+            + _localPeerUid.ToString(CultureInfo.InvariantCulture)))) {
+      throw new InvalidDataException("failed to queue Valheim peer binding");
+    }
+    _events.Enqueue(new SessionEvent(
+        "peer_bind_queued", 0, connection,
+        "role=" + _localRole
+        + " peer_uid=" + _localPeerUid.ToString(CultureInfo.InvariantCulture)));
   }
 
   bool HandleControlRequestWorker(string text, ClientWebSocket socket) {
@@ -522,6 +607,33 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         "run_id=" + runId + " action_id=" + actionId, actionId));
   }
 
+  void HandleRoutedRpcWorker(string text) {
+    string runId = ExtractJsonString(text, "run_id");
+    string actionId = ExtractJsonString(text, "action_id");
+    string routeId = ExtractJsonString(text, "route_id");
+    string methodName = ExtractJsonString(text, "method_name");
+    string parameters = ExtractJsonString(text, "parameters_base64");
+    long reliableSequence = ExtractJsonLong(text, "seq");
+    long messageId = ExtractJsonLong(text, "message_id");
+    long senderPeerId = ExtractJsonLong(text, "sender_peer_id");
+    long targetPeerId = ExtractJsonLong(text, "target_peer_id");
+    long targetZdoUserId = ExtractJsonLong(text, "target_zdo_user_id");
+    long targetZdoId = ExtractJsonLong(text, "target_zdo_id");
+    long methodHash = ExtractJsonLong(text, "method_hash");
+    if (!SafeToken(runId, 80) || !SafeToken(actionId, 80)
+        || !SafeToken(routeId, 192) || !SafeToken(methodName, 96)
+        || reliableSequence <= 0 || messageId == 0
+        || targetZdoId is < 0 or > uint.MaxValue
+        || methodHash is < int.MinValue or > int.MaxValue
+        || parameters == null || parameters.Length > 48000) {
+      throw new InvalidDataException("invalid routed RPC delivery");
+    }
+    RoutedRpcCutoverRunner.EnqueueLumberjacksInbound(
+        reliableSequence, runId, actionId, routeId, messageId,
+        senderPeerId, targetPeerId, targetZdoUserId, (uint)targetZdoId,
+        methodName, (int)methodHash, parameters);
+  }
+
   void DrainEvents() {
     while (_events.TryDequeue(out SessionEvent item)) {
       switch (item.Kind) {
@@ -638,17 +750,22 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
 
   bool ShouldRun() {
     if (PluginConfig.LumberjacksGameSessionEnabled?.Value != true) return false;
-    if (ZNet.instance == null || ZNet.instance.IsServer() || Player.m_localPlayer == null)
-      return false;
+    if (ZNet.instance == null) return false;
+    if (ZNet.instance.IsServer())
+      return PluginConfig.RoutedRpcCutoverEnabled?.Value == true
+          && ZNet.GetUID() != 0;
+    if (Player.m_localPlayer == null) return false;
     return !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value)
         && !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksClientAccessKey.Value);
   }
 
   string GatewayUrl(string resumeToken) {
     string value = NormalizeGatewayUrl();
-    if (string.IsNullOrEmpty(resumeToken)) return value;
-    return value + (value.Contains("?") ? "&" : "?")
-        + "resume=" + Uri.EscapeDataString(resumeToken);
+    value += (value.Contains("?") ? "&" : "?")
+        + "valheim_role=" + Uri.EscapeDataString(_localRole);
+    if (!string.IsNullOrEmpty(resumeToken))
+      value += "&resume=" + Uri.EscapeDataString(resumeToken);
+    return value;
   }
 
   static string NormalizeGatewayUrl() {

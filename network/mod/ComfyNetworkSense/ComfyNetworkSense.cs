@@ -62,6 +62,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   ServerRuntimeControlRunner _serverRuntimeControlRunner;
   NativeNetworkLedger _nativeNetworkLedger;
   DirectControlCutoverRunner _directControlCutoverRunner;
+  RoutedRpcCutoverRunner _routedRpcCutoverRunner;
   readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
   bool _routeRunning;
@@ -106,9 +107,11 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _coordinator.SetLumberjacksReplacementTelemetryProvider(GetLumberjacksReplacementTelemetry);
     _lumberjacksPriorityManifestListener = new();
     _lumberjacksGameSessionRunner = new();
+    _routedRpcCutoverRunner = new(_lumberjacksGameSessionRunner);
     _lumberjacksMotionRunner = new();
     _motionTestController = new(RecordTransportControl);
-    _nativeCutoverScenarioController = new(_lumberjacksGameSessionRunner);
+    _nativeCutoverScenarioController =
+        new(_lumberjacksGameSessionRunner, _routedRpcCutoverRunner);
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
@@ -273,6 +276,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
       _lumberjacksGameSessionRunner?.Update(now);
+      _routedRpcCutoverRunner?.Update(now);
       _lumberjacksMotionRunner?.Update(now);
     }
 
@@ -475,6 +479,36 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             directControlEnabled
                 ? "selected_native_direct_pulse_suppressed"
                 : "native_direct_pulse_generator_stopped");
+        break;
+
+      case "lumberjacksGatewayUrl":
+        if (!Uri.TryCreate(requestedValue, UriKind.Absolute, out Uri gatewayEndpoint)
+            || (gatewayEndpoint.Scheme != Uri.UriSchemeHttp
+                && gatewayEndpoint.Scheme != Uri.UriSchemeHttps
+                && gatewayEndpoint.Scheme != "ws"
+                && gatewayEndpoint.Scheme != "wss")
+            || !string.IsNullOrEmpty(gatewayEndpoint.UserInfo)) {
+          return RuntimeControlApplyResult.Refused(
+              "gateway_url_must_be_http_or_websocket_without_userinfo");
+        }
+        string oldGatewayUrl = PluginConfig.LumberjacksGatewayUrl.Value ?? string.Empty;
+        PluginConfig.LumberjacksGatewayUrl.Value = requestedValue.Trim().TrimEnd('/');
+        result = RuntimeControlApplyResult.Applied(
+            oldGatewayUrl, PluginConfig.LumberjacksGatewayUrl.Value,
+            "effective_on_next_canonical_session_connect");
+        break;
+
+      case "routedRpcCutoverEnabled":
+        if (!bool.TryParse(requestedValue, out bool routedRpcEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldRoutedRpc = PluginConfig.RoutedRpcCutoverEnabled.Value;
+        PluginConfig.RoutedRpcCutoverEnabled.Value = routedRpcEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldRoutedRpc), Bool(PluginConfig.RoutedRpcCutoverEnabled.Value),
+            routedRpcEnabled
+                ? "selected_routed_rpc_methods_fail_closed_to_lumberjacks"
+                : "selected_routed_rpc_native_path_restored");
         break;
 
       default:
@@ -738,6 +772,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksPriorityManifestListener = null;
     _lumberjacksGameSessionRunner?.Dispose();
     _lumberjacksGameSessionRunner = null;
+    _routedRpcCutoverRunner?.Dispose();
+    _routedRpcCutoverRunner = null;
     _lumberjacksMotionRunner?.Dispose();
     _lumberjacksMotionRunner = null;
     _motionTestController?.Dispose();
