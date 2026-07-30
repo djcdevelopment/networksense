@@ -15,13 +15,12 @@ using System.Text;
 // Why raw sockets at all: Valheim's server Mono runtime has an empty WebRequest prefix table, so
 // WebRequest.Create throws "URI prefix not recognized" (ADR 0003 / valheim-server-mono-http-trap).
 //
-// WHY THIS FILE HAS NO UnityEngine / ZNet / ZLog REFERENCE, and must not gain one: HandshakeResponderRunner
-// calls this from a Harmony prefix on the dedicated server's MAIN THREAD, so every bound below is a
-// bound on how long the whole server can freeze during a join. A bound no test can drive is a bound
-// nobody should trust, and while this code sat inside a Unity-bound class nothing could drive it —
-// loading the assembly meant loading Valheim. Free of Unity, this file links directly into a plain
-// test assembly that needs neither Valheim's assemblies nor a running game. Keep it that way: the
-// moment this file touches Unity, the bounds go back to being untestable.
+// WHY THIS FILE HAS NO UnityEngine / ZNet / ZLog REFERENCE, and must not gain one: every current
+// caller puts this blocking mechanism behind a worker boundary. HandshakeResponderRunner used to
+// call it synchronously from a Harmony prefix and freeze the dedicated-server main thread; it now
+// banks PeerInfo, runs this on a Task, and applies the verdict later on Unity's thread. Keeping this
+// file Unity-free makes that boundary mechanically reviewable and lets a plain assembly drive the
+// transport bounds without loading Valheim.
 //
 // Mechanism only. The numbers are policy and belong to the caller, because the caller is the one who
 // knows what it costs to block: see HandshakeResponderRunner's consts.
@@ -29,8 +28,8 @@ static class BoundedRawHttp {
 
   // Reads until the server closes the connection (Connection: close). Throws — never returns a partial
   // or sentinel result — on connect timeout, non-2xx status, an over-size body, or a body that takes
-  // longer than responseDeadlineMs to arrive. Callers decide what a throw means; the handshake fails
-  // open on it today and will fail closed in M1 stage 3.
+  // longer than responseDeadlineMs to arrive. Callers decide what a throw means; the handshake uses
+  // its configured fail-open/fail-closed policy.
   //
   // responseDeadlineMs is NOT redundant with the socket's own ReceiveTimeout, and removing it would
   // restore an unbounded stall: ReceiveTimeout applies per Read, not to the loop, so a peer trickling

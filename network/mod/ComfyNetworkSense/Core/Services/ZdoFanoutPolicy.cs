@@ -20,11 +20,28 @@ public readonly struct FanoutObserverInput {
   public readonly string Recipient;              // the observer's stamped identity (SteamID host)
   public readonly double DistanceMeters;         // observer position -> ZDO position
   public readonly long? DeliveredDataRevision;   // this observer's m_zdos data revision, null if none
+  public readonly long? DeliveredOwnerRevision;  // this observer's m_zdos owner revision, null if none
+  public readonly bool SelectedByNative;          // this observer's CreateSyncList supplied the candidate
 
   public FanoutObserverInput(string recipient, double distanceMeters, long? deliveredDataRevision) {
     Recipient = recipient;
     DistanceMeters = distanceMeters;
     DeliveredDataRevision = deliveredDataRevision;
+    DeliveredOwnerRevision = deliveredDataRevision.HasValue ? 0L : null;
+    SelectedByNative = false;
+  }
+
+  public FanoutObserverInput(
+      string recipient,
+      double distanceMeters,
+      long? deliveredDataRevision,
+      long? deliveredOwnerRevision,
+      bool selectedByNative) {
+    Recipient = recipient;
+    DistanceMeters = distanceMeters;
+    DeliveredDataRevision = deliveredDataRevision;
+    DeliveredOwnerRevision = deliveredOwnerRevision;
+    SelectedByNative = selectedByNative;
   }
 }
 
@@ -34,6 +51,8 @@ public readonly struct FanoutObserverDecision {
   public readonly string Recipient;
   public readonly double DistanceMeters;
   public readonly long? DeliveredDataRevision;
+  public readonly long? DeliveredOwnerRevision;
+  public readonly bool SelectedByNative;
   public readonly ZdoFanoutDisposition Disposition;
   /// <summary>True only when the runner should perform a redirect for this observer: the disposition
   /// is <see cref="ZdoFanoutDisposition.Emit"/> AND this is the first occurrence of the recipient in
@@ -46,6 +65,25 @@ public readonly struct FanoutObserverDecision {
     Recipient = recipient;
     DistanceMeters = distanceMeters;
     DeliveredDataRevision = deliveredDataRevision;
+    DeliveredOwnerRevision = deliveredDataRevision.HasValue ? 0L : null;
+    SelectedByNative = false;
+    Disposition = disposition;
+    Emit = emit;
+  }
+
+  public FanoutObserverDecision(
+      string recipient,
+      double distanceMeters,
+      long? deliveredDataRevision,
+      long? deliveredOwnerRevision,
+      bool selectedByNative,
+      ZdoFanoutDisposition disposition,
+      bool emit) {
+    Recipient = recipient;
+    DistanceMeters = distanceMeters;
+    DeliveredDataRevision = deliveredDataRevision;
+    DeliveredOwnerRevision = deliveredOwnerRevision;
+    SelectedByNative = selectedByNative;
     Disposition = disposition;
     Emit = emit;
   }
@@ -70,12 +108,37 @@ public static class ZdoFanoutPolicy {
       double reachMeters,
       long dataRevision,
       long? deliveredDataRevision) {
+    return Evaluate(
+        distanceMeters, innerRadius, outerRadius, reachMeters,
+        dataRevision, 0L, deliveredDataRevision,
+        deliveredDataRevision.HasValue ? 0L : null, selectedByNative: false);
+  }
+
+  public static ZdoFanoutDisposition Evaluate(
+      double distanceMeters,
+      double innerRadius,
+      double outerRadius,
+      double reachMeters,
+      long dataRevision,
+      long ownerRevision,
+      long? deliveredDataRevision,
+      long? deliveredOwnerRevision,
+      bool selectedByNative) {
     bool relevant = ZdoIntegrationContract.LandmarkAllows(distanceMeters, reachMeters)
         || distanceMeters <= outerRadius;
     if (!relevant) {
       return ZdoFanoutDisposition.OutOfBand;
     }
-    if (deliveredDataRevision.HasValue && deliveredDataRevision.Value >= dataRevision) {
+    // Presence in this observer's native CreateSyncList is stronger evidence than the reflected
+    // revision cache: ShouldSend can select on owner revision or force-send while data revision is
+    // unchanged. Never turn that native-selected pass into an ack-without-emit.
+    if (selectedByNative) {
+      return ZdoFanoutDisposition.Emit;
+    }
+    if (deliveredDataRevision.HasValue
+        && deliveredOwnerRevision.HasValue
+        && deliveredDataRevision.Value >= dataRevision
+        && deliveredOwnerRevision.Value >= ownerRevision) {
       return ZdoFanoutDisposition.AlreadyDelivered;
     }
     return ZdoFanoutDisposition.Emit;
@@ -96,19 +159,33 @@ public static class ZdoFanoutPlan {
       double outerRadius,
       double reachMeters,
       IEnumerable<FanoutObserverInput> observers) {
+    return Evaluate(dataRevision, 0L, innerRadius, outerRadius, reachMeters, observers);
+  }
+
+  public static IReadOnlyList<FanoutObserverDecision> Evaluate(
+      long dataRevision,
+      long ownerRevision,
+      double innerRadius,
+      double outerRadius,
+      double reachMeters,
+      IEnumerable<FanoutObserverInput> observers) {
     var seenRecipients = new HashSet<string>();
     var decisions = new List<FanoutObserverDecision>();
     foreach (FanoutObserverInput observer in observers) {
       ZdoFanoutDisposition disposition = ZdoFanoutPolicy.Evaluate(
           observer.DistanceMeters, innerRadius, outerRadius, reachMeters,
-          dataRevision, observer.DeliveredDataRevision);
+          dataRevision, ownerRevision,
+          observer.DeliveredDataRevision, observer.DeliveredOwnerRevision,
+          observer.SelectedByNative);
       // Emit at most once per recipient per revision: the first Emit occurrence wins; a repeat of the
       // same recipient (or a null recipient) is recorded but never dispatched.
       bool emit = disposition == ZdoFanoutDisposition.Emit
           && !string.IsNullOrEmpty(observer.Recipient)
           && seenRecipients.Add(observer.Recipient);
       decisions.Add(new FanoutObserverDecision(
-          observer.Recipient, observer.DistanceMeters, observer.DeliveredDataRevision,
+          observer.Recipient, observer.DistanceMeters,
+          observer.DeliveredDataRevision, observer.DeliveredOwnerRevision,
+          observer.SelectedByNative,
           disposition, emit));
     }
     return decisions;

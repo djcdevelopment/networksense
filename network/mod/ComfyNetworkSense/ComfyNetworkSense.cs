@@ -57,6 +57,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   GameplayEventProducer _gameplayEventProducer;
   ZdoAuthoritativeConsumerRunner _zdoAuthoritativeConsumerRunner;
   HandshakeResponderRunner _handshakeResponderRunner;
+  ServerRuntimeControlRunner _serverRuntimeControlRunner;
   readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
   bool _routeRunning;
@@ -104,6 +105,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
     _handshakeResponderRunner = new();
+    _serverRuntimeControlRunner = new(ApplyServerRuntimeControl);
     _zdoAuthoritativeConsumerRunner = new();
     InitializeAuthoritativeConsumer();
 
@@ -213,8 +215,11 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       return;
     }
 
+    LabAutoJoinPatches.PollJoined();
+
     float deltaTime = Time.unscaledDeltaTime;
     float now = Time.unscaledTime;
+    _serverRuntimeControlRunner?.Update(now, _coordinator);
     _zdoRedirectRunner?.MaintainPrimaryWindow(now);
     TryEnsurePrimaryRedirect(now);
     TickAutoPort(now);
@@ -303,6 +308,134 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       LogWarning("ZDO primary redirect remains fail-safe native: " + message);
       _lastPrimaryRedirectStartMessage = message;
     }
+  }
+
+  RuntimeControlApplyResult ApplyServerRuntimeControl(string setting, string requestedValue) {
+    if (ZNet.instance == null || !ZNet.instance.IsServer() || !ZNet.instance.IsDedicated()) {
+      return RuntimeControlApplyResult.Refused("dedicated_server_only");
+    }
+
+    RuntimeControlApplyResult result;
+    switch (setting) {
+      case "zdoRedirectEnabled":
+        if (!bool.TryParse(requestedValue, out bool redirectEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldRedirect = PluginConfig.ZdoRedirectEnabled.Value;
+        PluginConfig.ZdoRedirectEnabled.Value = redirectEnabled;
+        string redirectEffect = "config_only";
+        if (!redirectEnabled && _zdoRedirectRunner?.IsRunning == true) {
+          redirectEffect = _zdoRedirectRunner.Stop();
+        } else if (redirectEnabled) {
+          redirectEffect = "eligible_for_primary_arm_on_next_update";
+        }
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldRedirect), Bool(PluginConfig.ZdoRedirectEnabled.Value), redirectEffect);
+        break;
+
+      case "zdoCoPresenceShadowEnabled":
+        if (!bool.TryParse(requestedValue, out bool shadowEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldShadow = PluginConfig.ZdoCoPresenceShadowEnabled.Value;
+        PluginConfig.ZdoCoPresenceShadowEnabled.Value = shadowEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldShadow), Bool(PluginConfig.ZdoCoPresenceShadowEnabled.Value),
+            "effective_on_next_redirect_candidate");
+        break;
+
+      case "zdoCoPresenceFanoutEnabled":
+        if (!bool.TryParse(requestedValue, out bool fanoutEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldFanout = PluginConfig.ZdoCoPresenceFanoutEnabled.Value;
+        PluginConfig.ZdoCoPresenceFanoutEnabled.Value = fanoutEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldFanout), Bool(PluginConfig.ZdoCoPresenceFanoutEnabled.Value),
+            "effective_on_next_redirect_candidate");
+        break;
+
+      case "handshakeResponderStrictMode":
+        if (!bool.TryParse(requestedValue, out bool strictMode)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldStrict = PluginConfig.HandshakeResponderStrictMode.Value;
+        PluginConfig.HandshakeResponderStrictMode.Value = strictMode;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldStrict), Bool(PluginConfig.HandshakeResponderStrictMode.Value),
+            "effective_on_next_deferred_peerinfo");
+        break;
+
+      case "handshakeResponderEnabled":
+        if (!bool.TryParse(requestedValue, out bool responderEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldResponder = PluginConfig.HandshakeResponderEnabled.Value;
+        PluginConfig.HandshakeResponderEnabled.Value = responderEnabled;
+        string responderEffect = responderEnabled
+            ? _handshakeResponderRunner?.Start(_coordinator) ?? "runner_unavailable"
+            : _handshakeResponderRunner?.Stop() ?? "runner_unavailable";
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldResponder), Bool(PluginConfig.HandshakeResponderEnabled.Value),
+            responderEffect);
+        break;
+
+      case "handshakeResponderEndpoint":
+        if (!Uri.TryCreate(requestedValue, UriKind.Absolute, out Uri endpoint)
+            || !string.Equals(endpoint.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            || !string.IsNullOrEmpty(endpoint.UserInfo)) {
+          return RuntimeControlApplyResult.Refused("endpoint_must_be_plain_http_without_userinfo");
+        }
+        string oldEndpoint = PluginConfig.HandshakeResponderEndpoint.Value ?? string.Empty;
+        bool restartForEndpoint = _handshakeResponderRunner?.IsRunning == true;
+        if (restartForEndpoint) {
+          _handshakeResponderRunner.Stop();
+        }
+        PluginConfig.HandshakeResponderEndpoint.Value = requestedValue.Trim().TrimEnd('/');
+        string endpointEffect = restartForEndpoint
+            ? _handshakeResponderRunner.Start(_coordinator)
+            : "effective_on_next_responder_start";
+        result = RuntimeControlApplyResult.Applied(
+            oldEndpoint, PluginConfig.HandshakeResponderEndpoint.Value, endpointEffect);
+        break;
+
+      case "handshakeResponderWindowId":
+        if (!IsSafeRuntimeToken(requestedValue)) {
+          return RuntimeControlApplyResult.Refused("window_id_must_be_safe_token");
+        }
+        string oldWindow = PluginConfig.HandshakeResponderWindowId.Value ?? string.Empty;
+        bool restartForWindow = _handshakeResponderRunner?.IsRunning == true;
+        if (restartForWindow) {
+          _handshakeResponderRunner.Stop();
+        }
+        PluginConfig.HandshakeResponderWindowId.Value = requestedValue.Trim();
+        string windowEffect = restartForWindow
+            ? _handshakeResponderRunner.Start(_coordinator)
+            : "effective_on_next_responder_start";
+        result = RuntimeControlApplyResult.Applied(
+            oldWindow, PluginConfig.HandshakeResponderWindowId.Value, windowEffect);
+        break;
+
+      default:
+        return RuntimeControlApplyResult.Refused("setting_not_allowlisted");
+    }
+
+    Config.Save();
+    return result;
+  }
+
+  static string Bool(bool value) => value ? "true" : "false";
+
+  static bool IsSafeRuntimeToken(string value) {
+    if (string.IsNullOrWhiteSpace(value) || value.Length > 80) {
+      return false;
+    }
+    foreach (char c in value) {
+      if (!char.IsLetterOrDigit(c) && c != '-' && c != '_' && c != '.') {
+        return false;
+      }
+    }
+    return true;
   }
 
   // Auto-port harness: register the RPC handler once ZRoutedRpc is up, then (server only) push the
@@ -550,6 +683,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _gameplayEventProducer = null;
     _handshakeResponderRunner?.Dispose();
     _handshakeResponderRunner = null;
+    _serverRuntimeControlRunner?.Dispose();
+    _serverRuntimeControlRunner = null;
     _coordinator?.Dispose();
     _coordinator = null;
     _harmony?.UnpatchSelf();

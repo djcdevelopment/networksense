@@ -1,23 +1,32 @@
 namespace ComfyNetworkSense;
 
 using System;
+using System.Reflection;
 
 using HarmonyLib;
 
 using UnityEngine;
 
-// P6/I5 server-side handshake interceptor. Prefix on ZNet.RPC_PeerInfo: when the responder is
-// armed, decode a SetPos(0) CLONE of the client's PeerInfo (never touching vanilla's cursor),
-// ask Lumberjacks for the admission verdict, and either veto (Invoke Error + skip vanilla) or
-// accept (return true so vanilla runs the real ZNet.AddPeer). Disarmed / non-server / any fault
-// => pass-through. The patch always attaches (CreateAndPatchAll); the runner gates behaviour.
+// P6/I5 server-side handshake interceptor. The prefix only decodes and banks the request; it never
+// performs network I/O. HandshakeResponderRunner asks Lumberjacks on a worker and, once the verdict
+// is ready, re-enters this method on Unity's main thread. A one-shot bypass lets that replay reach
+// vanilla's real ZNet.AddPeer without being deferred a second time.
 [HarmonyPatch(typeof(ZNet))]
 static class HandshakeResponderPatches {
+  static readonly MethodInfo RpcPeerInfoMethod = AccessTools.Method(
+      typeof(ZNet), "RPC_PeerInfo", new[] { typeof(ZRpc), typeof(ZPackage) });
+
   [HarmonyPrefix]
   [HarmonyPatch("RPC_PeerInfo", new[] { typeof(ZRpc), typeof(ZPackage) })]
   static bool RpcPeerInfoPrefix(ZRpc rpc, ZPackage pkg) {
     HandshakeResponderRunner runner = HandshakeResponderRunner.Active;
-    if (runner == null || !runner.IsRunning) {
+    if (runner == null) {
+      return true;
+    }
+    if (runner.ConsumeVanillaResume(rpc)) {
+      return true;
+    }
+    if (!runner.IsRunning) {
       return true;
     }
     if (ZNet.instance == null || !ZNet.instance.IsServer() || rpc == null || pkg == null) {
@@ -46,19 +55,38 @@ static class HandshakeResponderPatches {
 
       string hostName = rpc.GetSocket()?.GetHostName() ?? string.Empty;
 
-      HandshakeDecision decision = runner.Decide(
-          uid, versionString, netVersion, refPos, playerName, hostName, passwordHash, ticketValid: true);
-
-      if (decision.IsPassThrough || decision.IsAccept) {
-        return true;
-      }
-      rpc.Invoke("Error", decision.ErrorCode);
-      return false;
+      // True means the runner owns this call until a worker verdict is drained on Update. A false
+      // return means it could not safely bank the request, so vanilla receives the original package.
+      bool deferred = runner.TryDefer(
+          rpc,
+          (byte[]) pkg.GetArray().Clone(),
+          uid,
+          versionString,
+          netVersion,
+          refPos,
+          playerName,
+          hostName,
+          passwordHash,
+          ticketValid: true);
+      return !deferred;
     } catch (Exception exception) {
-      // Fail-open: a decode/socket fault must never break a real connection.
+      // Fail-open: a decode/banking fault must never break a real connection.
       ZLog.LogWarning("[ComfyNetworkSense][handshake] prefix fault (fail-open): "
           + exception.GetType().Name + ": " + exception.Message);
       return true;
     }
+  }
+
+  internal static void ResumeVanilla(ZRpc rpc, byte[] packageBytes) {
+    if (ZNet.instance == null || rpc == null || packageBytes == null) {
+      return;
+    }
+    if (RpcPeerInfoMethod == null) {
+      throw new MissingMethodException(typeof(ZNet).FullName, "RPC_PeerInfo");
+    }
+
+    ZPackage replay = new(packageBytes);
+    replay.SetPos(0);
+    RpcPeerInfoMethod.Invoke(ZNet.instance, new object[] { rpc, replay });
   }
 }

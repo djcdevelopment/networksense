@@ -98,6 +98,8 @@ public static class PluginConfig {
   public static ConfigEntry<string> HandshakeResponderWindowId { get; private set; }
   public static ConfigEntry<float> HandshakeResponderPollSeconds { get; private set; }
   public static ConfigEntry<float> HandshakeResponderActiveSeconds { get; private set; }
+  public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
+  public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
   public static ConfigEntry<float> HudOpacity { get; private set; }
   public static ConfigEntry<float> HudMaxWidth { get; private set; }
@@ -912,6 +914,24 @@ public static class PluginConfig {
             + "2026-07-21, which meant new players joining after the 90s mark hit native Valheim "
             + "admission instead of the Lumberjacks responder. A shorter window still gives the "
             + "in-window rollback rehearsal, but it is now opt-in rather than the default.");
+
+    ServerRuntimeControlEnabled =
+        config.Bind(
+            "ServerControl",
+            "serverRuntimeControlEnabled",
+            false,
+            "Dedicated-server-only, filesystem command lane for a fixed allowlist of networking "
+            + "rollback settings. Commands must arrive through authenticated host access and are "
+            + "consumed from BepInEx/config/comfy-network-sense/runtime-control.json. No console "
+            + "execution and no arbitrary config keys. Fail-safe default OFF.");
+
+    ServerRuntimeControlPollSeconds =
+        config.Bind(
+            "ServerControl",
+            "serverRuntimeControlPollSeconds",
+            1.0f,
+            "Seconds between dedicated-server checks for one atomically staged runtime-control "
+            + "command; clamped to 0.25..10 seconds.");
 
     WriteTelemetryLogs =
         config.Bind(

@@ -716,6 +716,20 @@ public sealed class TelemetryCoordinator : IDisposable {
     WriteEvent("transport_control_changed", component + "=" + (enabled ? "on" : "off") + " via " + observedPath);
   }
 
+  public void RecordServerRuntimeControl(IDictionary<string, object> values) {
+    Dictionary<string, object> row = new(values) {
+        ["session_id"] = _sessionId,
+        ["build_version"] = ComfyNetworkSense.PluginVersion
+    };
+    _logWriter.Write("runtime-control-receipts.jsonl", row);
+    WriteEvent(
+        "server_runtime_control",
+        Convert.ToString(row.TryGetValue("setting", out object setting) ? setting : string.Empty)
+            + "="
+            + Convert.ToString(
+                row.TryGetValue("effective_value", out object effective) ? effective : string.Empty));
+  }
+
   static string RequestEndpoint(string requestKind) {
     return requestKind switch {
       "health" => "http://127.0.0.1:8720/healthz",

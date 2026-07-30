@@ -91,6 +91,8 @@ public sealed class ZdoRedirectRunner : IDisposable {
       ZdosField == null ? null : ZdosField.FieldType.GetMethod("get_Item");
   static readonly FieldInfo PeerZdoInfoDataRev =
       PeerZdoInfoType == null ? null : PeerZdoInfoType.GetField("m_dataRevision");
+  static readonly FieldInfo PeerZdoInfoOwnerRev =
+      PeerZdoInfoType == null ? null : PeerZdoInfoType.GetField("m_ownerRevision");
   // ZDOMan.m_peers (List<ZDOPeer>) — the connected-observer set the fan-out serves.
   static readonly FieldInfo ZdoManPeersField = AccessTools.Field(typeof(ZDOMan), "m_peers");
 
@@ -729,10 +731,17 @@ public sealed class ZdoRedirectRunner : IDisposable {
       } catch {
         // A peer we cannot read is simply treated as out-of-band (host null, dist max).
       }
-      inputs.Add(new FanoutObserverInput(host, dist, DeliveredDataRevision(zdoPeer, candidate.Zdo.m_uid)));
+      PeerDeliveredRevisions? delivered = DeliveredRevisions(zdoPeer, candidate.Zdo.m_uid);
+      inputs.Add(new FanoutObserverInput(
+          host,
+          dist,
+          delivered?.DataRevision,
+          delivered?.OwnerRevision,
+          ReferenceEquals(zdoPeer, exposingPeer)));
     }
     return ZdoFanoutPlan.Evaluate(
-        candidate.Zdo.DataRevision, PluginConfig.ZdoInnerRadiusMeters.Value,
+        candidate.Zdo.DataRevision, candidate.Zdo.OwnerRevision,
+        PluginConfig.ZdoInnerRadiusMeters.Value,
         PluginConfig.ZdoOuterRadiusMeters.Value, candidate.LandmarkReachMeters, inputs);
   }
 
@@ -789,8 +798,11 @@ public sealed class ZdoRedirectRunner : IDisposable {
           ["visible"] = d.Disposition != ZdoFanoutDisposition.OutOfBand,   // selected as an observer
           ["would_redirect"] = d.Emit,                                     // a redirect would occur
           ["already_delivered"] = d.Disposition == ZdoFanoutDisposition.AlreadyDelivered,
+          ["selected_by_native"] = d.SelectedByNative,
           ["delivered_data_rev"] =
               d.DeliveredDataRevision.HasValue ? (object) d.DeliveredDataRevision.Value : string.Empty,
+          ["delivered_owner_rev"] =
+              d.DeliveredOwnerRevision.HasValue ? (object) d.DeliveredOwnerRevision.Value : string.Empty,
           ["owner"] = owner,          // EVIDENCE ONLY — never an input to the visibility decision
           ["owner_rev"] = ownerRev,
           ["window_id"] = _windowId,
@@ -810,10 +822,12 @@ public sealed class ZdoRedirectRunner : IDisposable {
       object exposingPeer, ClassifiedZdo candidate, List<object> peers,
       IReadOnlyList<FanoutObserverDecision> decisions) {
     bool exposingHandled = false;
+    bool emittedAny = false;
     for (int k = 0; k < decisions.Count; k++) {
       bool isExposing = ReferenceEquals(peers[k], exposingPeer);
       if (decisions[k].Emit) {
         Redirect(peers[k], candidate);   // stamps RecipientFor(peer), acks this peer's m_zdos
+        emittedAny = true;
         if (isExposing) exposingHandled = true;
       } else if (isExposing) {
         SuppressNative(exposingPeer, candidate.Zdo);   // removed from toSync but not emitted -> ack
@@ -822,7 +836,12 @@ public sealed class ZdoRedirectRunner : IDisposable {
       // Non-exposing, non-Emit observers (far, or already-delivered) are left untouched: far peers
       // re-sync on approach; already-delivered peers keep the copy they have.
     }
-    if (!exposingHandled) {
+    if (!emittedAny) {
+      // Fan-out must never consume a native-selected candidate, acknowledge it, and deliver it to
+      // nobody. Fall closed to the established single-recipient redirect.
+      Redirect(exposingPeer, candidate);
+      exposingHandled = true;
+    } else if (!exposingHandled) {
       SuppressNative(exposingPeer, candidate.Zdo);   // defensive: exposing peer absent from m_peers
     }
   }
@@ -830,8 +849,19 @@ public sealed class ZdoRedirectRunner : IDisposable {
   // This peer's native delivered data revision for a ZDO (its m_zdos[uid].m_dataRevision), or null if
   // it has no entry — the "already considered delivered" bookkeeping the fan-out dedups on. Fail-soft:
   // any missing reflection handle or read error yields null (treated as never-delivered).
-  long? DeliveredDataRevision(object zdoPeer, ZDOID uid) {
-    if (ZdosField == null || ZdosContainsKey == null || ZdosGetItem == null || PeerZdoInfoDataRev == null) {
+  readonly struct PeerDeliveredRevisions {
+    public readonly long DataRevision;
+    public readonly long OwnerRevision;
+
+    public PeerDeliveredRevisions(long dataRevision, long ownerRevision) {
+      DataRevision = dataRevision;
+      OwnerRevision = ownerRevision;
+    }
+  }
+
+  PeerDeliveredRevisions? DeliveredRevisions(object zdoPeer, ZDOID uid) {
+    if (ZdosField == null || ZdosContainsKey == null || ZdosGetItem == null
+        || PeerZdoInfoDataRev == null || PeerZdoInfoOwnerRev == null) {
       return null;
     }
     try {
@@ -840,7 +870,9 @@ public sealed class ZdoRedirectRunner : IDisposable {
         return null;
       }
       object info = ZdosGetItem.Invoke(dict, new object[] { uid });
-      return Convert.ToInt64(PeerZdoInfoDataRev.GetValue(info));
+      return new PeerDeliveredRevisions(
+          Convert.ToInt64(PeerZdoInfoDataRev.GetValue(info)),
+          Convert.ToInt64(PeerZdoInfoOwnerRev.GetValue(info)));
     } catch {
       return null;
     }

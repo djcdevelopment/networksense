@@ -2,6 +2,17 @@
 
 ### Unreleased
 
+- Add a request-scoped native Windows autojoin seam for persisted lab characters, with
+  deterministic renderer and joined receipts; normal players remain untouched when no
+  short-lived request file exists.
+- Correct co-presence fan-out dedup to account for owner revision and native
+  `CreateSyncList` selection, and fall back to the established single-recipient
+  redirect instead of ever acknowledging a candidate emitted to nobody.
+- Defer Lumberjacks handshake HTTP to a worker, retain a bounded pending-admission
+  state, and apply accept/reject/fail-open results on Unity's main thread.
+- Add a dedicated-server-only filesystem control lane for a fixed allowlist of ZDO
+  and handshake rollback settings, with old/effective-value receipts and no console
+  execution or network listener.
 - Add a Harmony patch-load rollup: hot patch bodies (`ZDOMan` probe/redirect postfixes and
   the send-cadence call site) accumulate per-call timing and write per-interval rows to
   `perf-patchload.jsonl` when `[Perf] perfPatchLoadRollupEnabled` is on (new key, default
