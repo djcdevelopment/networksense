@@ -779,6 +779,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         _lastServerSequence = 0;
         _nextClientSequence = 0;
       }
+      ZdoJournalCutoverRunner.NotifySessionReincarnated();
     }
 
     try {

@@ -412,6 +412,21 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         + "," + target.z.ToString("0.##", CultureInfo.InvariantCulture));
   }
 
+  /// A reincarnated Gateway process keeps only the durable object journal;
+  /// every in-memory interest set is gone, and interest is only re-sent when
+  /// the player's zone changes. Without this re-arm, AoI delivery never
+  /// resumes after reincarnation and the next dependent probe starves in
+  /// await_target (run full26).
+  public static void NotifySessionReincarnated() {
+    ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || !Enabled() || IsServer()) return;
+    active._hasRegisteredInterest = false;
+    active._nextInterest = 0.0f;
+    active.Write("reincarnation_interest_rearm_requested", "client",
+        "last_zone=" + active._registeredInterestZoneX
+        + "," + active._registeredInterestZoneY);
+  }
+
   public static void CaptureTombstone(ZDOID uid) {
     ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || !Enabled() || !IsServer() ||
