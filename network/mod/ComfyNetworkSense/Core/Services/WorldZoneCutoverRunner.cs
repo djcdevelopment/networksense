@@ -1006,11 +1006,33 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     Vector2i referenceZone = ZoneSystem.GetZone(reference);
     bool zoneLoaded = false;
     bool areaReady = false;
+    // Name the readiness tail: full36's spawn deadline expired behind area_ready=false
+    // with nothing saying WHICH object never instantiated. Same shape as the teleport
+    // readiness naming, plus the owner id so a client-created duplicate is attributable.
+    List<string> missingObjects = new();
     try {
       zoneLoaded = ZoneSystem.instance != null &&
           ZoneSystem.instance.IsZoneLoaded(referenceZone);
       areaReady = ZNetScene.instance != null &&
           ZNetScene.instance.IsAreaReady(reference);
+      if (!areaReady && zoneLoaded && ZNetScene.instance != null &&
+          ZDOMan.instance != null) {
+        List<ZDO> sectorObjects = new();
+        ZDOMan.instance.FindSectorObjects(referenceZone, 1, 0, sectorObjects);
+        foreach (ZDO zdo in sectorObjects) {
+          if (zdo == null || zdo.GetPrefab() == 0 ||
+              ZNetScene.instance.GetPrefab(zdo.GetPrefab()) == null ||
+              ZNetScene.instance.FindInstance(zdo) != null)
+            continue;
+          if (missingObjects.Count == 5) break;
+          UnityEngine.GameObject missingPrefab =
+              ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+          missingObjects.Add(
+              zdo.m_uid + ":"
+              + (missingPrefab != null ? missingPrefab.name : "unknown")
+              + ":owner=" + zdo.GetOwner());
+        }
+      }
     } catch { }
     return "bootstrap_applied=" + _worldBootstrapApplied
         + " start_icon=" + startIcon
@@ -1020,6 +1042,9 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
         + " zone_loaded=" + zoneLoaded
         + " area_ready=" + areaReady
         + " local_player=" + (Player.m_localPlayer != null)
+        + (missingObjects.Count > 0
+            ? " missing_objects=" + string.Join("|", missingObjects.ToArray())
+            : string.Empty)
         + " " + ZdoJournalCutoverRunner.DescribeActiveRuntimeProgress();
   }
 

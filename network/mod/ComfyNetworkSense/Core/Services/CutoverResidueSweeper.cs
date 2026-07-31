@@ -25,6 +25,8 @@ public static class CutoverResidueSweeper {
   static readonly int C5ZoneProbePrefabHash =
       "ComfyNetworkSense_C5ZoneProbe".GetStableHashCode();
   static readonly int RaspberryPrefabHash = "Raspberry".GetStableHashCode();
+  static readonly int TerrainCompilerPrefabHash =
+      "_TerrainCompiler".GetStableHashCode();
   static readonly int C3TagHash =
       ZdoJournalCutoverRunner.ProbeTagName.GetStableHashCode();
   static readonly int C5TagHash =
@@ -133,6 +135,48 @@ public static class CutoverResidueSweeper {
       HandleDestroyedZdoMethod.Invoke(ZDOMan.instance, new object[] { uid });
     }
 
+    // Duplicate terrain compilers: a client that cannot yet see the zone's compiler
+    // through the journal creates its own persistent, client-owned one; an abort orphans
+    // it. Vanilla's self-heal (TerrainComp "removing it") only resolves when the removing
+    // client OWNS the duplicate, so later clients livelock on an uninstantiable ZDO and
+    // IsAreaReady never turns true (full36: 612 removals in 25s, spawn deadline missed).
+    // Keep the compiler with the highest data revision per zone; destroy the rest.
+    Dictionary<string, List<ZDO>> compilersByZone = new(StringComparer.Ordinal);
+    foreach (ZDO zdo in objects.Values) {
+      if (zdo == null || zdo.GetPrefab() != TerrainCompilerPrefabHash) continue;
+      Vector2i sector = zdo.GetSector();
+      string zoneKey = sector.x + "," + sector.y;
+      if (!compilersByZone.TryGetValue(zoneKey, out List<ZDO> group)) {
+        group = new List<ZDO>();
+        compilersByZone[zoneKey] = group;
+      }
+      group.Add(zdo);
+    }
+    int compilerDuplicatesDestroyed = 0;
+    int compilerDuplicatesSkippedLiveOwner = 0;
+    List<string> dedupedZones = new();
+    foreach (KeyValuePair<string, List<ZDO>> zone in compilersByZone) {
+      if (zone.Value.Count < 2) continue;
+      ZDO keep = zone.Value[0];
+      foreach (ZDO candidate in zone.Value) {
+        if (candidate.DataRevision > keep.DataRevision) keep = candidate;
+      }
+      int destroyedHere = 0;
+      foreach (ZDO candidate in zone.Value) {
+        if (ReferenceEquals(candidate, keep)) continue;
+        if (liveOwners.Contains(candidate.GetOwner())) {
+          compilerDuplicatesSkippedLiveOwner++;
+          continue;
+        }
+        HandleDestroyedZdoMethod.Invoke(
+            ZDOMan.instance, new object[] { candidate.m_uid });
+        destroyedHere++;
+      }
+      compilerDuplicatesDestroyed += destroyedHere;
+      dedupedZones.Add(zone.Key + ":" + zone.Value.Count + "->"
+          + (zone.Value.Count - destroyedHere));
+    }
+
     after = "zone_" + ReferenceZone.x + "," + ReferenceZone.y
         + "_after=" + CountReferenceZone();
 
@@ -157,6 +201,12 @@ public static class CutoverResidueSweeper {
         first = false;
       }
     }
+    detail.Append(" terrain_compiler_dupes_destroyed=")
+        .Append(compilerDuplicatesDestroyed)
+        .Append(" terrain_compiler_dupes_skipped_live_owner=")
+        .Append(compilerDuplicatesSkippedLiveOwner)
+        .Append(" terrain_compiler_zones=")
+        .Append(dedupedZones.Count == 0 ? "none" : string.Join("|", dedupedZones));
     effect = detail.ToString();
     return true;
   }
