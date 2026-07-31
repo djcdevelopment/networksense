@@ -23,6 +23,8 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   static readonly FieldInfo NetTimeField = AccessTools.Field(typeof(ZNet), "m_netTime");
   static readonly FieldInfo ConnectionStatusField =
       AccessTools.Field(typeof(ZNet), "m_connectionStatus");
+  static readonly FieldInfo ExternalErrorField =
+      AccessTools.Field(typeof(ZNet), "m_externalError");
   static LogicalPeerCutoverRunner _active;
 
   readonly LumberjacksGameSessionRunner _gameSession;
@@ -260,9 +262,17 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   public static bool SuppressClientConnect() {
     LogicalPeerCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || !Selected) return false;
+    // Native Connect(ISocket) normally establishes this state after ClientConnect
+    // selects a transport. The Steam-free path suppresses that entire selection,
+    // so establish the same lifecycle state here. Game.FixedUpdate otherwise sees
+    // ConnectionStatus.None on its first frame and immediately logs out before the
+    // Gateway can deliver the logical server/world descriptor.
+    ConnectionStatusField?.SetValue(null, ZNet.ConnectionStatus.Connecting);
+    ExternalErrorField?.SetValue(null, ZNet.ConnectionStatus.None);
     active.Write(
         "native_client_connect_suppressed",
-        "source=request_manifest native_target=false");
+        "source=request_manifest native_target=false"
+        + " logical_connection_status=connecting");
     return true;
   }
 
