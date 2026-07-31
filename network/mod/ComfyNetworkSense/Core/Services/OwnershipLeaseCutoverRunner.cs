@@ -111,6 +111,40 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
     return true;
   }
 
+  public bool BeginContentionProbe(
+      string actionId, float deadlineSeconds, out string detail) {
+    detail = string.Empty;
+    if (!Enabled()) {
+      detail = "ownership_lease_cutover_not_enabled";
+      return false;
+    }
+    if (IsServer() || Player.m_localPlayer == null ||
+        !SafeToken(actionId, 80)) {
+      detail = "ownership_lease_client_not_ready";
+      return false;
+    }
+    if (!_gameSession.WebSocketConnected ||
+        !SafeToken(_gameSession.LogicalPeerId, 80)) {
+      detail = "lumberjacks_session_not_connected";
+      return false;
+    }
+    if (_probe != null && !_probe.Terminal) {
+      detail = "another_ownership_probe_active";
+      return false;
+    }
+    _probe = new ClientProbe {
+        ActionId = actionId,
+        Mode = "contender",
+        DeadlineAt = Time.unscaledTime +
+            Mathf.Clamp(deadlineSeconds, 10.0f, 120.0f),
+        State = "contention_retry",
+        NextAt = Time.unscaledTime
+    };
+    Write("contention_probe_started", actionId,
+        "contender_logical_peer_id=" + _gameSession.LogicalPeerId);
+    return true;
+  }
+
   public bool TryGetProbeResult(
       string actionId, out bool terminal, out bool success, out string detail) {
     if (_probe == null ||
@@ -521,6 +555,37 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
     Write("action_rejected", _probe.ActionId,
         "attempt=" + payload.attempt_id + " reason=" + payload.reason +
         " epoch=" + payload.lease_epoch);
+    if (_probe.Mode == "contender") {
+      if (payload.reason == "lease_missing") {
+        _probe.State = "contention_retry";
+        _probe.NextAt = now + 0.5f;
+        return;
+      }
+      if (payload.reason == "holder_mismatch" &&
+          payload.lease_state == "active" &&
+          payload.uid_user != 0 && payload.uid_id != 0 &&
+          payload.lease_epoch > 0) {
+        _probe.Target = new ZDOID(payload.uid_user, payload.uid_id);
+        _probe.LeaseEpoch = payload.lease_epoch;
+        _probe.Terminal = true;
+        _probe.Success = true;
+        _probe.Detail =
+            "second_logical_peer_rejected_for_active_target" +
+            " uid=" + _probe.Target +
+            " epoch=" + _probe.LeaseEpoch +
+            " reason=holder_mismatch";
+        Write("contention_probe_passed", _probe.ActionId, _probe.Detail);
+        return;
+      }
+      if (payload.reason == "holder_mismatch" &&
+          payload.lease_state is "reclaimed" or "expired") {
+        _probe.State = "contention_retry";
+        _probe.NextAt = now + 0.25f;
+        return;
+      }
+      throw new InvalidDataException(
+          "ownership contention rejection invariant failed");
+    }
     if (_probe.State == "await_reclaimed_reject" &&
         payload.reason == "lease_reclaimed") {
       if (!QueueLeaseRequest(_probe, "reissue"))
@@ -591,6 +656,14 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
       return;
     }
     switch (_probe.State) {
+      case "contention_retry":
+        if (now < _probe.NextAt) return;
+        if (!QueueContentionRequest(_probe)) {
+          Fail("ownership_contention_queue_failed");
+          return;
+        }
+        _probe.State = "await_contention_reject";
+        break;
       case "disconnect_delay":
         if (now < _probe.NextAt) return;
         _probe.PreDisconnectResumeEpoch = _gameSession.ResumeEpoch;
@@ -650,6 +723,25 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
         ",\"origin_y\":" + F(probe.Origin.y) +
         ",\"origin_z\":" + F(probe.Origin.z);
     return _gameSession.TryQueueOwnershipLeaseRequest(fields);
+  }
+
+  bool QueueContentionRequest(ClientProbe probe) {
+    probe.Attempts++;
+    probe.AttemptId =
+        probe.ActionId + ".contend." +
+        probe.Attempts.ToString(CultureInfo.InvariantCulture);
+    string fields =
+        CommonFields(probe.ActionId, ZDOID.None) +
+        ",\"attempt_id\":\"" + Escape(probe.AttemptId) +
+        "\",\"phase\":\"contend\"" +
+        ",\"request_ordinal\":" +
+            probe.Attempts.ToString(CultureInfo.InvariantCulture) +
+        ",\"origin_x\":0,\"origin_y\":0,\"origin_z\":0";
+    bool queued = _gameSession.TryQueueOwnershipLeaseRequest(fields);
+    if (queued)
+      Write("contention_request_sent", probe.ActionId,
+          "attempt=" + probe.AttemptId);
+    return queued;
   }
 
   void SendAction(long epoch, string suffix) {
@@ -806,6 +898,7 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
             item_prefab = ExtractJsonString(raw, "item_prefab"),
             item_count = (int) ExtractJsonLong(raw, "item_count"),
             reason = ExtractJsonString(raw, "reason"),
+            lease_state = ExtractJsonString(raw, "lease_state"),
             result = ExtractJsonString(raw, "result")
         }
     };
@@ -956,6 +1049,7 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
 
   sealed class ClientProbe {
     public string ActionId;
+    public string Mode = "owner";
     public string State;
     public Vector3 Origin;
     public ZDOID Target;
@@ -1020,6 +1114,7 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
     public string item_prefab;
     public int item_count;
     public string reason;
+    public string lease_state;
     public string result;
   }
 }

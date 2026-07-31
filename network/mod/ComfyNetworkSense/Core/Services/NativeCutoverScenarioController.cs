@@ -156,7 +156,8 @@ public sealed class NativeCutoverScenarioController : IDisposable {
 
     HashSet<string> ids = new(StringComparer.Ordinal);
     foreach (NativeCutoverScenarioAction action in parsed.actions) {
-      if (action == null || !SafeToken(action.id, 80) || !ids.Add(action.id))
+      if (action == null || !SafeToken(action.id, 80) ||
+          !ids.Add((action.client ?? string.Empty) + ":" + action.id))
         return "manifest_action_id_invalid";
       if (!SafeClient(action.client)) return "manifest_action_client_invalid";
       if (action.deadline_seconds is < 1.0f or > 300.0f)
@@ -201,6 +202,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "zdo_journal_observe":
           break;
         case "ownership_lease_pickup":
+        case "ownership_contention":
         case "zone_membership_resume":
         case "zone_membership_withhold":
           break;
@@ -393,6 +395,26 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           if (!_ownershipLease.BeginProbe(
                   _active.id,
                   Mathf.Max(20.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail is "lumberjacks_session_not_connected"
+                or "ownership_lease_client_not_ready") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_ownershipLease.TryGetProbeResult(
+                _active.id, out bool terminal, out bool success,
+                out string probeDetail) || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "ownership_contention": {
+        if (!_sessionProbeStarted) {
+          if (!_ownershipLease.BeginContentionProbe(
+                  _active.id,
+                  Mathf.Max(10.0f, _active.deadline_seconds - 1.0f),
                   out string startDetail)) {
             if (startDetail is "lumberjacks_session_not_connected"
                 or "ownership_lease_client_not_ready") return;

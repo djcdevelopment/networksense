@@ -38,6 +38,7 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   string _remoteLogicalPeerId = string.Empty;
   long _remotePeerUid;
   bool _clientConstructed;
+  bool _descriptorFailureWritten;
   bool _disposed;
   long _suppressedInvokes;
 
@@ -78,8 +79,10 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
     if (!_worldZone.TryCreateLogicalWorld(
             out World world, out double networkTime,
             out string worldEpoch, out string detail)) {
-      if (_worldZone.DescriptorRejected)
+      if (_worldZone.DescriptorRejected && !_descriptorFailureWritten) {
+        _descriptorFailureWritten = true;
         Write("cold_join_failed", "reason=" + detail);
+      }
       return;
     }
 

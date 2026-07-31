@@ -1,5 +1,7 @@
 namespace ComfyNetworkSense;
 
+using System.Collections.Generic;
+
 using HarmonyLib;
 
 // These patches are both the C0 evidence boundary and the final-cutover poison guard. A bool
@@ -10,9 +12,18 @@ static class NativeSteamSocketPatches {
   [HarmonyPatch("SendQueuedPackages")]
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
-  static bool SendQueuedPackagesPrefix(ZSteamSocket __instance) {
+  static bool SendQueuedPackagesPrefix(
+      ZSteamSocket __instance, Queue<byte[]> ___m_sendQueue) {
     if (SocketQuarantineCutoverRunner.SuppressSocketSend(__instance))
       return false;
+    // UpdateAllSockets calls this method for the dedicated host's disconnected
+    // listen shell every frame. It returns before touching Steam and is not a
+    // remote-network use. Likewise, an empty queue performs no send. Keep those
+    // no-op polls outside the C8 native-zero denominator while continuing to
+    // poison every connected socket with an actual packet batch.
+    if (__instance == null || !__instance.IsConnected() ||
+        ___m_sendQueue == null || ___m_sendQueue.Count == 0)
+      return true;
     return !NativeNetworkLedger.Observe(
         "steam_send_queued_packages", "outbound", "steam_packet_batch");
   }
@@ -25,6 +36,10 @@ static class NativeSteamSocketPatches {
       __result = null;
       return false;
     }
+    // Recv also returns immediately for the dedicated host's disconnected
+    // listen shell. A connected native socket remains fully poisoned.
+    if (__instance == null || !__instance.IsConnected())
+      return true;
     bool blocked = NativeNetworkLedger.Observe(
         "steam_recv", "inbound", "steam_packet_poll");
     if (blocked) {
