@@ -7,6 +7,10 @@ public static class LumberjacksClientAuth {
   public static void Apply(ClientWebSocket socket) {
     string key = PluginConfig.LumberjacksClientAccessKey.Value;
     string enrollment = PluginConfig.LumberjacksEnrollmentId.Value;
+    if (NativeAutotestRequest.ActiveColdJoinFault == "invalid_enrollment") {
+      key = "invalid-enrollment-fixture";
+      enrollment = "c7-invalid-enrollment";
+    }
     if (!string.IsNullOrWhiteSpace(key))
       socket.Options.SetRequestHeader("X-Lumberjacks-Client-Key", key);
     if (!string.IsNullOrWhiteSpace(enrollment))

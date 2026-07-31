@@ -442,9 +442,12 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       } catch (OperationCanceledException) when (token.IsCancellationRequested) {
         break;
       } catch (Exception exception) {
+        string fault = NativeAutotestRequest.ActiveColdJoinFault;
         _events.Enqueue(new SessionEvent(
             "connection_error", 0, string.Empty,
-            exception.GetType().Name + ":" + exception.Message));
+            (string.IsNullOrEmpty(fault)
+                ? string.Empty : "fault_mode=" + fault + " ")
+            + exception.GetType().Name + ":" + exception.Message));
       } finally {
         try { _udp?.Close(); } catch { }
         _udp = null;

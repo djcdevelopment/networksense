@@ -37,6 +37,7 @@ public sealed class NativeAutotestRequest {
   public bool socket_quarantine_cutover;
   public bool steam_free_cold_join;
   public string world_descriptor_fault;
+  public string cold_join_fault;
 
   string _path;
   static string _activeRunId = string.Empty;
@@ -52,6 +53,7 @@ public sealed class NativeAutotestRequest {
   static bool _activeSocketQuarantineCutover;
   static bool _activeSteamFreeColdJoin;
   static string _activeWorldDescriptorFault = string.Empty;
+  static string _activeColdJoinFault = string.Empty;
 
   public string RunId => run_id ?? string.Empty;
   public string Client => client ?? string.Empty;
@@ -68,6 +70,7 @@ public sealed class NativeAutotestRequest {
   public bool SocketQuarantineCutover => socket_quarantine_cutover;
   public bool SteamFreeColdJoin => steam_free_cold_join;
   public string WorldDescriptorFault => world_descriptor_fault ?? string.Empty;
+  public string ColdJoinFault => cold_join_fault ?? string.Empty;
   public static string ActiveRunId => _activeRunId;
   public static string ActiveClient => _activeClient;
   public static string ActiveCharacter => _activeCharacter;
@@ -85,6 +88,7 @@ public sealed class NativeAutotestRequest {
       _activeSocketQuarantineCutover;
   public static bool ActiveSteamFreeColdJoin => _activeSteamFreeColdJoin;
   public static string ActiveWorldDescriptorFault => _activeWorldDescriptorFault;
+  public static string ActiveColdJoinFault => _activeColdJoinFault;
 
   public static bool TryLoad(out NativeAutotestRequest request, out string detail) {
     request = null;
@@ -161,8 +165,19 @@ public sealed class NativeAutotestRequest {
       _activeZdoJournalCanonicalSession = parsed.ZdoJournalCanonicalSession;
       _activeOwnershipLeaseCutover = parsed.OwnershipLeaseCutover;
       if (parsed.WorldDescriptorFault is not (
-              "" or "wrong_protocol" or "wrong_world_generation")) {
+              "" or "wrong_protocol" or "wrong_release" or
+              "wrong_world_generation")) {
         detail = "request_world_descriptor_fault_invalid";
+        return false;
+      }
+      if (parsed.ColdJoinFault is not (
+              "" or "invalid_enrollment" or "gateway_unavailable")) {
+        detail = "request_cold_join_fault_invalid";
+        return false;
+      }
+      if (!parsed.SteamFreeColdJoin &&
+          !string.IsNullOrEmpty(parsed.ColdJoinFault)) {
+        detail = "request_cold_join_fault_requires_steam_free";
         return false;
       }
       _activeWorldZoneCutover = parsed.WorldZoneCutover;
@@ -170,6 +185,7 @@ public sealed class NativeAutotestRequest {
       _activeSocketQuarantineCutover = parsed.SocketQuarantineCutover;
       _activeSteamFreeColdJoin = parsed.SteamFreeColdJoin;
       _activeWorldDescriptorFault = parsed.WorldDescriptorFault;
+      _activeColdJoinFault = parsed.ColdJoinFault;
       NativeNetworkLedger.SetRunContext(parsed.RunId, parsed.Client);
       NativeNetworkLedger.SetPoisonOverride(parsed.NativeNetworkPoison);
       request = parsed;
