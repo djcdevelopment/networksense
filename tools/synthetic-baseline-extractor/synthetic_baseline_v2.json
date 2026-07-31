@@ -1,0 +1,1403 @@
+{
+  "generated_utc": "2026-07-31T14:05:29Z",
+  "assembly_sha256": "3b26c8512778f6e0664b5af2a26f3c30993a00f584c1e76d9123a742b67e2004",
+  "RoutedRPCs": {
+    "ChatMessage": {
+      "registrations": [
+        "Chat.Awake"
+      ],
+      "signature": [
+        "Vector3",
+        "Int32",
+        "UserInfo",
+        "String"
+      ]
+    },
+    "DestroyZDO": {
+      "registrations": [
+        "ZDOMan..ctor"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "GlobalKeys": {
+      "registrations": [
+        "ZoneSystem.Start"
+      ],
+      "signature": [
+        "List\u00601"
+      ]
+    },
+    "LocationIcons": {
+      "registrations": [
+        "ZoneSystem.Start"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "Ping": {
+      "registrations": [
+        "Game.Start"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "Pong": {
+      "registrations": [
+        "Game.Start"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_DamageText": {
+      "registrations": [
+        "DamageText.Awake"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "RPC_DiscoverClosestLocation": {
+      "registrations": [
+        "Game.Start"
+      ],
+      "signature": [
+        "String",
+        "Vector3",
+        "String",
+        "Int32",
+        "Boolean",
+        "Boolean"
+      ]
+    },
+    "RPC_DiscoverLocationResponse": {
+      "registrations": [
+        "Game.Start"
+      ],
+      "signature": [
+        "String",
+        "Int32",
+        "Vector3",
+        "Boolean"
+      ]
+    },
+    "RPC_SetConnection": {
+      "registrations": [
+        "Game.Start"
+      ],
+      "signature": [
+        "ZDOID",
+        "ZDOID"
+      ]
+    },
+    "RPC_TeleportPlayer": {
+      "registrations": [
+        "Chat.Awake"
+      ],
+      "signature": [
+        "Vector3",
+        "Quaternion",
+        "Boolean"
+      ]
+    },
+    "RemoveGlobalKey": {
+      "registrations": [
+        "ZoneSystem.Start"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "RequestZDO": {
+      "registrations": [
+        "ZDOMan..ctor"
+      ],
+      "signature": [
+        "ZDOID"
+      ]
+    },
+    "SetEvent": {
+      "registrations": [
+        "RandEventSystem.Start"
+      ],
+      "signature": [
+        "String",
+        "Single",
+        "Vector3"
+      ]
+    },
+    "SetGlobalKey": {
+      "registrations": [
+        "ZoneSystem.Start"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "ShowMessage": {
+      "registrations": [
+        "MessageHud.Start"
+      ],
+      "signature": [
+        "Int32",
+        "String"
+      ]
+    },
+    "SleepStart": {
+      "registrations": [
+        "Game.Start"
+      ],
+      "signature": []
+    },
+    "SleepStop": {
+      "registrations": [
+        "Game.Start"
+      ],
+      "signature": []
+    },
+    "SpawnObject": {
+      "registrations": [
+        "ZNetScene.Awake"
+      ],
+      "signature": [
+        "Vector3",
+        "Quaternion",
+        "Int32"
+      ]
+    }
+  },
+  "DirectRPCs": {
+    "AdminList": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "Ban": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "CharacterID": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "ZDOID"
+      ]
+    },
+    "ClientHandshake": {
+      "registrations": [
+        "ZNet.OnNewConnection"
+      ],
+      "signature": [
+        "Boolean",
+        "String"
+      ]
+    },
+    "Disconnect": {
+      "registrations": [
+        "ZNet.OnNewConnection"
+      ],
+      "signature": []
+    },
+    "Error": {
+      "registrations": [
+        "ZNet.OnNewConnection"
+      ],
+      "signature": [
+        "Int32"
+      ]
+    },
+    "Kick": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "Kicked": {
+      "registrations": [
+        "ZNet.OnNewConnection"
+      ],
+      "signature": []
+    },
+    "NetTime": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "Double"
+      ]
+    },
+    "PeerInfo": {
+      "registrations": [
+        "ZNet.OnNewConnection"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "PlayerList": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "PrintBanned": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": []
+    },
+    "RPC_RemoteCommand": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "RemotePrint": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "RoutedRPC": {
+      "registrations": [
+        "ZRoutedRpc.AddPeer"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "Save": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": []
+    },
+    "SavePlayerProfile": {
+      "registrations": [
+        "ZNet.OnNewConnection"
+      ],
+      "signature": []
+    },
+    "ServerHandshake": {
+      "registrations": [
+        "ZNet.OnNewConnection"
+      ],
+      "signature": []
+    },
+    "ServerSyncedPlayerData": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "Unban": {
+      "registrations": [
+        "ZNet.RPC_PeerInfo"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "ZDOData": {
+      "registrations": [
+        "ZDOMan.AddPeer"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    }
+  },
+  "InstanceRPCs": {
+    "AddSaddle": {
+      "registrations": [
+        "Tameable.Awake"
+      ],
+      "signature": []
+    },
+    "Alert": {
+      "registrations": [
+        "BaseAI.Awake"
+      ],
+      "signature": []
+    },
+    "ApplyOperation": {
+      "registrations": [
+        "TerrainComp.Awake"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "Backward": {
+      "registrations": [
+        "Ship.Start"
+      ],
+      "signature": []
+    },
+    "Command": {
+      "registrations": [
+        "Tameable.Awake"
+      ],
+      "signature": [
+        "ZDOID",
+        "Boolean"
+      ]
+    },
+    "Controls": {
+      "registrations": [
+        "Sadle.Awake"
+      ],
+      "signature": [
+        "Vector3",
+        "Int32",
+        "Single"
+      ]
+    },
+    "FlashShield": {
+      "registrations": [
+        "PrivateArea.Awake"
+      ],
+      "signature": []
+    },
+    "Forward": {
+      "registrations": [
+        "Ship.Start"
+      ],
+      "signature": []
+    },
+    "Hide": {
+      "registrations": [
+        "MineRock.Start"
+      ],
+      "signature": [
+        "Int32"
+      ]
+    },
+    "Hit": {
+      "registrations": [
+        "MineRock.Start"
+      ],
+      "signature": [
+        "HitData",
+        "Int32"
+      ]
+    },
+    "MapData": {
+      "registrations": [
+        "MapTable.Start"
+      ],
+      "signature": [
+        "ZPackage"
+      ]
+    },
+    "Message": {
+      "registrations": [
+        "Player.Awake"
+      ],
+      "signature": [
+        "Int32",
+        "String",
+        "Int32"
+      ]
+    },
+    "OnDeath": {
+      "registrations": [
+        "Player.Awake"
+      ],
+      "signature": []
+    },
+    "OnNearProjectileHit": {
+      "registrations": [
+        "BaseAI.Awake"
+      ],
+      "signature": [
+        "Vector3",
+        "Single",
+        "ZDOID"
+      ]
+    },
+    "OnTargeted": {
+      "registrations": [
+        "Player.Awake"
+      ],
+      "signature": [
+        "Boolean",
+        "Boolean"
+      ]
+    },
+    "OpenRespons": {
+      "registrations": [
+        "Container.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "Pick": {
+      "registrations": [
+        "PickableItem.Awake"
+      ],
+      "signature": []
+    },
+    "Pickup": {
+      "registrations": [
+        "Fish.Start"
+      ],
+      "signature": []
+    },
+    "RPC_AddAdrenaline": {
+      "registrations": [
+        "Character.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_AddAmmo": {
+      "registrations": [
+        "Turret.Awake"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "RPC_AddFuel": {
+      "registrations": [
+        "CookingStation.Awake",
+        "Fireplace.Awake",
+        "ShieldGenerator.Start",
+        "Smelter.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_AddFuelAmount": {
+      "registrations": [
+        "Fireplace.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_AddItem": {
+      "registrations": [
+        "CookingStation.Awake",
+        "Fermenter.Awake"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "RPC_AddNoise": {
+      "registrations": [
+        "Character.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_AddOre": {
+      "registrations": [
+        "Smelter.Awake"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "RPC_AddStatusEffect": {
+      "registrations": [
+        "SEMan..ctor"
+      ],
+      "signature": [
+        "Int32",
+        "Boolean",
+        "Int32",
+        "Single"
+      ]
+    },
+    "RPC_AnimateLever": {
+      "registrations": [
+        "Incinerator.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_AnimateLeverReturn": {
+      "registrations": [
+        "Incinerator.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_Attach": {
+      "registrations": [
+        "Projectile.Awake"
+      ],
+      "signature": [
+        "ZDOID"
+      ]
+    },
+    "RPC_Attack": {
+      "registrations": [
+        "ShieldGenerator.Start"
+      ],
+      "signature": []
+    },
+    "RPC_BossSpawnInitiated": {
+      "registrations": [
+        "OfferingBowl.Start"
+      ],
+      "signature": []
+    },
+    "RPC_ClearCachedSupport": {
+      "registrations": [
+        "WearNTear.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_CreateFragments": {
+      "registrations": [
+        "Destructible.Awake",
+        "WearNTear.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_Damage": {
+      "registrations": [
+        "Character.Awake",
+        "Destructible.Awake",
+        "MineRock5.Awake",
+        "TreeBase.Awake",
+        "TreeLog.Awake",
+        "WearNTear.Awake"
+      ],
+      "signatures": [
+        [
+          "HitData"
+        ],
+        [
+          "HitData",
+          "Int32"
+        ]
+      ]
+    },
+    "RPC_DestroyAttachment": {
+      "registrations": [
+        "ArmorStand.Awake",
+        "ItemStand.Awake"
+      ],
+      "signatures": [
+        [],
+        [
+          "Int32"
+        ]
+      ]
+    },
+    "RPC_Drain": {
+      "registrations": [
+        "ResourceRoot.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_DropArrows": {
+      "registrations": [
+        "ArcheryTarget.Start"
+      ],
+      "signature": []
+    },
+    "RPC_DropItem": {
+      "registrations": [
+        "ArmorStand.Awake",
+        "ItemStand.Awake"
+      ],
+      "signatures": [
+        [],
+        [
+          "Int32"
+        ]
+      ]
+    },
+    "RPC_DropItemByName": {
+      "registrations": [
+        "ArmorStand.Awake"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "RPC_EatConfirmation": {
+      "registrations": [
+        "Feast.Start"
+      ],
+      "signature": []
+    },
+    "RPC_EmptyProcessed": {
+      "registrations": [
+        "Smelter.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_Extract": {
+      "registrations": [
+        "Beehive.Awake",
+        "SapCollector.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_FreezeFrame": {
+      "registrations": [
+        "Character.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_Grow": {
+      "registrations": [
+        "TreeBase.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_Heal": {
+      "registrations": [
+        "Character.Awake"
+      ],
+      "signature": [
+        "Single",
+        "Boolean"
+      ]
+    },
+    "RPC_HealthChanged": {
+      "registrations": [
+        "WearNTear.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_HitNow": {
+      "registrations": [
+        "ShieldGenerator.Start"
+      ],
+      "signature": []
+    },
+    "RPC_HitWhileDodging": {
+      "registrations": [
+        "Player.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_IncinerateRespons": {
+      "registrations": [
+        "Incinerator.Awake"
+      ],
+      "signature": [
+        "Int32"
+      ]
+    },
+    "RPC_MakePiece": {
+      "registrations": [
+        "ItemDrop.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_Nibble": {
+      "registrations": [
+        "FishingFloat.Awake"
+      ],
+      "signature": [
+        "ZDOID",
+        "Boolean"
+      ]
+    },
+    "RPC_OnEat": {
+      "registrations": [
+        "Feast.Start"
+      ],
+      "signature": []
+    },
+    "RPC_OnHit": {
+      "registrations": [
+        "Projectile.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_OnLegUse": {
+      "registrations": [
+        "Catapult.Start"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "RPC_OnStateChanged": {
+      "registrations": [
+        "Trap.Awake"
+      ],
+      "signature": [
+        "Int32",
+        "Int64"
+      ]
+    },
+    "RPC_Pick": {
+      "registrations": [
+        "Pickable.Awake"
+      ],
+      "signature": [
+        "Int32"
+      ]
+    },
+    "RPC_PlayMusic": {
+      "registrations": [
+        "MusicVolume.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_ProjectileHit": {
+      "registrations": [
+        "ArcheryTarget.Start"
+      ],
+      "signature": [
+        "Int32",
+        "Int32",
+        "Vector3"
+      ]
+    },
+    "RPC_Remove": {
+      "registrations": [
+        "WearNTear.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "RPC_RemoveBossSpawnInventoryItems": {
+      "registrations": [
+        "OfferingBowl.Start"
+      ],
+      "signature": []
+    },
+    "RPC_RemoveDoneItem": {
+      "registrations": [
+        "CookingStation.Awake"
+      ],
+      "signature": [
+        "Vector3",
+        "Int32"
+      ]
+    },
+    "RPC_Repair": {
+      "registrations": [
+        "WearNTear.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_RequestDenied": {
+      "registrations": [
+        "Vagon.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_RequestIncinerate": {
+      "registrations": [
+        "Incinerator.Awake"
+      ],
+      "signature": [
+        "Int64"
+      ]
+    },
+    "RPC_RequestOwn": {
+      "registrations": [
+        "ArmorStand.Awake",
+        "ItemDrop.Awake",
+        "ItemStand.Awake",
+        "Vagon.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_RequestStack": {
+      "registrations": [
+        "Container.Awake"
+      ],
+      "signature": [
+        "Int64"
+      ]
+    },
+    "RPC_RequestStateChange": {
+      "registrations": [
+        "Trap.Awake"
+      ],
+      "signature": [
+        "Int32"
+      ]
+    },
+    "RPC_ResetCloth": {
+      "registrations": [
+        "Character.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_SetAreaHealth": {
+      "registrations": [
+        "MineRock5.Awake"
+      ],
+      "signature": [
+        "Int32",
+        "Single"
+      ]
+    },
+    "RPC_SetConnected": {
+      "registrations": [
+        "TeleportWorld.Awake"
+      ],
+      "signature": [
+        "ZDOID"
+      ]
+    },
+    "RPC_SetFuel": {
+      "registrations": [
+        "ShieldGenerator.Start"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_SetFuelAmount": {
+      "registrations": [
+        "Fireplace.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_SetLoadedVisual": {
+      "registrations": [
+        "Catapult.Start"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "RPC_SetPicked": {
+      "registrations": [
+        "Pickable.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "RPC_SetPose": {
+      "registrations": [
+        "ArmorStand.Awake"
+      ],
+      "signature": [
+        "Int32"
+      ]
+    },
+    "RPC_SetSlotVisual": {
+      "registrations": [
+        "CookingStation.Awake"
+      ],
+      "signature": [
+        "Int32",
+        "String"
+      ]
+    },
+    "RPC_SetStayTTL": {
+      "registrations": [
+        "Projectile.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "RPC_SetTag": {
+      "registrations": [
+        "TeleportWorld.Awake"
+      ],
+      "signature": [
+        "String",
+        "String"
+      ]
+    },
+    "RPC_SetTamed": {
+      "registrations": [
+        "Character.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "RPC_SetTarget": {
+      "registrations": [
+        "Turret.Awake"
+      ],
+      "signature": [
+        "ZDOID"
+      ]
+    },
+    "RPC_SetVisualItem": {
+      "registrations": [
+        "ArmorStand.Awake"
+      ],
+      "signature": [
+        "Int32",
+        "String",
+        "Int32"
+      ]
+    },
+    "RPC_Shake": {
+      "registrations": [
+        "TreeBase.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_Shoot": {
+      "registrations": [
+        "Catapult.Start"
+      ],
+      "signature": []
+    },
+    "RPC_Sleep": {
+      "registrations": [
+        "MonsterAI.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_SpawnBoss": {
+      "registrations": [
+        "OfferingBowl.Start"
+      ],
+      "signature": [
+        "Vector3",
+        "Boolean"
+      ]
+    },
+    "RPC_StackResponse": {
+      "registrations": [
+        "Container.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "RPC_Stagger": {
+      "registrations": [
+        "Character.Awake"
+      ],
+      "signature": [
+        "Vector3"
+      ]
+    },
+    "RPC_Tap": {
+      "registrations": [
+        "Fermenter.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_TeleportTo": {
+      "registrations": [
+        "Character.Awake"
+      ],
+      "signature": [
+        "Vector3",
+        "Quaternion",
+        "Boolean"
+      ]
+    },
+    "RPC_ToggleOn": {
+      "registrations": [
+        "Fireplace.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_TryEat": {
+      "registrations": [
+        "Feast.Start"
+      ],
+      "signature": []
+    },
+    "RPC_UnSummon": {
+      "registrations": [
+        "Tameable.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_UpdateEffects": {
+      "registrations": [
+        "SapCollector.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_UpdateMaterial": {
+      "registrations": [
+        "MaterialVariation.Awake"
+      ],
+      "signature": [
+        "Int32"
+      ]
+    },
+    "RPC_UpdateVisual": {
+      "registrations": [
+        "ItemStand.Awake"
+      ],
+      "signature": []
+    },
+    "RPC_Wakeup": {
+      "registrations": [
+        "MonsterAI.Awake"
+      ],
+      "signature": []
+    },
+    "ReleaseControl": {
+      "registrations": [
+        "Sadle.Awake",
+        "ShipControlls.Awake"
+      ],
+      "signature": [
+        "Int64"
+      ]
+    },
+    "RemoveSaddle": {
+      "registrations": [
+        "Sadle.Awake"
+      ],
+      "signature": [
+        "Vector3"
+      ]
+    },
+    "RequestControl": {
+      "registrations": [
+        "Sadle.Awake",
+        "ShipControlls.Awake"
+      ],
+      "signature": [
+        "Int64"
+      ]
+    },
+    "RequestOpen": {
+      "registrations": [
+        "Container.Awake"
+      ],
+      "signature": [
+        "Int64"
+      ]
+    },
+    "RequestPickup": {
+      "registrations": [
+        "Fish.Start"
+      ],
+      "signature": []
+    },
+    "RequestRespons": {
+      "registrations": [
+        "Sadle.Awake",
+        "ShipControlls.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "RequestTakeAll": {
+      "registrations": [
+        "Container.Awake"
+      ],
+      "signature": [
+        "Int64"
+      ]
+    },
+    "Rudder": {
+      "registrations": [
+        "Ship.Start"
+      ],
+      "signature": [
+        "Single"
+      ]
+    },
+    "Say": {
+      "registrations": [
+        "Talker.Awake"
+      ],
+      "signature": [
+        "Int32",
+        "UserInfo",
+        "String"
+      ]
+    },
+    "SetAggravated": {
+      "registrations": [
+        "BaseAI.Awake"
+      ],
+      "signature": [
+        "Boolean",
+        "Int32"
+      ]
+    },
+    "SetName": {
+      "registrations": [
+        "Tameable.Awake"
+      ],
+      "signature": [
+        "String",
+        "String"
+      ]
+    },
+    "SetOwner": {
+      "registrations": [
+        "Bed.Awake"
+      ],
+      "signature": [
+        "Int64",
+        "String"
+      ]
+    },
+    "SetPlayed": {
+      "registrations": [
+        "MusicLocation.Awake"
+      ],
+      "signature": []
+    },
+    "SetSaddle": {
+      "registrations": [
+        "Tameable.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "SetTrigger": {
+      "registrations": [
+        "ZSyncAnimation.Awake"
+      ],
+      "signature": [
+        "String"
+      ]
+    },
+    "SetVisualItem": {
+      "registrations": [
+        "ItemStand.Awake"
+      ],
+      "signature": [
+        "String",
+        "Int32",
+        "Int32",
+        "Int32"
+      ]
+    },
+    "Step": {
+      "registrations": [
+        "FootStep.Start"
+      ],
+      "signature": [
+        "Int32",
+        "Vector3"
+      ]
+    },
+    "Stop": {
+      "registrations": [
+        "Ship.Start"
+      ],
+      "signature": []
+    },
+    "TakeAllRespons": {
+      "registrations": [
+        "Container.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "ToggleEnabled": {
+      "registrations": [
+        "PrivateArea.Awake"
+      ],
+      "signature": [
+        "Int64"
+      ]
+    },
+    "TogglePermitted": {
+      "registrations": [
+        "PrivateArea.Awake"
+      ],
+      "signature": [
+        "Int64",
+        "String"
+      ]
+    },
+    "Trigger": {
+      "registrations": [
+        "TriggerSpawner.Awake"
+      ],
+      "signature": []
+    },
+    "UseDoor": {
+      "registrations": [
+        "Door.Awake"
+      ],
+      "signature": [
+        "Boolean"
+      ]
+    },
+    "UseStamina": {
+      "registrations": [
+        "Player.Awake"
+      ],
+      "signature": [
+        "Single"
+      ]
+    }
+  },
+  "ComponentsWithZNetView": [
+    "AnimalAI",
+    "Aoe",
+    "ArcheryTarget",
+    "ArmorStand",
+    "Attack",
+    "BaseAI",
+    "Bed",
+    "Beehive",
+    "BossStone",
+    "CamShaker",
+    "Catapult",
+    "Character",
+    "CharacterAnimEvent",
+    "CharacterTimedDestruction",
+    "Cinder",
+    "CinderSpawner",
+    "Container",
+    "CookingStation",
+    "Corpse",
+    "CraftingStation",
+    "CreatureSpawner",
+    "Destructible",
+    "Door",
+    "DropProjectileOverDistance",
+    "DungeonGenerator",
+    "EggGrow",
+    "EggHatch",
+    "Feast",
+    "Fermenter",
+    "Fire",
+    "Fireplace",
+    "Fish",
+    "FishingFloat",
+    "Floating",
+    "FootStep",
+    "Gibber",
+    "Growup",
+    "Humanoid",
+    "ImpactEffect",
+    "Incinerator",
+    "ItemDrop",
+    "ItemStand",
+    "Ledge",
+    "Leviathan",
+    "LineConnect",
+    "LiquidVolume",
+    "LocationProxy",
+    "LootSpawner",
+    "LuredWisp",
+    "MapTable",
+    "MaterialVariation",
+    "MineRock",
+    "MineRock5",
+    "MonsterAI",
+    "MovementDamage",
+    "MusicLocation",
+    "MusicVolume",
+    "NpcTalk",
+    "Odin",
+    "OfferingBowl",
+    "Pet",
+    "Pickable",
+    "PickableItem",
+    "Piece",
+    "Plant",
+    "Player",
+    "PlayerController",
+    "PrivateArea",
+    "Procreation",
+    "Projectile",
+    "Radiator",
+    "Ragdoll",
+    "RandomAnimation",
+    "RandomFlyingBird",
+    "RandomMaterialValues",
+    "RandomSpawn",
+    "ResourceRoot",
+    "SEMan",
+    "SE_Demister",
+    "SE_Harpooned",
+    "Sadle",
+    "SapCollector",
+    "ShieldGenerator",
+    "Ship",
+    "ShipConstructor",
+    "ShipControlls",
+    "ShipEffects",
+    "SiegeMachine",
+    "Sign",
+    "Smelter",
+    "SnapToGround",
+    "SpawnArea",
+    "SpawnPrefab",
+    "SpawnSystem",
+    "StaticPhysics",
+    "StaticRotation",
+    "StationExtension",
+    "StatusEffect",
+    "Talker",
+    "Tameable",
+    "TeleportWorld",
+    "Terminal",
+    "TerrainComp",
+    "TerrainModifier",
+    "TimedDestruction",
+    "TombStone",
+    "Tracker",
+    "Trap",
+    "TreeBase",
+    "TreeLog",
+    "TriggerSpawner",
+    "Turret",
+    "Vagon",
+    "Valkyrie",
+    "Vine",
+    "VisEquipment",
+    "WearNTear",
+    "WispSpawner",
+    "ZNetScene",
+    "ZSyncAnimation",
+    "ZSyncTransform",
+    "ZoneSystem"
+  ],
+  "unresolved_registrations": [],
+  "counts": {
+    "routed": 19,
+    "direct": 21,
+    "instance": 120,
+    "components": 122,
+    "unresolved": 0
+  }
+}
