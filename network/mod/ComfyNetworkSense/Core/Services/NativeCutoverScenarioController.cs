@@ -351,14 +351,24 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           CompleteActive("local_owner_observed");
         break;
       case "zone_cross": {
+        // The raw position write can be reverted by the character's own
+        // per-tick processing, and completing off the intended target let
+        // the next action sample the pre-cross zone (full31's stale
+        // membership enter). Complete only when the zone read at tick entry
+        // - before this tick's write - already reports the new zone, so the
+        // move has demonstrably survived a full engine tick before any
+        // dependent action samples it.
+        Vector2i settledZone = ZoneSystem.GetZone(
+            ((Component)Player.m_localPlayer).transform.position);
+        if (settledZone.x != _originZone.x || settledZone.y != _originZone.y) {
+          CompleteActive(
+              "zone_changed_from=" + _originZone.x + "," + _originZone.y
+              + "_to=" + settledZone.x + "," + settledZone.y);
+          break;
+        }
         Vector3 target = _origin + Direction(_active.direction) * _active.distance_meters;
         target.y = _origin.y;
         ((Component)Player.m_localPlayer).transform.position = target;
-        Vector2i currentZone = ZoneSystem.GetZone(target);
-        if (currentZone.x != _originZone.x || currentZone.y != _originZone.y)
-          CompleteActive(
-              "zone_changed_from=" + _originZone.x + "," + _originZone.y
-              + "_to=" + currentZone.x + "," + currentZone.y);
         break;
       }
       case "teleport_to": {
@@ -698,6 +708,20 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           ZDOID.None, _active.radius_meters, requireLocalTarget: true,
           out ZDO sourceZdo, out ZDO targetZdo, out string findDetail);
       if (source == null) {
+        // Far-portal dependency delivery is AoI-transient right after a
+        // relocation: full32 failed 2s into a 22s deadline while the linked
+        // portal's ZDO was still in flight. Wait for the correlated arrival,
+        // bounded by the action deadline, instead of failing on capacity
+        // timing; malformed portal state still fails immediately below.
+        if (findDetail is
+            "portal_target_descriptor_missing" or
+            "distant_portal_pair_not_in_aoi") {
+          if (now >= _nextActionDiagnosticAt) {
+            _nextActionDiagnosticAt = now + 5.0f;
+            WriteReceipt("portal_pair_await_dependencies", _active.id, findDetail);
+          }
+          return;
+        }
         FailActive(findDetail);
         return;
       }
@@ -957,14 +981,25 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       ZDOMan.instance?.FindSectorObjects(targetZone, 1, 0, objects);
       int valid = 0;
       int instantiated = 0;
+      // When only a handful of objects hold area_ready false, name them:
+      // full34's i5 sat at missing=1 of 1,245 for ten stable seconds and the
+      // receipt could not say which object or prefab the readiness tail was.
+      List<string> missingObjects = new();
       if (ZNetScene.instance != null) {
         foreach (ZDO zdo in objects) {
           if (zdo == null || zdo.GetPrefab() == 0 ||
               ZNetScene.instance.GetPrefab(zdo.GetPrefab()) == null)
             continue;
           valid++;
-          if (ZNetScene.instance.FindInstance(zdo) != null)
+          if (ZNetScene.instance.FindInstance(zdo) != null) {
             instantiated++;
+          } else if (missingObjects.Count < 5) {
+            UnityEngine.GameObject missingPrefab =
+                ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+            missingObjects.Add(
+                zdo.m_uid + ":"
+                + (missingPrefab != null ? missingPrefab.name : "unknown"));
+          }
         }
       }
       bool areaReady =
@@ -983,6 +1018,9 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           + " valid_prefabs=" + valid
           + " instantiated=" + instantiated
           + " missing=" + Math.Max(0, valid - instantiated)
+          + (missingObjects.Count > 0
+              ? " missing_objects=" + string.Join("|", missingObjects.ToArray())
+              : string.Empty)
           + " " + (_zdoJournal?.DescribeRuntimeProgress()
               ?? "zdo_progress=unavailable");
     } catch (Exception exception) {

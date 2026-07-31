@@ -784,6 +784,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         Interlocked.Exchange(ref _nextClientSequence, 0);
       }
       ZdoJournalCutoverRunner.NotifySessionReincarnated();
+      WorldZoneCutoverRunner.NotifySessionReincarnated();
     }
 
     try {

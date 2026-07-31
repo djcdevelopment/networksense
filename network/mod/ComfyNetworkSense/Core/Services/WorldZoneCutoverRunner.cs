@@ -244,6 +244,24 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     EvaluateMembershipDeadline(now);
   }
 
+  /// A reincarnated Gateway holds no world descriptor until the dedicated
+  /// server reconnects and republishes, but the client cached its descriptor
+  /// once and the re-request gate never re-arms - so the first zone action
+  /// after reincarnation ran against pre-restart state and its snapshot
+  /// ladder wedged (full30 i5, applied=1 replayed=1 complete_count=0).
+  /// Dropping the cache re-arms both the descriptor re-request and
+  /// BeginMembershipProbe's world_zone_client_not_ready guard, so zone
+  /// actions wait for a descriptor confirmed against the new incarnation.
+  public static void NotifySessionReincarnated() {
+    WorldZoneCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || ZNet.instance == null || ZNet.instance.IsServer())
+      return;
+    active._descriptor = null;
+    active._descriptorRejected = false;
+    active._nextRequestAt = 0f;
+    active.Write("reincarnation_descriptor_rearm_requested", "client", string.Empty);
+  }
+
   void PublishDescriptor(float now) {
     if (!_gameSession.WebSocketConnected || now < _nextPublishAt) return;
     string runId = PluginConfig.NativeNetworkEvidenceRunId?.Value ?? string.Empty;
