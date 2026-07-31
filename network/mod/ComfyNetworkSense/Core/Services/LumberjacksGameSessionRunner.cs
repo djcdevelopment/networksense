@@ -115,6 +115,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       detail = "native_autotest_run_missing";
       return false;
     }
+    string receiptLog;
     lock (_gate) {
       if (!_webSocketConnected || string.IsNullOrEmpty(_connectionId)) {
         detail = "lumberjacks_session_not_connected";
@@ -139,11 +140,12 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         detail = "client_send_queue_full";
         return false;
       }
-      WriteReceipt(
+      receiptLog = WriteReceipt(
           "direct_pulse_probe_started", actionId,
           "mode=" + mode + " connection_id=" + _connectionId);
-      return true;
     }
+    ComfyNetworkSense.LogInfo(receiptLog);
+    return true;
   }
 
   public bool TryQueueLogicalPeerControl(string payloadFields) =>
@@ -330,6 +332,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       return false;
     }
 
+    string receiptLog;
     lock (_gate) {
       if (!_webSocketConnected || string.IsNullOrEmpty(_connectionId)) {
         detail = "lumberjacks_session_not_connected";
@@ -351,25 +354,26 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           InitialResumeEpoch = _resumeEpoch
       };
       if (mode == "external_resume") {
-        WriteReceipt("probe_started", actionId,
+        receiptLog = WriteReceipt("probe_started", actionId,
             "mode=" + mode + " connection_id=" + _connectionId
             + " resume_epoch=" + _resumeEpoch);
-        return true;
+      } else {
+        if (!TryQueueEnvelope(
+                "valheim_session_probe",
+                "\"run_id\":\"" + Escape(runId)
+                + "\",\"probe_id\":\"" + Escape(_probe.ProbeId)
+                + "\",\"mode\":\"" + Escape(mode) + "\"")) {
+          _probe = null;
+          detail = "client_send_queue_full";
+          return false;
+        }
+        receiptLog = WriteReceipt("probe_started", actionId,
+            "mode=" + mode + " connection_id=" + _connectionId
+            + " resume_epoch=" + _resumeEpoch);
       }
-      if (!TryQueueEnvelope(
-              "valheim_session_probe",
-              "\"run_id\":\"" + Escape(runId)
-              + "\",\"probe_id\":\"" + Escape(_probe.ProbeId)
-              + "\",\"mode\":\"" + Escape(mode) + "\"")) {
-        _probe = null;
-        detail = "client_send_queue_full";
-        return false;
-      }
-      WriteReceipt("probe_started", actionId,
-          "mode=" + mode + " connection_id=" + _connectionId
-          + " resume_epoch=" + _resumeEpoch);
-      return true;
     }
+    ComfyNetworkSense.LogInfo(receiptLog);
+    return true;
   }
 
   public bool TryGetProbeResult(
@@ -1114,29 +1118,32 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
               : (_directProbe != null && !_directProbe.Terminal
                   ? _directProbe.ActionId
                   : string.Empty));
-      WriteReceipt(item.Kind, actionId,
+      ComfyNetworkSense.LogInfo(WriteReceipt(item.Kind, actionId,
           "sequence=" + item.Sequence + " connection_id=" + item.ConnectionId
-          + (string.IsNullOrEmpty(item.Detail) ? string.Empty : " " + item.Detail));
+          + (string.IsNullOrEmpty(item.Detail) ? string.Empty : " " + item.Detail)));
     }
   }
 
   void EvaluateProbeDeadline(float now) {
+    string receiptLog;
     lock (_gate) {
       if (_probe == null || _probe.Terminal || now <= _probe.DeadlineAt) return;
       _probe.Terminal = true;
       if (_probe.Mode == "withhold_receipt" && _probe.ResponseSent) {
         _probe.Success = true;
         _probe.Detail = "bounded_receipt_timeout_no_native_fallback";
-        WriteReceipt("expected_timeout", _probe.ActionId, _probe.Detail);
+        receiptLog = WriteReceipt("expected_timeout", _probe.ActionId, _probe.Detail);
       } else {
         _probe.Success = false;
         _probe.Detail = "probe_deadline_exceeded";
-        WriteReceipt("probe_failed", _probe.ActionId, _probe.Detail);
+        receiptLog = WriteReceipt("probe_failed", _probe.ActionId, _probe.Detail);
       }
     }
+    ComfyNetworkSense.LogInfo(receiptLog);
   }
 
   void EvaluateDirectProbeDeadline(float now) {
+    string receiptLog;
     lock (_gate) {
       if (_directProbe == null || _directProbe.Terminal || now <= _directProbe.DeadlineAt)
         return;
@@ -1146,13 +1153,16 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           && _directProbe.LumberjacksReceived == 0) {
         _directProbe.Success = true;
         _directProbe.Detail = "direct_pulse_stale_no_native_fallback";
-        WriteReceipt("direct_pulse_expected_stale", _directProbe.ActionId, _directProbe.Detail);
+        receiptLog = WriteReceipt(
+            "direct_pulse_expected_stale", _directProbe.ActionId, _directProbe.Detail);
       } else {
         _directProbe.Success = false;
         _directProbe.Detail = "direct_pulse_deadline_exceeded";
-        WriteReceipt("direct_pulse_failed", _directProbe.ActionId, _directProbe.Detail);
+        receiptLog = WriteReceipt(
+            "direct_pulse_failed", _directProbe.ActionId, _directProbe.Detail);
       }
     }
+    ComfyNetworkSense.LogInfo(receiptLog);
   }
 
   bool TryQueue(string frame) {
@@ -1298,7 +1308,12 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       + ",\"timestamp\":\"" + DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture)
       + "\",\"payload\":{" + payloadFields + "}}";
 
-  void WriteReceipt(string state, string actionId, string detail) {
+  // Snapshot-then-log: callers holding _gate must finish this (field reads plus the
+  // already-async _writer.Write) while locked, then call ComfyNetworkSense.LogInfo on the
+  // returned line only after releasing _gate. The shared BepInEx log sink can stall; doing
+  // that call under _gate would wedge every _gate-guarded getter on any thread until it
+  // returns.
+  string WriteReceipt(string state, string actionId, string detail) {
     string runId = EvidenceRunId();
     Dictionary<string, object> row = new() {
         ["schema_version"] = 1,
@@ -1314,12 +1329,11 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         ["detail"] = detail ?? string.Empty
     };
     _writer.Write(ReceiptFileName, row);
-    ComfyNetworkSense.LogInfo(
-        "LUMBERJACKS_SESSION state=" + SafeMarker(state)
+    return "LUMBERJACKS_SESSION state=" + SafeMarker(state)
         + " run_id=" + SafeMarker(runId)
         + " client=" + SafeMarker(NativeAutotestRequest.ActiveClient)
         + " action=" + SafeMarker(actionId)
-        + " detail=" + SafeMarker(detail));
+        + " detail=" + SafeMarker(detail);
   }
 
   string EvidenceRunId() =>
