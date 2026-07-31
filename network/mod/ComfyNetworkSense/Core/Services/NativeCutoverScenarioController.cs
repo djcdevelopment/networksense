@@ -981,14 +981,25 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       ZDOMan.instance?.FindSectorObjects(targetZone, 1, 0, objects);
       int valid = 0;
       int instantiated = 0;
+      // When only a handful of objects hold area_ready false, name them:
+      // full34's i5 sat at missing=1 of 1,245 for ten stable seconds and the
+      // receipt could not say which object or prefab the readiness tail was.
+      List<string> missingObjects = new();
       if (ZNetScene.instance != null) {
         foreach (ZDO zdo in objects) {
           if (zdo == null || zdo.GetPrefab() == 0 ||
               ZNetScene.instance.GetPrefab(zdo.GetPrefab()) == null)
             continue;
           valid++;
-          if (ZNetScene.instance.FindInstance(zdo) != null)
+          if (ZNetScene.instance.FindInstance(zdo) != null) {
             instantiated++;
+          } else if (missingObjects.Count < 5) {
+            UnityEngine.GameObject missingPrefab =
+                ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+            missingObjects.Add(
+                zdo.m_uid + ":"
+                + (missingPrefab != null ? missingPrefab.name : "unknown"));
+          }
         }
       }
       bool areaReady =
@@ -1007,6 +1018,9 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           + " valid_prefabs=" + valid
           + " instantiated=" + instantiated
           + " missing=" + Math.Max(0, valid - instantiated)
+          + (missingObjects.Count > 0
+              ? " missing_objects=" + string.Join("|", missingObjects.ToArray())
+              : string.Empty)
           + " " + (_zdoJournal?.DescribeRuntimeProgress()
               ?? "zdo_progress=unavailable");
     } catch (Exception exception) {
