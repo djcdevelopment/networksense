@@ -136,6 +136,9 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     }
   }
 
+  public bool TryQueueLogicalPeerControl(string payloadFields) =>
+      TryQueueSemantic("valheim_logical_peer_control", payloadFields);
+
   public bool TryGetDirectPulseProbeResult(
       string actionId,
       out bool terminal,
@@ -513,6 +516,13 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         }
         if (string.Equals(type, "valheim_routed_rpc", StringComparison.OrdinalIgnoreCase)) {
           HandleRoutedRpcWorker(text);
+          continue;
+        }
+        if (type is
+            "valheim_logical_peer_attached" or
+            "valheim_logical_peer_detached" or
+            "valheim_logical_peer_control") {
+          LogicalPeerCutoverRunner.EnqueueCanonicalFrame(type, text);
           continue;
         }
         if (string.Equals(type, "valheim_zdo_delivery", StringComparison.OrdinalIgnoreCase)) {
@@ -1091,6 +1101,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   bool TryQueueSemantic(string type, string payloadFields) {
     if (type is not (
             "valheim_zdo_mutation" or
+            "valheim_logical_peer_control" or
             "valheim_zdo_interest" or
             "valheim_zdo_ack" or
             "valheim_ownership_lease_request" or
@@ -1159,8 +1170,10 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       return (PluginConfig.RoutedRpcCutoverEnabled?.Value == true ||
               (PluginConfig.ZdoJournalCutoverEnabled?.Value == true &&
                PluginConfig.ZdoJournalCanonicalSessionEnabled?.Value == true) ||
-              PluginConfig.OwnershipLeaseCutoverEnabled?.Value == true ||
-              PluginConfig.WorldZoneCutoverEnabled?.Value == true)
+               PluginConfig.OwnershipLeaseCutoverEnabled?.Value == true ||
+               PluginConfig.WorldZoneCutoverEnabled?.Value == true ||
+               PluginConfig.MotionAuthorityCutoverEnabled?.Value == true ||
+               PluginConfig.LogicalPeerCutoverEnabled?.Value == true)
           && ZNet.GetUID() != 0;
     if (Player.m_localPlayer == null &&
         !(PluginConfig.WorldZoneCutoverEnabled?.Value == true ||

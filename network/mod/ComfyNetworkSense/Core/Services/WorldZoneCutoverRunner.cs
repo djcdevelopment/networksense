@@ -86,6 +86,36 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
       NativeAutotestRequest.ActiveWorldZoneCutover;
 
   public bool DescriptorAccepted => _descriptor != null && !_descriptorRejected;
+  public bool DescriptorRejected => _descriptorRejected;
+
+  public bool TryCreateLogicalWorld(
+      out World world,
+      out double networkTime,
+      out string worldEpoch,
+      out string detail) {
+    world = null;
+    networkTime = 0;
+    worldEpoch = string.Empty;
+    detail = string.Empty;
+    if (_descriptorRejected) {
+      detail = "world_descriptor_rejected";
+      return false;
+    }
+    if (_descriptor == null) {
+      detail = "world_descriptor_not_ready";
+      return false;
+    }
+    world = new World {
+        m_name = _descriptor.world_name,
+        m_seed = _descriptor.seed,
+        m_seedName = _descriptor.seed_name,
+        m_uid = _descriptor.world_uid,
+        m_worldGenVersion = _descriptor.world_generation_version
+    };
+    networkTime = _descriptor.network_time;
+    worldEpoch = _descriptor.world_epoch;
+    return true;
+  }
 
   public void Update(float now) {
     if (_disposed) return;

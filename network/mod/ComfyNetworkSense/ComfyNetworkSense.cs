@@ -66,6 +66,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   ZdoJournalCutoverRunner _zdoJournalCutoverRunner;
   OwnershipLeaseCutoverRunner _ownershipLeaseCutoverRunner;
   WorldZoneCutoverRunner _worldZoneCutoverRunner;
+  LogicalPeerCutoverRunner _logicalPeerCutoverRunner;
   SocketQuarantineCutoverRunner _socketQuarantineCutoverRunner;
   readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
@@ -116,6 +117,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipLeaseCutoverRunner =
         new(_lumberjacksGameSessionRunner);
     _worldZoneCutoverRunner = new(_lumberjacksGameSessionRunner);
+    _logicalPeerCutoverRunner =
+        new(_lumberjacksGameSessionRunner, _worldZoneCutoverRunner);
     _socketQuarantineCutoverRunner =
         new(_lumberjacksGameSessionRunner, _worldZoneCutoverRunner);
     _lumberjacksMotionRunner = new(_lumberjacksGameSessionRunner);
@@ -302,6 +305,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _routedRpcCutoverRunner?.Update(now);
       _ownershipLeaseCutoverRunner?.Update(now);
       _worldZoneCutoverRunner?.Update(now);
+      _logicalPeerCutoverRunner?.Update(now);
       _socketQuarantineCutoverRunner?.Update(now);
       _lumberjacksMotionRunner?.Update(now);
     }
@@ -594,6 +598,46 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
                 : "native_world_and_zone_paths_restored");
         break;
 
+      case "motionAuthorityCutoverEnabled":
+        if (!bool.TryParse(requestedValue, out bool motionAuthorityEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldMotionAuthority = PluginConfig.MotionAuthorityCutoverEnabled.Value;
+        PluginConfig.MotionAuthorityCutoverEnabled.Value = motionAuthorityEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldMotionAuthority),
+            Bool(PluginConfig.MotionAuthorityCutoverEnabled.Value),
+            motionAuthorityEnabled
+                ? "canonical_motion_authority_armed"
+                : "canonical_motion_authority_disarmed");
+        break;
+
+      case "logicalPeerCutoverEnabled":
+        if (!bool.TryParse(requestedValue, out bool logicalPeerEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        if (logicalPeerEnabled &&
+            (!PluginConfig.DirectControlCutoverEnabled.Value ||
+             !PluginConfig.RoutedRpcCutoverEnabled.Value ||
+             !PluginConfig.ZdoJournalCutoverEnabled.Value ||
+             !PluginConfig.ZdoJournalCanonicalSessionEnabled.Value ||
+             !PluginConfig.OwnershipLeaseCutoverEnabled.Value ||
+             !PluginConfig.WorldZoneCutoverEnabled.Value ||
+             !PluginConfig.MotionAuthorityCutoverEnabled.Value ||
+             PluginConfig.SocketQuarantineCutoverEnabled.Value)) {
+          return RuntimeControlApplyResult.Refused(
+              "logical_peer_requires_coherent_c2a_through_c6_cutover");
+        }
+        bool oldLogicalPeer = PluginConfig.LogicalPeerCutoverEnabled.Value;
+        PluginConfig.LogicalPeerCutoverEnabled.Value = logicalPeerEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldLogicalPeer),
+            Bool(PluginConfig.LogicalPeerCutoverEnabled.Value),
+            logicalPeerEnabled
+                ? "steam_free_logical_peer_adapter_armed"
+                : "logical_peer_adapter_disarmed");
+        break;
+
       default:
         return RuntimeControlApplyResult.Refused("setting_not_allowlisted");
     }
@@ -863,6 +907,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipLeaseCutoverRunner = null;
     _worldZoneCutoverRunner?.Dispose();
     _worldZoneCutoverRunner = null;
+    _logicalPeerCutoverRunner?.Dispose();
+    _logicalPeerCutoverRunner = null;
     _socketQuarantineCutoverRunner?.Dispose();
     _socketQuarantineCutoverRunner = null;
     _lumberjacksMotionRunner?.Dispose();

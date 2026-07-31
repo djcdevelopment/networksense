@@ -36,6 +36,12 @@ static class NativeSteamSocketPatches {
 
 [HarmonyPatch(typeof(ZNet))]
 static class NativeHandshakeLedgerPatches {
+  [HarmonyPatch("ClientConnect")]
+  [HarmonyPrefix]
+  [HarmonyPriority(Priority.First)]
+  static bool ClientConnectPrefix() =>
+      !LogicalPeerCutoverRunner.SuppressClientConnect();
+
   [HarmonyPatch("OnNewConnection")]
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
@@ -114,6 +120,9 @@ static class DirectControlNativeInvokePatch {
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
   static bool InvokePrefix(ZRpc __instance, string method, object[] parameters) {
+    if (LogicalPeerCutoverRunner.TryHandleInvoke(
+            __instance, method, parameters))
+      return false;
     if (SocketQuarantineCutoverRunner.SuppressNativeInvoke(__instance, method))
       return false;
     return !DirectControlCutoverRunner.SuppressNativeInvoke(method, parameters);
@@ -125,6 +134,8 @@ static class SocketQuarantineRpcUpdatePatch {
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
   static bool UpdatePrefix(ZRpc __instance, ref ZRpc.ErrorCode __result) =>
+      !LogicalPeerCutoverRunner.TryVirtualizeRpcUpdate(
+          __instance, ref __result) &&
       !SocketQuarantineCutoverRunner.TryVirtualizeRpcUpdate(
           __instance, ref __result);
 }
@@ -141,7 +152,12 @@ static class SocketQuarantineRpcConnectedPatch {
 static class SocketQuarantineConnectionStatusPatch {
   [HarmonyPostfix]
   static void ConnectionStatusPostfix(ref ZNet.ConnectionStatus __result) =>
-      SocketQuarantineCutoverRunner.VirtualizeConnectionStatus(ref __result);
+      Virtualize(ref __result);
+
+  static void Virtualize(ref ZNet.ConnectionStatus result) {
+    LogicalPeerCutoverRunner.VirtualizeConnectionStatus(ref result);
+    SocketQuarantineCutoverRunner.VirtualizeConnectionStatus(ref result);
+  }
 }
 
 [HarmonyPatch(typeof(ZDOMan))]

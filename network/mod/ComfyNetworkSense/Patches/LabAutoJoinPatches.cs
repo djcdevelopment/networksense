@@ -29,6 +29,7 @@ public static class LabAutoJoinPatches
     private static MethodInfo _updateCharacterList;
     private static MethodInfo _onCharacterStart;
     private static MethodInfo _setSelectedProfile;
+    private static MethodInfo _loadMainScene;
 
     public static void Apply(Harmony harmony)
     {
@@ -38,6 +39,7 @@ public static class LabAutoJoinPatches
         _updateCharacterList = AccessTools.Method(typeof(FejdStartup), "UpdateCharacterList");
         _onCharacterStart = AccessTools.Method(typeof(FejdStartup), "OnCharacterStart");
         _setSelectedProfile = AccessTools.Method(typeof(FejdStartup), "SetSelectedProfile", new[] { typeof(string) });
+        _loadMainScene = AccessTools.Method(typeof(FejdStartup), "LoadMainScene");
 
         MethodBase target = AccessTools.Method(typeof(FejdStartup), "Start")
             ?? AccessTools.Method(typeof(FejdStartup), "Awake");
@@ -137,6 +139,21 @@ public static class LabAutoJoinPatches
         Invoke(_updateCharacterList, fejd, "UpdateCharacterList");
         yield return new WaitForSeconds(0.5f);
         Invoke(_onCharacterStart, fejd, "OnCharacterStart");
+        if (_nativeRequest?.SteamFreeColdJoin == true)
+        {
+            ZNet.ResetServerHost();
+            ZNet.SetServer(
+                server: false,
+                openServer: false,
+                publicServer: false,
+                serverName: string.Empty,
+                password: string.Empty,
+                world: null);
+            Invoke(_loadMainScene, fejd, "LoadMainScene");
+            _nativeRequest.Record(
+                "steam_free_scene_requested",
+                "native_connect=false native_handshake=false");
+        }
         _completed = true;
         ComfyNetworkSense.LogInfo($"Lab auto-join started existing character '{name}' at profile index {index}.");
         _nativeRequest?.Record("character_selected", "profile_index=" + index);

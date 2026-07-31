@@ -110,6 +110,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> WorldZoneCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> MotionAuthorityCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> SocketQuarantineCutoverEnabled { get; private set; }
+  public static ConfigEntry<bool> LogicalPeerCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -1035,6 +1036,16 @@ public static class PluginConfig {
             "C7 early falsifier: close the selected native ZSteamSocket and hold the existing "
             + "Lumberjacks logical peer/Valheim scene for 60-120 seconds. Default OFF until "
             + "the C7 socket-quarantine cell is deliberately armed.");
+
+    LogicalPeerCutoverEnabled =
+        config.Bind(
+            "NativeCutover",
+            "logicalPeerCutoverEnabled",
+            false,
+            "C7 final gate: construct authenticated Lumberjacks logical peers as Valheim "
+            + "bookkeeping shells without opening native sockets or carrying serialized ZRpc "
+            + "packages. Dedicated servers arm this explicitly; physical clients use the "
+            + "short-lived Steam-free request. Default OFF.");
 
     ServerRuntimeControlEnabled =
         config.Bind(
