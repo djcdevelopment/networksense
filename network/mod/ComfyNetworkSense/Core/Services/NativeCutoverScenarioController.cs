@@ -38,6 +38,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly ZdoJournalCutoverRunner _zdoJournal;
   readonly OwnershipLeaseCutoverRunner _ownershipLease;
   readonly WorldZoneCutoverRunner _worldZone;
+  readonly LumberjacksMotionRunner _motion;
 
   NativeCutoverScenarioManifest _manifest;
   NativeCutoverScenarioAction[] _actions = Array.Empty<NativeCutoverScenarioAction>();
@@ -57,12 +58,14 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       RoutedRpcCutoverRunner routedRpc,
       ZdoJournalCutoverRunner zdoJournal,
       OwnershipLeaseCutoverRunner ownershipLease,
-      WorldZoneCutoverRunner worldZone) {
+      WorldZoneCutoverRunner worldZone,
+      LumberjacksMotionRunner motion) {
     _gameSession = gameSession;
     _routedRpc = routedRpc;
     _zdoJournal = zdoJournal;
     _ownershipLease = ownershipLease;
     _worldZone = worldZone;
+    _motion = motion;
     Directory.CreateDirectory(_directory);
     _manifestPath = Path.Combine(_directory, ManifestFileName);
     _receiptPath = Path.Combine(_directory, ReceiptFileName);
@@ -197,6 +200,21 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "ownership_lease_pickup":
         case "zone_membership_resume":
         case "zone_membership_withhold":
+          break;
+        case "motion_rendezvous":
+          break;
+        case "motion_drive":
+        case "motion_observe":
+        case "motion_drive_gap":
+        case "motion_observe_gap":
+          if (action.duration_seconds is < 2.0f or > 20.0f ||
+              action.distance_meters is < 0.0f or > 24.0f ||
+              ((action.kind == "motion_drive" ||
+                action.kind == "motion_drive_gap") &&
+               action.distance_meters < 0.5f) ||
+              !AllowedDirection(action.direction) ||
+              !SafeToken(action.target_tag, 80))
+            return "manifest_motion_probe_invalid";
           break;
         default:
           return "manifest_action_kind_invalid";
@@ -401,6 +419,58 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         if (!_worldZone.TryGetMembershipProbeResult(
                 _active.id, out bool terminal, out bool success,
                 out string probeDetail) || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "motion_rendezvous": {
+        if (!_motion.TryRendezvous(
+                _active.id, out bool complete, out string rendezvousDetail)) {
+          FailActive(rendezvousDetail);
+          return;
+        }
+        if (complete) CompleteActive(rendezvousDetail);
+        break;
+      }
+      case "motion_drive":
+      case "motion_observe":
+      case "motion_drive_gap":
+      case "motion_observe_gap": {
+        if (!_sessionProbeStarted) {
+          string mode = kind switch {
+              "motion_drive" => "drive",
+              "motion_observe" => "observe",
+              "motion_drive_gap" => "drive_gap",
+              _ => "observe_gap"
+          };
+          if (!_motion.BeginAuthorityProbe(
+                  _active.id,
+                  mode,
+                  _active.target_tag,
+                  _active.duration_seconds,
+                  Mathf.Max(
+                      _active.duration_seconds + 2.0f,
+                      _active.deadline_seconds - 1.0f),
+                  _active.distance_meters,
+                  _active.direction,
+                  out string startDetail)) {
+            if (startDetail is
+                "lumberjacks_session_not_connected" or
+                "motion_remote_not_ready" or
+                "motion_local_player_not_ready")
+              return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_motion.TryGetAuthorityProbeResult(
+                _active.id,
+                out bool terminal,
+                out bool success,
+                out string probeDetail) ||
+            !terminal)
+          return;
         if (success) CompleteActive(probeDetail);
         else FailActive(probeDetail);
         break;

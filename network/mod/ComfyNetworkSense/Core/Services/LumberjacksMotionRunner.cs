@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
 using System.Net.WebSockets;
@@ -24,13 +25,23 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   const int ConnectTimeoutMs = 5000;
   const int ReceiveBufferBytes = 4096;
   const float InterframeDisplacementThresholdMeters = 0.05f;
+  const string AuthorityReceiptFileName = "motion-authority-cutover.jsonl";
+  const int GapFrameCount = 20;
+  static LumberjacksMotionRunner _active;
 
   readonly ConcurrentQueue<ReceivedMotion> _received = new();
+  readonly ConcurrentQueue<CanonicalFrame> _canonicalFrames = new();
   readonly Dictionary<string, RemoteMotion> _remote = new(StringComparer.Ordinal);
+  readonly HashSet<string> _appliedResyncKeys = new(StringComparer.Ordinal);
   readonly Dictionary<ZDOID, GameObject> _playerInstances = new();
   readonly HashSet<string> _drainedKeys = new(StringComparer.Ordinal);
+  readonly HashSet<string> _remoteDiscoveryWritten = new(StringComparer.Ordinal);
+  readonly HashSet<string> _missingInstanceWritten = new(StringComparer.Ordinal);
+  readonly HashSet<string> _localInstanceWritten = new(StringComparer.Ordinal);
   readonly object _outboundLock = new();
   readonly object _statusLock = new();
+  readonly LumberjacksGameSessionRunner _gameSession;
+  readonly TelemetryLogWriter _writer = new();
 
   CancellationTokenSource _cts;
   Task _connectionTask;
@@ -88,6 +99,23 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   long _interframeDisplacementOverThreshold;
   long _interframeDisplacementTotalMm;
   long _interframeDisplacementMaxMm;
+  long _canonicalFramesQueued;
+  long _canonicalMotionSent;
+  long _nativeWriterSuppressed;
+  long _nativePositionMasked;
+  long _authorityHolds;
+  long _authorityGaps;
+  long _reliableResyncQueued;
+  long _reliableResyncApplied;
+  long _reliableResyncReceipts;
+  long _authorityFailures;
+  MotionProbe _probe;
+  string _lastResyncActionId = string.Empty;
+  string _rendezvousActionId = string.Empty;
+  bool _rendezvousMoved;
+  bool _rendezvousCompleteWritten;
+  bool _localMotionIdentityWritten;
+  bool _disposed;
 
   public bool IsRunning => _cts != null && !_cts.IsCancellationRequested;
   public bool WebSocketConnected { get { lock (_statusLock) return _webSocketConnected; } }
@@ -100,19 +128,45 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   public long ReceivedWebSocket => Interlocked.Read(ref _receivedWebSocket);
   public long Applied => Interlocked.Read(ref _applied);
 
+  public LumberjacksMotionRunner(LumberjacksGameSessionRunner gameSession) {
+    _gameSession = gameSession;
+    LumberjacksMotionRunner previous = Interlocked.Exchange(ref _active, this);
+    previous?.Dispose();
+  }
+
   public void Update(float now) {
     if (!ShouldRun()) {
       if (IsRunning) Stop();
       return;
     }
 
+    DrainCanonicalFrames();
+    if (CanonicalSessionEnabled()) {
+      if (IsRunning) Stop();
+      SetState(
+          _gameSession?.WebSocketConnected == true
+              ? "canonical_session"
+              : "canonical_session_waiting",
+          _gameSession?.WebSocketConnected == true,
+          _gameSession?.UdpReady == true,
+          _gameSession?.LastError ?? string.Empty);
+      DrainReceived(now);
+      UpdateProbeDrive(now);
+      CaptureLocalMotion(now);
+      EvaluateProbe(now);
+      return;
+    }
+
     if (!IsRunning && now >= _nextConnectAt) Start();
     DrainReceived(now);
+    UpdateProbeDrive(now);
     CaptureLocalMotion(now);
+    EvaluateProbe(now);
   }
 
   public void LateUpdate(float deltaTime) {
-    if (!AlphaTransportSwitches.MotionApplyEnabled || IsDedicatedServer()) return;
+    if ((!AlphaTransportSwitches.MotionApplyEnabled && !AuthorityEnabled()) ||
+        IsDedicatedServer()) return;
     bool measurePhases = DetailedTelemetryEnabled();
     long renderStarted = measurePhases ? Stopwatch.GetTimestamp() : 0;
     _lateUpdateCalls++;
@@ -126,10 +180,25 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         float sampleAgeSeconds = now - remote.ArrivedAt;
         if (sampleAgeSeconds > freshSeconds) {
           _staleRemoteVisits++;
-          remote.HasAppliedPosition = false;
+          if (AuthorityEnabled()) {
+            HoldRemote(remote, "freshness_expired");
+          } else {
+            remote.HasAppliedPosition = false;
+          }
           if (!remote.FallbackNoted) {
             remote.FallbackNoted = true;
-            Interlocked.Increment(ref _staleFallbacks);
+            if (AuthorityEnabled()) {
+              Interlocked.Increment(ref _authorityHolds);
+              WriteAuthority(
+                  "hold_entered", _probe?.ActionId ?? string.Empty,
+                  "sequence=" + remote.Sequence
+                  + " age_ms="
+                  + SecondsToMilliseconds(sampleAgeSeconds)
+                      .ToString(CultureInfo.InvariantCulture)
+                  + " native_fallback=false");
+            } else {
+              Interlocked.Increment(ref _staleFallbacks);
+            }
           }
           continue;
         }
@@ -157,10 +226,20 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         if (instance == null) {
           remote.HasAppliedPosition = false;
           Interlocked.Increment(ref _unknownZdos);
+          string key = zdoId.UserID + ":" + zdoId.ID;
+          if (_missingInstanceWritten.Add(key))
+            WriteAuthority(
+                "remote_instance_missing", _probe?.ActionId ?? string.Empty,
+                "uid=" + key + " known_player_uids=" + KnownPlayerIds());
           continue;
         }
         if (Player.m_localPlayer != null && instance == Player.m_localPlayer.gameObject) {
           remote.HasAppliedPosition = false;
+          string key = zdoId.UserID + ":" + zdoId.ID;
+          if (_localInstanceWritten.Add(key))
+            WriteAuthority(
+                "remote_resolved_to_local", _probe?.ActionId ?? string.Empty,
+                "uid=" + key);
           continue;
         }
 
@@ -184,21 +263,58 @@ public sealed class LumberjacksMotionRunner : IDisposable {
               MetersToMillimeters(targetError));
         }
 
-        // Fail back to native for implausible corrections. Portals and initial spawn settle natively;
-        // Channel 2 resumes once both presentations are in the same neighborhood.
+        // Legacy observe/apply mode yields to native for an implausible correction. C6 authority
+        // mode fails closed and holds; hidden native correction is never re-enabled.
         if (targetError > 30.0f) {
-          remote.HasAppliedPosition = false;
+          if (AuthorityEnabled()) {
+            HoldRemote(remote, "implausible_target");
+            Interlocked.Increment(ref _authorityFailures);
+            WriteAuthority(
+                "target_rejected", _probe?.ActionId ?? string.Empty,
+                "sequence=" + remote.Sequence
+                + " target_error_mm="
+                + MetersToMillimeters(targetError)
+                    .ToString(CultureInfo.InvariantCulture)
+                + " native_fallback=false");
+          } else {
+            remote.HasAppliedPosition = false;
+          }
           _correctionGuardRejections++;
           continue;
         }
 
-        Vector3 appliedPosition = Vector3.Lerp(current, target, alpha);
+        Vector3 appliedPosition = remote.HardResync
+            ? target
+            : Vector3.Lerp(current, target, alpha);
         instance.transform.position = appliedPosition;
         Quaternion rotation = Quaternion.Euler(0.0f, remote.Snapshot.Yaw, 0.0f);
-        instance.transform.rotation = Quaternion.Slerp(instance.transform.rotation, rotation, alpha);
+        instance.transform.rotation = remote.HardResync
+            ? rotation
+            : Quaternion.Slerp(instance.transform.rotation, rotation, alpha);
+        Rigidbody body = instance.GetComponent<Rigidbody>();
+        if (body != null) {
+          body.linearVelocity = new Vector3(
+              remote.Snapshot.VelocityX,
+              remote.Snapshot.VelocityY,
+              remote.Snapshot.VelocityZ);
+        }
         remote.LastAppliedPosition = appliedPosition;
         remote.HasAppliedPosition = true;
         Interlocked.Increment(ref _applied);
+        if (remote.HardResync && !remote.ReliableAcknowledged) {
+          remote.ReliableAcknowledged = true;
+          Interlocked.Increment(ref _reliableResyncApplied);
+          _lastResyncActionId = remote.ActionId;
+          bool acknowledged =
+              _gameSession?.QueueReliableAck(remote.ReliableSequence) == true;
+          WriteAuthority(
+              "reliable_resync_applied", remote.ActionId,
+              "motion_sequence=" + remote.Sequence
+              + " reliable_sequence=" + remote.ReliableSequence
+              + " gap_start=" + remote.GapStart
+              + " gap_end=" + remote.GapEnd
+              + " ack_queued=" + (acknowledged ? "true" : "false"));
+        }
       }
     } finally {
       if (measurePhases) {
@@ -261,18 +377,43 @@ public sealed class LumberjacksMotionRunner : IDisposable {
           ["interframe_displacement_over_50mm"] = _interframeDisplacementOverThreshold,
           ["interframe_displacement_total_mm"] = _interframeDisplacementTotalMm,
           ["interframe_displacement_max_mm"] = _interframeDisplacementMaxMm,
+          ["authority_enabled"] = AuthorityEnabled(),
+          ["canonical_frames_queued"] =
+              Interlocked.Read(ref _canonicalFramesQueued),
+          ["canonical_motion_sent"] =
+              Interlocked.Read(ref _canonicalMotionSent),
+          ["native_writer_suppressed"] =
+              Interlocked.Read(ref _nativeWriterSuppressed),
+          ["native_position_masked"] =
+              Interlocked.Read(ref _nativePositionMasked),
+          ["authority_holds"] = Interlocked.Read(ref _authorityHolds),
+          ["authority_gaps"] = Interlocked.Read(ref _authorityGaps),
+          ["reliable_resync_queued"] =
+              Interlocked.Read(ref _reliableResyncQueued),
+          ["reliable_resync_applied"] =
+              Interlocked.Read(ref _reliableResyncApplied),
+          ["reliable_resync_receipts"] =
+              Interlocked.Read(ref _reliableResyncReceipts),
+          ["authority_failures"] =
+              Interlocked.Read(ref _authorityFailures),
+          ["probe_state"] = _probe == null
+              ? "none"
+              : (_probe.Terminal
+                  ? (_probe.Success ? "passed" : "failed")
+                  : "running"),
+          ["probe_detail"] = _probe?.Detail ?? string.Empty,
           ["last_error"] = _lastError
       };
     }
   }
 
   bool ShouldRun() {
-    if (!PluginConfig.LumberjacksMotionEnabled.Value || IsDedicatedServer()) return false;
-    // C1 establishes one canonical game-session connection. The motion-only socket cannot run
-    // beside it; C6 moves motion frames onto that shared binding after the reliable semantics land.
-    if (PluginConfig.LumberjacksGameSessionEnabled?.Value == true) return false;
+    if ((!PluginConfig.LumberjacksMotionEnabled.Value && !AuthorityEnabled()) ||
+        IsDedicatedServer()) return false;
     if (!AlphaTransportSwitches.LumberjacksWebSocketEnabled) return false;
     if (Player.m_localPlayer == null || ZNet.instance == null || ZNet.instance.IsServer()) return false;
+    if (CanonicalSessionEnabled())
+      return _gameSession != null;
     return !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value)
         && !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksClientAccessKey.Value);
   }
@@ -387,7 +528,10 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   }
 
   void CaptureLocalMotion(float now) {
-    if (!WebSocketConnected || now < _nextSampleAt) return;
+    bool connected = CanonicalSessionEnabled()
+        ? _gameSession?.WebSocketConnected == true
+        : WebSocketConnected;
+    if (!connected || now < _nextSampleAt) return;
     _nextSampleAt = now + 1.0f / Mathf.Clamp(PluginConfig.LumberjacksMotionSendHz.Value, 5.0f, 30.0f);
     Player player = Player.m_localPlayer;
     ZNetView view = player?.GetComponent<ZNetView>();
@@ -404,6 +548,39 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         player.transform.rotation.eulerAngles.y,
         unchecked((uint) DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
     OutboundMotion outbound = new(++_sequence, snapshot);
+    if (!_localMotionIdentityWritten) {
+      _localMotionIdentityWritten = true;
+      WriteAuthority(
+          "local_motion_identity", _probe?.ActionId ?? string.Empty,
+          "uid=" + snapshot.ZdoUserId + ":" + snapshot.ZdoId
+          + " position=" + PositionDetail(snapshot));
+    }
+    if (CanonicalSessionEnabled()) {
+      if (_probe != null && !_probe.Terminal &&
+          _probe.Mode == "drive_gap" &&
+          now >= _probe.GapStartsAt &&
+          _probe.GapDropped < GapFrameCount) {
+        if (_probe.GapDropped == 0)
+          _probe.GapStart = outbound.Sequence;
+        _probe.GapEnd = outbound.Sequence;
+        _probe.GapDropped++;
+        WriteAuthority(
+            "motion_frame_withheld", _probe.ActionId,
+            "sequence=" + outbound.Sequence
+            + " withheld_index=" + _probe.GapDropped
+            + " withheld_total=" + GapFrameCount);
+        if (_probe.GapDropped == GapFrameCount)
+          QueueReliableResync(_probe, outbound);
+        return;
+      }
+      if (_gameSession.TryQueueMotion(
+              outbound.Sequence, outbound.Snapshot, out string detail)) {
+        Interlocked.Increment(ref _canonicalFramesQueued);
+      } else if (_probe != null && !_probe.Terminal) {
+        FailProbe(detail);
+      }
+      return;
+    }
     lock (_outboundLock) { _outbound = outbound; _outboundGeneration++; }
   }
 
@@ -419,9 +596,30 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         _staleSequenceDrops++;
         continue;
       }
-      RemoteMotion updated = new(received.Sequence, received.Snapshot, now);
+      if (existing != null) {
+        ushort sequenceDelta =
+            unchecked((ushort) (received.Sequence - existing.Sequence));
+        if (sequenceDelta > 1 && sequenceDelta < 0x8000) {
+          Interlocked.Increment(ref _authorityGaps);
+          WriteAuthority(
+              "motion_gap_observed", _probe?.ActionId ?? string.Empty,
+              "previous_sequence=" + existing.Sequence
+              + " current_sequence=" + received.Sequence
+              + " missing=" + (sequenceDelta - 1));
+        }
+      }
+      RemoteMotion updated = new(
+          received.Sequence, received.Snapshot, now,
+          received.HardResync, received.ReliableSequence,
+          received.ActionId, received.GapStart, received.GapEnd);
       if (existing != null) updated.CopyPresentationState(existing);
       _remote[key] = updated;
+      if (_remoteDiscoveryWritten.Add(key))
+        WriteAuthority(
+            "remote_motion_discovered", _probe?.ActionId ?? string.Empty,
+            "uid=" + key
+            + " position=" + PositionDetail(received.Snapshot)
+            + " transport=" + (received.Udp ? "udp" : "websocket"));
     }
     if (drained > 0) {
       _drainBatches++;
@@ -443,6 +641,558 @@ public sealed class LumberjacksMotionRunner : IDisposable {
     Interlocked.Increment(ref _receiveIntervalCount);
     Interlocked.Add(ref _receiveIntervalTotalUs, intervalUs);
     UpdateMax(ref _receiveIntervalMaxUs, intervalUs);
+  }
+
+  public static void EnqueueCanonicalMotion(
+      ushort sequence, ValheimMotionSnapshot motion, bool udp) {
+    LumberjacksMotionRunner active = Volatile.Read(ref _active);
+    if (active == null || !AuthorityEnabled()) return;
+    active.EnqueueReceived(sequence, motion, udp);
+  }
+
+  public static void NotifyCanonicalMotionSent(ushort sequence, bool udp) {
+    LumberjacksMotionRunner active = Volatile.Read(ref _active);
+    if (active == null) return;
+    Interlocked.Increment(ref active._canonicalMotionSent);
+    if (udp) Interlocked.Increment(ref active._sentUdp);
+    else Interlocked.Increment(ref active._sentWebSocket);
+    if (active._probe != null && !active._probe.Terminal &&
+        (sequence <= 4 || IsPowerOfTwo(sequence))) {
+      active.WriteAuthority(
+          "motion_frame_sent", active._probe.ActionId,
+          "sequence=" + sequence
+          + " transport=" + (udp ? "udp" : "websocket")
+          + " connection_id=" + active._gameSession?.ConnectionId);
+    }
+  }
+
+  public static void EnqueueCanonicalFrame(string type, string text) {
+    LumberjacksMotionRunner active = Volatile.Read(ref _active);
+    if (active == null || !AuthorityEnabled()) return;
+    active._canonicalFrames.Enqueue(new CanonicalFrame(type, text));
+  }
+
+  public bool BeginAuthorityProbe(
+      string actionId,
+      string mode,
+      string correlationId,
+      float durationSeconds,
+      float deadlineSeconds,
+      float distanceMeters,
+      string direction,
+      out string detail) {
+    detail = string.Empty;
+    if (!AuthorityEnabled()) {
+      detail = "motion_authority_cutover_not_enabled";
+      return false;
+    }
+    if (_gameSession?.WebSocketConnected != true) {
+      detail = "lumberjacks_session_not_connected";
+      return false;
+    }
+    if (!SafeToken(actionId, 80) || !SafeToken(correlationId, 80) ||
+        mode is not ("drive" or "observe" or "drive_gap" or "observe_gap") ||
+        durationSeconds is < 1.0f or > 30.0f ||
+        deadlineSeconds < durationSeconds || deadlineSeconds > 60.0f ||
+        distanceMeters is < 0.0f or > 24.0f ||
+        !AllowedDirection(direction)) {
+      detail = "motion_probe_parameters_invalid";
+      return false;
+    }
+    if (Player.m_localPlayer == null) {
+      detail = "motion_local_player_not_ready";
+      return false;
+    }
+    if (mode.StartsWith("observe", StringComparison.Ordinal) &&
+        _remote.Count == 0) {
+      detail = "motion_remote_not_ready";
+      return false;
+    }
+    if (_probe != null && !_probe.Terminal) {
+      detail = "another_motion_probe_active";
+      return false;
+    }
+
+    float now = Time.unscaledTime;
+    _probe = new MotionProbe {
+        ActionId = actionId,
+        CorrelationId = correlationId,
+        Mode = mode,
+        StartedAt = now,
+        DeadlineAt = now + deadlineSeconds,
+        DurationSeconds = durationSeconds,
+        DistanceMeters = distanceMeters,
+        Direction = direction,
+        Origin = ((Component) Player.m_localPlayer).transform.position,
+        GapStartsAt = now + Mathf.Min(durationSeconds * 0.30f, 1.5f),
+        SentBefore = Interlocked.Read(ref _canonicalMotionSent),
+        ReceivedBefore =
+            Interlocked.Read(ref _receivedUdp) +
+            Interlocked.Read(ref _receivedWebSocket),
+        AppliedBefore = Interlocked.Read(ref _applied),
+        NativeWriterSuppressedBefore =
+            Interlocked.Read(ref _nativeWriterSuppressed),
+        NativePositionMaskedBefore =
+            Interlocked.Read(ref _nativePositionMasked),
+        HoldsBefore = Interlocked.Read(ref _authorityHolds),
+        GapsBefore = Interlocked.Read(ref _authorityGaps),
+        ResyncAppliedBefore =
+            Interlocked.Read(ref _reliableResyncApplied),
+        FailuresBefore = Interlocked.Read(ref _authorityFailures)
+    };
+    WriteAuthority(
+        "probe_started", actionId,
+        "mode=" + mode
+        + " correlation_id=" + correlationId
+        + " connection_id=" + _gameSession.ConnectionId
+        + " logical_peer_id=" + _gameSession.LogicalPeerId);
+    detail = "motion_probe_started";
+    return true;
+  }
+
+  public bool TryRendezvous(
+      string actionId, out bool complete, out string detail) {
+    complete = false;
+    detail = string.Empty;
+    if (!AuthorityEnabled() || _gameSession?.WebSocketConnected != true ||
+        Player.m_localPlayer == null) {
+      detail = "motion_rendezvous_not_ready";
+      return true;
+    }
+    if (!SafeToken(actionId, 80)) {
+      detail = "motion_rendezvous_action_invalid";
+      return false;
+    }
+
+    RemoteMotion selected = null;
+    foreach (RemoteMotion candidate in _remote.Values) {
+      if (selected == null || candidate.ArrivedAt > selected.ArrivedAt)
+        selected = candidate;
+    }
+    if (selected == null) {
+      detail = "motion_remote_not_ready";
+      return true;
+    }
+
+    if (!string.Equals(_rendezvousActionId, actionId, StringComparison.Ordinal)) {
+      _rendezvousActionId = actionId;
+      _rendezvousMoved = false;
+      _rendezvousCompleteWritten = false;
+    }
+
+    ZDOID remoteId = new(selected.Snapshot.ZdoUserId, selected.Snapshot.ZdoId);
+    GameObject remoteInstance = ResolveInstance(remoteId, Time.unscaledTime);
+    if (remoteInstance != null &&
+        remoteInstance != Player.m_localPlayer.gameObject) {
+      complete = true;
+      detail = "remote_player_instance_ready uid="
+          + remoteId.UserID + ":" + remoteId.ID;
+      if (!_rendezvousCompleteWritten) {
+        _rendezvousCompleteWritten = true;
+        WriteAuthority("rendezvous_complete", actionId, detail);
+      }
+      return true;
+    }
+
+    if (!_rendezvousMoved) {
+      Vector3 target = new(
+          selected.Snapshot.X + 3.0f,
+          selected.Snapshot.Y,
+          selected.Snapshot.Z + 3.0f);
+      Player.m_localPlayer.transform.position = target;
+      Rigidbody body = Player.m_localPlayer.GetComponent<Rigidbody>();
+      if (body != null) body.linearVelocity = Vector3.zero;
+      _rendezvousMoved = true;
+      WriteAuthority(
+          "rendezvous_moved", actionId,
+          "remote_uid=" + remoteId.UserID + ":" + remoteId.ID
+          + " target=" + target.x.ToString("0.###", CultureInfo.InvariantCulture)
+          + "," + target.y.ToString("0.###", CultureInfo.InvariantCulture)
+          + "," + target.z.ToString("0.###", CultureInfo.InvariantCulture)
+          + " source=lumberjacks_motion");
+    }
+    detail = "motion_rendezvous_waiting_for_remote_instance";
+    return true;
+  }
+
+  public bool TryGetAuthorityProbeResult(
+      string actionId,
+      out bool terminal,
+      out bool success,
+      out string detail) {
+    if (_probe == null ||
+        !string.Equals(_probe.ActionId, actionId, StringComparison.Ordinal)) {
+      terminal = false;
+      success = false;
+      detail = "motion_probe_not_found";
+      return false;
+    }
+    terminal = _probe.Terminal;
+    success = _probe.Success;
+    detail = _probe.Detail ?? string.Empty;
+    return true;
+  }
+
+  void UpdateProbeDrive(float now) {
+    MotionProbe probe = _probe;
+    if (probe == null || probe.Terminal ||
+        !probe.Mode.StartsWith("drive", StringComparison.Ordinal))
+      return;
+    float fraction = Mathf.Clamp01(
+        (now - probe.StartedAt) / probe.DurationSeconds);
+    Vector3 target =
+        probe.Origin +
+        Direction(probe.Direction) * (probe.DistanceMeters * fraction);
+    target.y = probe.Origin.y;
+    ((Component) Player.m_localPlayer).transform.position = target;
+  }
+
+  void EvaluateProbe(float now) {
+    MotionProbe probe = _probe;
+    if (probe == null || probe.Terminal) return;
+    if (now > probe.DeadlineAt) {
+      FailProbe("motion_probe_deadline_exceeded");
+      return;
+    }
+    if (now - probe.StartedAt < probe.DurationSeconds) return;
+
+    long sent =
+        Interlocked.Read(ref _canonicalMotionSent) - probe.SentBefore;
+    long received =
+        Interlocked.Read(ref _receivedUdp) +
+        Interlocked.Read(ref _receivedWebSocket) -
+        probe.ReceivedBefore;
+    long applied = Interlocked.Read(ref _applied) - probe.AppliedBefore;
+    long writerSuppressed =
+        Interlocked.Read(ref _nativeWriterSuppressed) -
+        probe.NativeWriterSuppressedBefore;
+    long positionMasked =
+        Interlocked.Read(ref _nativePositionMasked) -
+        probe.NativePositionMaskedBefore;
+    long holds =
+        Interlocked.Read(ref _authorityHolds) - probe.HoldsBefore;
+    long gaps =
+        Interlocked.Read(ref _authorityGaps) - probe.GapsBefore;
+    long resyncApplied =
+        Interlocked.Read(ref _reliableResyncApplied) -
+        probe.ResyncAppliedBefore;
+    long failures =
+        Interlocked.Read(ref _authorityFailures) - probe.FailuresBefore;
+
+    bool passed;
+    string reason;
+    switch (probe.Mode) {
+      case "drive":
+        passed = sent >= 12 && failures == 0;
+        reason = passed
+            ? "numbered_motion_sent"
+            : "drive_motion_boundary_incomplete";
+        break;
+      case "observe":
+        passed = received >= 12 && applied > 0 &&
+            writerSuppressed > 0 && failures == 0;
+        reason = passed
+            ? "numbered_motion_applied_native_writer_zero"
+            : "observe_motion_boundary_incomplete";
+        break;
+      case "drive_gap":
+        passed = sent >= 12 && probe.GapDropped == GapFrameCount &&
+            probe.ResyncReceiptAccepted && failures == 0;
+        reason = passed
+            ? "gap_withheld_reliable_resync_accepted"
+            : "drive_gap_boundary_incomplete";
+        break;
+      default:
+        passed = received >= 12 && applied > 0 &&
+            writerSuppressed > 0 && holds > 0 && gaps > 0 &&
+            resyncApplied > 0 &&
+            string.Equals(
+                _lastResyncActionId, probe.CorrelationId,
+                StringComparison.Ordinal) &&
+            failures == 0;
+        reason = passed
+            ? "gap_held_reliable_resync_applied_native_writer_zero"
+            : "observe_gap_boundary_incomplete";
+        break;
+    }
+
+    string counts =
+        "sent=" + sent
+        + " received=" + received
+        + " applied=" + applied
+        + " native_writer_suppressed=" + writerSuppressed
+        + " native_position_masked=" + positionMasked
+        + " holds=" + holds
+        + " gaps=" + gaps
+        + " resync_applied=" + resyncApplied
+        + " failures=" + failures
+        + " gap_dropped=" + probe.GapDropped;
+    if (!passed) {
+      FailProbe(reason + " " + counts);
+      return;
+    }
+    probe.Terminal = true;
+    probe.Success = true;
+    probe.Detail = reason + " " + counts;
+    WriteAuthority("probe_passed", probe.ActionId, probe.Detail);
+  }
+
+  void FailProbe(string detail) {
+    MotionProbe probe = _probe;
+    if (probe == null || probe.Terminal) return;
+    probe.Terminal = true;
+    probe.Success = false;
+    probe.Detail = detail;
+    Interlocked.Increment(ref _authorityFailures);
+    WriteAuthority("probe_failed", probe.ActionId, detail);
+  }
+
+  void QueueReliableResync(MotionProbe probe, OutboundMotion outbound) {
+    string fields =
+        "\"run_id\":\"" + JsonEscape(NativeAutotestRequest.ActiveRunId)
+        + "\",\"action_id\":\"" + JsonEscape(probe.CorrelationId)
+        + "\",\"source_motion_sequence\":" + outbound.Sequence
+        + ",\"gap_start_sequence\":" + probe.GapStart
+        + ",\"gap_end_sequence\":" + probe.GapEnd
+        + ",\"zdo_user_id\":"
+        + outbound.Snapshot.ZdoUserId.ToString(CultureInfo.InvariantCulture)
+        + ",\"zdo_id\":"
+        + outbound.Snapshot.ZdoId.ToString(CultureInfo.InvariantCulture)
+        + ",\"x\":" + Float(outbound.Snapshot.X)
+        + ",\"y\":" + Float(outbound.Snapshot.Y)
+        + ",\"z\":" + Float(outbound.Snapshot.Z)
+        + ",\"velocity_x\":" + Float(outbound.Snapshot.VelocityX)
+        + ",\"velocity_y\":" + Float(outbound.Snapshot.VelocityY)
+        + ",\"velocity_z\":" + Float(outbound.Snapshot.VelocityZ)
+        + ",\"yaw\":" + Float(outbound.Snapshot.Yaw)
+        + ",\"sent_milliseconds\":"
+        + outbound.Snapshot.SentMilliseconds
+            .ToString(CultureInfo.InvariantCulture)
+        + ",\"reason\":\"gap_recovery\"";
+    if (_gameSession?.TryQueueMotionResync(fields) != true) {
+      FailProbe("reliable_motion_resync_queue_failed");
+      return;
+    }
+    Interlocked.Increment(ref _reliableResyncQueued);
+    WriteAuthority(
+        "reliable_resync_queued", probe.ActionId,
+        "correlation_id=" + probe.CorrelationId
+        + " motion_sequence=" + outbound.Sequence
+        + " gap_start=" + probe.GapStart
+        + " gap_end=" + probe.GapEnd);
+  }
+
+  void DrainCanonicalFrames() {
+    while (_canonicalFrames.TryDequeue(out CanonicalFrame frame)) {
+      long reliableSequence = ExtractJsonLong(frame.Text, "seq");
+      string runId = ExtractJsonString(frame.Text, "run_id");
+      string actionId = ExtractJsonString(frame.Text, "action_id");
+      if (!string.Equals(
+              runId, NativeAutotestRequest.ActiveRunId,
+              StringComparison.Ordinal) ||
+          !SafeToken(actionId, 80) || reliableSequence <= 0) {
+        Interlocked.Increment(ref _authorityFailures);
+        WriteAuthority(
+            "canonical_frame_rejected", actionId,
+            "reason=run_or_sequence_invalid type=" + frame.Type);
+        continue;
+      }
+
+      if (frame.Type == "valheim_motion_resync_receipt") {
+        string result = ExtractJsonString(frame.Text, "result");
+        int targetCount = ExtractJsonInt(frame.Text, "target_count");
+        if (_probe != null && !_probe.Terminal &&
+            _probe.Mode == "drive_gap" &&
+            string.Equals(
+                _probe.CorrelationId, actionId,
+                StringComparison.Ordinal) &&
+            result == "accepted" && targetCount > 0) {
+          _probe.ResyncReceiptAccepted = true;
+        }
+        Interlocked.Increment(ref _reliableResyncReceipts);
+        bool acknowledged =
+            _gameSession?.QueueReliableAck(reliableSequence) == true;
+        WriteAuthority(
+            "reliable_resync_receipt", _probe?.ActionId ?? actionId,
+            "correlation_id=" + actionId
+            + " result=" + result
+            + " target_count=" + targetCount
+            + " reliable_sequence=" + reliableSequence
+            + " ack_queued=" + (acknowledged ? "true" : "false"));
+        continue;
+      }
+
+      long userId = ExtractJsonLong(frame.Text, "zdo_user_id");
+      long zdoIdLong = ExtractJsonLong(frame.Text, "zdo_id");
+      int motionSequence = ExtractJsonInt(
+          frame.Text, "source_motion_sequence");
+      int gapStart = ExtractJsonInt(frame.Text, "gap_start_sequence");
+      int gapEnd = ExtractJsonInt(frame.Text, "gap_end_sequence");
+      if (userId == 0 || zdoIdLong is <= 0 or > uint.MaxValue ||
+          motionSequence is <= 0 or > ushort.MaxValue ||
+          gapStart <= 0 || gapEnd < gapStart) {
+        Interlocked.Increment(ref _authorityFailures);
+        WriteAuthority(
+            "canonical_frame_rejected", actionId,
+            "reason=motion_resync_payload_invalid");
+        continue;
+      }
+      ValheimMotionSnapshot snapshot = new(
+          userId,
+          (uint) zdoIdLong,
+          ExtractJsonFloat(frame.Text, "x"),
+          ExtractJsonFloat(frame.Text, "y"),
+          ExtractJsonFloat(frame.Text, "z"),
+          ExtractJsonFloat(frame.Text, "velocity_x"),
+          ExtractJsonFloat(frame.Text, "velocity_y"),
+          ExtractJsonFloat(frame.Text, "velocity_z"),
+          ExtractJsonFloat(frame.Text, "yaw"),
+          (uint) Math.Max(
+              0, ExtractJsonLong(frame.Text, "sent_milliseconds")));
+      ApplyReliableResync(
+          (ushort) motionSequence, snapshot, reliableSequence,
+          actionId, gapStart, gapEnd);
+    }
+  }
+
+  void ApplyReliableResync(
+      ushort motionSequence,
+      ValheimMotionSnapshot snapshot,
+      long reliableSequence,
+      string actionId,
+      int gapStart,
+      int gapEnd) {
+    string resyncKey = actionId + ":" + motionSequence;
+    if (!_appliedResyncKeys.Add(resyncKey)) {
+      _gameSession?.QueueReliableAck(reliableSequence);
+      WriteAuthority(
+          "reliable_resync_replayed_idempotent",
+          _probe?.ActionId ?? actionId,
+          "correlation_id=" + actionId
+          + " motion_sequence=" + motionSequence
+          + " reliable_sequence=" + reliableSequence);
+      return;
+    }
+
+    ZDOID zdoId = new(snapshot.ZdoUserId, snapshot.ZdoId);
+    GameObject instance = ResolveInstance(zdoId, Time.unscaledTime);
+    if (instance == null ||
+        (Player.m_localPlayer != null &&
+         instance == Player.m_localPlayer.gameObject)) {
+      _appliedResyncKeys.Remove(resyncKey);
+      Interlocked.Increment(ref _authorityFailures);
+      WriteAuthority(
+          "reliable_resync_rejected",
+          _probe?.ActionId ?? actionId,
+          "reason=remote_player_not_found correlation_id=" + actionId);
+      return;
+    }
+
+    Vector3 target = new(snapshot.X, snapshot.Y, snapshot.Z);
+    instance.transform.position = target;
+    instance.transform.rotation =
+        Quaternion.Euler(0.0f, snapshot.Yaw, 0.0f);
+    Rigidbody body = instance.GetComponent<Rigidbody>();
+    if (body != null) {
+      body.linearVelocity = new Vector3(
+          snapshot.VelocityX, snapshot.VelocityY, snapshot.VelocityZ);
+    }
+    RemoteMotion remote = new(
+        motionSequence, snapshot, Time.unscaledTime,
+        false, 0, actionId, gapStart, gapEnd) {
+        HasAppliedPosition = true,
+        LastAppliedPosition = target,
+        ReliableAcknowledged = true
+    };
+    _remote[snapshot.ZdoUserId + ":" + snapshot.ZdoId] = remote;
+    Interlocked.Increment(ref _applied);
+    Interlocked.Increment(ref _authorityGaps);
+    Interlocked.Increment(ref _reliableResyncApplied);
+    _lastResyncActionId = actionId;
+    bool acknowledged =
+        _gameSession?.QueueReliableAck(reliableSequence) == true;
+    WriteAuthority(
+        "reliable_resync_applied", _probe?.ActionId ?? actionId,
+        "correlation_id=" + actionId
+        + " motion_sequence=" + motionSequence
+        + " reliable_sequence=" + reliableSequence
+        + " gap_start=" + gapStart
+        + " gap_end=" + gapEnd
+        + " ack_queued=" + (acknowledged ? "true" : "false"));
+  }
+
+  public static bool SuppressNativeTransform(ZSyncTransform transform) {
+    LumberjacksMotionRunner active = Volatile.Read(ref _active);
+    if (active == null || !AuthorityEnabled() ||
+        transform == null || !active.IsCanonicalRemote(transform))
+      return false;
+    long count = Interlocked.Increment(ref active._nativeWriterSuppressed);
+    if (count <= 4 || IsPowerOfTwo(count)) {
+      active.WriteAuthority(
+          "native_transform_writer_suppressed",
+          active._probe?.ActionId ?? string.Empty,
+          "count=" + count + " writer=ZSyncTransform.CustomFixedUpdate");
+    }
+    return true;
+  }
+
+  public static bool MaskNativePosition(ZDO zdo) {
+    LumberjacksMotionRunner active = Volatile.Read(ref _active);
+    if (active == null || !AuthorityEnabled() ||
+        zdo == null || !active.HasRemote(zdo.m_uid))
+      return false;
+    long count = Interlocked.Increment(ref active._nativePositionMasked);
+    if (count <= 4 || IsPowerOfTwo(count)) {
+      active.WriteAuthority(
+          "native_player_zdo_position_masked",
+          active._probe?.ActionId ?? string.Empty,
+          "count=" + count + " uid=" + zdo.m_uid);
+    }
+    return true;
+  }
+
+  bool IsCanonicalRemote(ZSyncTransform transform) {
+    try {
+      ZNetView view = transform.GetComponent<ZNetView>();
+      ZDO zdo = view?.GetZDO();
+      return zdo != null && HasRemote(zdo.m_uid);
+    } catch {
+      return false;
+    }
+  }
+
+  bool HasRemote(ZDOID id) =>
+      _remote.TryGetValue(
+          id.UserID + ":" + id.ID,
+          out RemoteMotion remote) &&
+      remote.HasAppliedPosition;
+
+  void HoldRemote(RemoteMotion remote, string reason) {
+    ZDOID zdoId = new(remote.Snapshot.ZdoUserId, remote.Snapshot.ZdoId);
+    GameObject instance = ResolveInstance(zdoId, Time.unscaledTime);
+    Rigidbody body = instance?.GetComponent<Rigidbody>();
+    if (body != null) body.linearVelocity = Vector3.zero;
+    remote.HoldReason = reason;
+  }
+
+  void WriteAuthority(string state, string actionId, string detail) {
+    Dictionary<string, object> row = new() {
+        ["schema_version"] = 1,
+        ["timestamp_utc"] =
+            DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture),
+        ["state"] = state,
+        ["run_id"] = NativeAutotestRequest.ActiveRunId,
+        ["client"] = NativeAutotestRequest.ActiveClient,
+        ["action_id"] = actionId ?? string.Empty,
+        ["detail"] = detail ?? string.Empty
+    };
+    _writer.Write(AuthorityReceiptFileName, row);
+    ComfyNetworkSense.LogInfo(
+        "MOTION_AUTHORITY state=" + SafeMarker(state)
+        + " run_id=" + SafeMarker(NativeAutotestRequest.ActiveRunId)
+        + " client=" + SafeMarker(NativeAutotestRequest.ActiveClient)
+        + " action=" + SafeMarker(actionId)
+        + " detail=" + SafeMarker(detail));
   }
 
   GameObject ResolveInstance(ZDOID zdoId, float now) {
@@ -526,7 +1276,72 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         "\"" + Regex.Escape(name) + "\"\\s*:\\s*(?<value>[0-9]+)", RegexOptions.IgnoreCase);
     return match.Success && int.TryParse(match.Groups["value"].Value, out int value) ? value : 0;
   }
+  static long ExtractJsonLong(string json, string name) {
+    Match match = Regex.Match(
+        json ?? string.Empty,
+        "\"" + Regex.Escape(name)
+        + "\"\\s*:\\s*(?<value>-?[0-9]+)",
+        RegexOptions.IgnoreCase);
+    return match.Success &&
+        long.TryParse(
+            match.Groups["value"].Value,
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out long value)
+        ? value
+        : 0;
+  }
+  static float ExtractJsonFloat(string json, string name) {
+    Match match = Regex.Match(
+        json ?? string.Empty,
+        "\"" + Regex.Escape(name)
+        + "\"\\s*:\\s*(?<value>-?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?)",
+        RegexOptions.IgnoreCase);
+    return match.Success &&
+        float.TryParse(
+            match.Groups["value"].Value,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out float value) &&
+        !float.IsNaN(value) && !float.IsInfinity(value)
+        ? value
+        : 0.0f;
+  }
   static string JsonEscape(string value) => (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
+  static string Float(float value) =>
+      value.ToString("R", CultureInfo.InvariantCulture);
+  static bool AuthorityEnabled() =>
+      PluginConfig.MotionAuthorityCutoverEnabled?.Value == true ||
+      NativeAutotestRequest.ActiveMotionAuthorityCutover;
+  static bool CanonicalSessionEnabled() =>
+      PluginConfig.LumberjacksGameSessionEnabled?.Value == true;
+  static bool SafeToken(string value, int maximumLength) {
+    if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength)
+      return false;
+    foreach (char character in value) {
+      if (!char.IsLetterOrDigit(character) &&
+          character is not ('-' or '_' or '.'))
+        return false;
+    }
+    return true;
+  }
+  static bool AllowedDirection(string value) =>
+      (value ?? string.Empty).Trim().ToLowerInvariant()
+          is "north" or "east" or "south" or "west";
+  static Vector3 Direction(string value) =>
+      (value ?? string.Empty).Trim().ToLowerInvariant() switch {
+          "east" => Vector3.right,
+          "south" => Vector3.back,
+          "west" => Vector3.left,
+          _ => Vector3.forward
+      };
+  static string SafeMarker(string value) =>
+      string.IsNullOrWhiteSpace(value)
+          ? "none"
+          : value.Trim().Replace(' ', '_').Replace('\t', '_')
+              .Replace('\r', '_').Replace('\n', '_');
+  static bool IsPowerOfTwo(long value) =>
+      value > 0 && (value & (value - 1)) == 0;
   static bool IsDedicatedServer() => ZNet.instance != null && ZNet.instance.IsServer() && ZNet.instance.IsDedicated();
   static bool DetailedTelemetryEnabled() =>
       PluginConfig.WriteTelemetryLogs != null && PluginConfig.WriteTelemetryLogs.Value;
@@ -534,6 +1349,18 @@ public sealed class LumberjacksMotionRunner : IDisposable {
       (long) Math.Round(Math.Max(0.0, seconds) * 1000.0);
   static long MetersToMillimeters(float meters) =>
       (long) Math.Round(Math.Max(0.0, meters) * 1000.0);
+  static string PositionDetail(ValheimMotionSnapshot snapshot) =>
+      snapshot.X.ToString("0.###", CultureInfo.InvariantCulture) + ","
+      + snapshot.Y.ToString("0.###", CultureInfo.InvariantCulture) + ","
+      + snapshot.Z.ToString("0.###", CultureInfo.InvariantCulture);
+  string KnownPlayerIds() {
+    StringBuilder builder = new();
+    foreach (ZDOID id in _playerInstances.Keys) {
+      if (builder.Length > 0) builder.Append(',');
+      builder.Append(id.UserID).Append(':').Append(id.ID);
+    }
+    return builder.Length == 0 ? "none" : builder.ToString();
+  }
   static long ElapsedMicroseconds(long started) =>
       StopwatchTicksToMicroseconds(Math.Max(0, Stopwatch.GetTimestamp() - started));
   static long StopwatchTicksToMicroseconds(long ticks) =>
@@ -559,21 +1386,104 @@ public sealed class LumberjacksMotionRunner : IDisposable {
     lock (_statusLock) { _state = state; _webSocketConnected = websocket; _udpReady = udp; _lastError = error ?? string.Empty; }
   }
 
-  public void Dispose() => Stop();
+  public void Dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    Stop();
+    Interlocked.CompareExchange(ref _active, null, this);
+    _writer.Dispose();
+  }
 
   sealed class OutboundMotion { public readonly ushort Sequence; public readonly ValheimMotionSnapshot Snapshot; public OutboundMotion(ushort s, ValheimMotionSnapshot m) { Sequence = s; Snapshot = m; } }
-  sealed class ReceivedMotion { public readonly ushort Sequence; public readonly ValheimMotionSnapshot Snapshot; public readonly bool Udp; public ReceivedMotion(ushort s, ValheimMotionSnapshot m, bool udp) { Sequence = s; Snapshot = m; Udp = udp; } }
+  sealed class ReceivedMotion {
+    public readonly ushort Sequence;
+    public readonly ValheimMotionSnapshot Snapshot;
+    public readonly bool Udp;
+    public readonly bool HardResync;
+    public readonly long ReliableSequence;
+    public readonly string ActionId;
+    public readonly int GapStart;
+    public readonly int GapEnd;
+    public ReceivedMotion(
+        ushort sequence, ValheimMotionSnapshot snapshot, bool udp,
+        bool hardResync = false, long reliableSequence = 0,
+        string actionId = "", int gapStart = 0, int gapEnd = 0) {
+      Sequence = sequence;
+      Snapshot = snapshot;
+      Udp = udp;
+      HardResync = hardResync;
+      ReliableSequence = reliableSequence;
+      ActionId = actionId ?? string.Empty;
+      GapStart = gapStart;
+      GapEnd = gapEnd;
+    }
+  }
   sealed class RemoteMotion {
     public readonly ushort Sequence;
     public readonly ValheimMotionSnapshot Snapshot;
     public readonly float ArrivedAt;
+    public readonly bool HardResync;
+    public readonly long ReliableSequence;
+    public readonly string ActionId;
+    public readonly int GapStart;
+    public readonly int GapEnd;
     public bool FallbackNoted;
     public bool HasAppliedPosition;
+    public bool ReliableAcknowledged;
     public Vector3 LastAppliedPosition;
-    public RemoteMotion(ushort s, ValheimMotionSnapshot m, float at) { Sequence = s; Snapshot = m; ArrivedAt = at; }
+    public string HoldReason;
+    public RemoteMotion(
+        ushort sequence, ValheimMotionSnapshot snapshot, float arrivedAt,
+        bool hardResync, long reliableSequence, string actionId,
+        int gapStart, int gapEnd) {
+      Sequence = sequence;
+      Snapshot = snapshot;
+      ArrivedAt = arrivedAt;
+      HardResync = hardResync;
+      ReliableSequence = reliableSequence;
+      ActionId = actionId ?? string.Empty;
+      GapStart = gapStart;
+      GapEnd = gapEnd;
+    }
     public void CopyPresentationState(RemoteMotion previous) {
       HasAppliedPosition = previous.HasAppliedPosition;
       LastAppliedPosition = previous.LastAppliedPosition;
+    }
+  }
+  sealed class MotionProbe {
+    public string ActionId;
+    public string CorrelationId;
+    public string Mode;
+    public float StartedAt;
+    public float DeadlineAt;
+    public float DurationSeconds;
+    public float DistanceMeters;
+    public string Direction;
+    public Vector3 Origin;
+    public float GapStartsAt;
+    public int GapDropped;
+    public ushort GapStart;
+    public ushort GapEnd;
+    public bool ResyncReceiptAccepted;
+    public long SentBefore;
+    public long ReceivedBefore;
+    public long AppliedBefore;
+    public long NativeWriterSuppressedBefore;
+    public long NativePositionMaskedBefore;
+    public long HoldsBefore;
+    public long GapsBefore;
+    public long ResyncAppliedBefore;
+    public long FailuresBefore;
+    public bool Terminal;
+    public bool Success;
+    public string Detail = string.Empty;
+  }
+  sealed class CanonicalFrame {
+    public readonly string Type;
+    public readonly string Text;
+    public CanonicalFrame(string type, string text) {
+      Type = type ?? string.Empty;
+      Text = text ?? string.Empty;
     }
   }
   sealed class ReceivedFrame { public readonly WebSocketMessageType Type; public readonly byte[] Data; public ReceivedFrame(WebSocketMessageType type, byte[] data) { Type = type; Data = data; } }

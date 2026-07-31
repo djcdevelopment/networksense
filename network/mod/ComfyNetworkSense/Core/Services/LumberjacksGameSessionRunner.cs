@@ -23,12 +23,14 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   const int ConnectTimeoutMs = 5000;
   const int ReceiveBufferBytes = 8192;
   const int MaxOutboundFrames = 256;
+  const int MaxMotionFrames = 64;
   const string ReceiptFileName = "lumberjacks-game-session.jsonl";
   static LumberjacksGameSessionRunner _active;
 
   readonly object _gate = new();
   readonly ConcurrentQueue<SessionEvent> _events = new();
   readonly ConcurrentQueue<string> _outbound = new();
+  readonly ConcurrentQueue<MotionOutbound> _motionOutbound = new();
   readonly object _outboundGate = new();
   readonly TelemetryLogWriter _writer = new();
 
@@ -36,6 +38,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   Task _connectionTask;
   ClientWebSocket _socket;
   UdpClient _udp;
+  ulong _udpToken;
   SessionProbe _probe;
   DirectPulseProbe _directProbe;
   string _state = "idle";
@@ -49,6 +52,11 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   long _lastServerSequence;
   long _nextClientSequence;
   int _outboundCount;
+  int _motionOutboundCount;
+  long _motionSentUdp;
+  long _motionSentWebSocket;
+  long _motionReceivedUdp;
+  long _motionReceivedWebSocket;
   float _nextConnectAt;
   bool _webSocketConnected;
   bool _udpReady;
@@ -247,6 +255,29 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   public bool TryQueueZoneMembershipLeave(string payloadFields) =>
       TryQueueSemantic("valheim_zone_membership_leave", payloadFields);
 
+  public bool TryQueueMotionResync(string payloadFields) =>
+      TryQueueSemantic("valheim_motion_resync_publish", payloadFields);
+
+  public bool TryQueueMotion(
+      ushort sequence, ValheimMotionSnapshot snapshot, out string detail) {
+    detail = string.Empty;
+    lock (_gate) {
+      if (!_webSocketConnected || string.IsNullOrEmpty(_connectionId)) {
+        detail = "lumberjacks_session_not_connected";
+        return false;
+      }
+    }
+    int depth = Interlocked.Increment(ref _motionOutboundCount);
+    if (depth > MaxMotionFrames) {
+      Interlocked.Decrement(ref _motionOutboundCount);
+      detail = "motion_send_queue_full";
+      return false;
+    }
+    _motionOutbound.Enqueue(new MotionOutbound(sequence, snapshot));
+    detail = "canonical_session_motion_queued";
+    return true;
+  }
+
   public bool AbortForOwnershipProbe() {
     ClientWebSocket socket;
     lock (_gate) socket = _socket;
@@ -353,6 +384,14 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           ["last_server_sequence"] = _lastServerSequence,
           ["next_client_sequence"] = _nextClientSequence,
           ["outbound_queue_depth"] = Volatile.Read(ref _outboundCount),
+          ["motion_outbound_queue_depth"] =
+              Volatile.Read(ref _motionOutboundCount),
+          ["motion_sent_udp"] = Interlocked.Read(ref _motionSentUdp),
+          ["motion_sent_websocket"] =
+              Interlocked.Read(ref _motionSentWebSocket),
+          ["motion_received_udp"] = Interlocked.Read(ref _motionReceivedUdp),
+          ["motion_received_websocket"] =
+              Interlocked.Read(ref _motionReceivedWebSocket),
           ["probe_state"] = _probe == null
               ? "none"
               : (_probe.Terminal ? (_probe.Success ? "passed" : "failed") : "running"),
@@ -389,6 +428,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     _cts = null;
     _socket = null;
     _udp = null;
+    _udpToken = 0;
     SetState("idle", false, false, string.Empty);
   }
 
@@ -405,6 +445,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       } finally {
         try { _udp?.Close(); } catch { }
         _udp = null;
+        _udpToken = 0;
         _socket = null;
         _events.Enqueue(new SessionEvent("socket_closed", 0, string.Empty, string.Empty));
       }
@@ -432,16 +473,30 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     using CancellationTokenSource connectionCts =
         CancellationTokenSource.CreateLinkedTokenSource(token);
     Task sender = RunOutgoing(socket, connectionCts.Token);
+    Task udpReceiver = null;
     byte[] buffer = new byte[ReceiveBufferBytes];
     try {
       while (!token.IsCancellationRequested && socket.State == WebSocketState.Open) {
         ReceivedFrame frame = await ReceiveFrame(socket, buffer, token).ConfigureAwait(false);
         if (frame == null) break;
+        if (frame.Type == WebSocketMessageType.Binary) {
+          if (ValheimMotionCodec.TryRead(
+                  frame.Data, tokenPrefixed: false,
+                  out ushort motionSequence,
+                  out ValheimMotionSnapshot motion)) {
+            Interlocked.Increment(ref _motionReceivedWebSocket);
+            LumberjacksMotionRunner.EnqueueCanonicalMotion(
+                motionSequence, motion, udp: false);
+          }
+          continue;
+        }
         if (frame.Type != WebSocketMessageType.Text) continue;
         string text = Encoding.UTF8.GetString(frame.Data);
         string type = ExtractJsonString(text, "type");
         if (string.Equals(type, "session_started", StringComparison.OrdinalIgnoreCase)) {
           HandleSessionStartedWorker(text);
+          if (_udp != null && udpReceiver == null)
+            udpReceiver = RunUdpReceive(_udp, connectionCts.Token);
           continue;
         }
         if (string.Equals(type, "valheim_control_request", StringComparison.OrdinalIgnoreCase)) {
@@ -500,36 +555,135 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             "valheim_zone_snapshot_release" or
             "valheim_zone_membership_left") {
           WorldZoneCutoverRunner.EnqueueCanonicalFrame(type, text);
+          continue;
+        }
+        if (type is
+            "valheim_motion_resync" or
+            "valheim_motion_resync_receipt") {
+          LumberjacksMotionRunner.EnqueueCanonicalFrame(type, text);
         }
       }
     } finally {
       connectionCts.Cancel();
       try { await sender.ConfigureAwait(false); } catch { }
+      if (udpReceiver != null) {
+        try { await udpReceiver.ConfigureAwait(false); } catch { }
+      }
     }
   }
 
   async Task RunOutgoing(ClientWebSocket socket, CancellationToken token) {
     while (!token.IsCancellationRequested && socket.State == WebSocketState.Open) {
-      if (!_outbound.TryDequeue(out string text)) {
-        await Task.Delay(10, token).ConfigureAwait(false);
+      if (_outbound.TryDequeue(out string text)) {
+        Interlocked.Decrement(ref _outboundCount);
+        byte[] bytes = Encoding.UTF8.GetBytes(text);
+        await socket.SendAsync(
+            new ArraySegment<byte>(bytes),
+            WebSocketMessageType.Text,
+            true,
+            token).ConfigureAwait(false);
+        string type = ExtractJsonString(text, "type");
+        if (IsOwnershipType(type)) {
+          _events.Enqueue(new SessionEvent(
+              "ownership_frame_sent",
+              ExtractJsonLong(text, "seq"),
+              ConnectionId,
+              "type=" + type));
+        }
         continue;
       }
-      Interlocked.Decrement(ref _outboundCount);
-      byte[] bytes = Encoding.UTF8.GetBytes(text);
-      await socket.SendAsync(
-          new ArraySegment<byte>(bytes),
-          WebSocketMessageType.Text,
-          true,
-          token).ConfigureAwait(false);
-      string type = ExtractJsonString(text, "type");
-      if (IsOwnershipType(type)) {
-        _events.Enqueue(new SessionEvent(
-            "ownership_frame_sent",
-            ExtractJsonLong(text, "seq"),
-            ConnectionId,
-            "type=" + type));
+
+      if (_motionOutbound.TryDequeue(out MotionOutbound motion)) {
+        Interlocked.Decrement(ref _motionOutboundCount);
+        bool sentUdp = false;
+        UdpClient udp = _udp;
+        ulong udpToken = _udpToken;
+        if (AlphaTransportSwitches.LumberjacksUdpEnabled &&
+            udp != null && udpToken != 0) {
+          try {
+            byte[] packet = ValheimMotionCodec.BuildUdpPacket(
+                udpToken, motion.Sequence, motion.Snapshot);
+            await udp.SendAsync(packet, packet.Length).ConfigureAwait(false);
+            Interlocked.Increment(ref _motionSentUdp);
+            sentUdp = true;
+          } catch (SocketException exception) when (!token.IsCancellationRequested) {
+            // A TCP-only gateway tunnel can advertise a UDP port that is unreachable from
+            // this client. Connected UDP reports that ICMP failure on a later send. Retain
+            // the numbered frame, retire UDP for this socket incarnation, and immediately
+            // use the canonical WebSocket binary lane instead of faulting the sender task.
+            RetireUdp(
+                udp, motion.Sequence, "send", exception.SocketErrorCode);
+          }
+        }
+        if (!sentUdp) {
+          byte[] frame = ValheimMotionCodec.BuildWebSocketFrame(
+              motion.Sequence, motion.Snapshot);
+          await socket.SendAsync(
+              new ArraySegment<byte>(frame),
+              WebSocketMessageType.Binary,
+              true,
+              token).ConfigureAwait(false);
+          Interlocked.Increment(ref _motionSentWebSocket);
+        }
+        LumberjacksMotionRunner.NotifyCanonicalMotionSent(
+            motion.Sequence, sentUdp);
+        continue;
+      }
+
+      await Task.Delay(10, token).ConfigureAwait(false);
+    }
+  }
+
+  async Task RunUdpReceive(UdpClient udp, CancellationToken token) {
+    using (token.Register(() => {
+      try { udp.Close(); } catch { }
+    })) {
+      while (!token.IsCancellationRequested) {
+        try {
+          UdpReceiveResult result = await udp.ReceiveAsync().ConfigureAwait(false);
+          if (ValheimMotionCodec.TryRead(
+                  result.Buffer, tokenPrefixed: true,
+                  out ushort sequence,
+                  out ValheimMotionSnapshot motion)) {
+            Interlocked.Increment(ref _motionReceivedUdp);
+            LumberjacksMotionRunner.EnqueueCanonicalMotion(
+                sequence, motion, udp: true);
+          }
+        } catch (ObjectDisposedException) {
+          break;
+        } catch (SocketException exception) {
+          if (token.IsCancellationRequested) break;
+          // Windows can surface ICMP port-unreachable on ReceiveAsync before the
+          // sender observes it. Retire once and break; retrying the connected socket
+          // here is an immediate ConnectionReset spin.
+          RetireUdp(udp, 0, "receive", exception.SocketErrorCode);
+          break;
+        }
       }
     }
+  }
+
+  bool RetireUdp(
+      UdpClient udp, long sequence, string source, SocketError error) {
+    bool retired = false;
+    lock (_gate) {
+      if (ReferenceEquals(_udp, udp)) {
+        _udp = null;
+        _udpToken = 0;
+        _udpReady = false;
+        retired = true;
+      }
+    }
+    try { udp.Close(); } catch { }
+    if (retired) {
+      _events.Enqueue(new SessionEvent(
+          "motion_transport_fallback",
+          sequence,
+          ConnectionId,
+          "udp_" + source + "_failed=" + error
+          + " fallback=binary_websocket"));
+    }
+    return retired;
   }
 
   void HandleSessionStartedWorker(string text) {
@@ -588,13 +742,16 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     try {
       _udp?.Close();
       _udp = null;
-      if (udpPort > 0 && ulong.TryParse(udpToken, out _)) {
+      _udpToken = 0;
+      if (udpPort > 0 && ulong.TryParse(udpToken, out ulong parsedUdpToken)) {
         UdpClient udp = new();
         udp.Connect(new Uri(NormalizeGatewayUrl()).Host, udpPort);
         _udp = udp;
+        _udpToken = parsedUdpToken;
       }
     } catch {
       _udp = null;
+      _udpToken = 0;
     }
     _events.Enqueue(new SessionEvent(
         "session_started", epoch, connection,
@@ -615,6 +772,17 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         "peer_bind_queued", 0, connection,
         "role=" + _localRole
         + " peer_uid=" + _localPeerUid.ToString(CultureInfo.InvariantCulture)));
+    if (_localRole == "client" &&
+        NativeAutotestRequest.ActiveMotionAuthorityCutover) {
+      if (!TryQueueEnvelope(
+              "join_region",
+              "\"region_id\":\""
+              + Escape(PluginConfig.LumberjacksRegionId.Value) + "\""))
+        throw new InvalidDataException("failed to queue motion region binding");
+      _events.Enqueue(new SessionEvent(
+          "motion_region_join_queued", 0, connection,
+          "region_id=" + PluginConfig.LumberjacksRegionId.Value));
+    }
   }
 
   bool HandleControlRequestWorker(string text, ClientWebSocket socket) {
@@ -934,7 +1102,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             "valheim_zone_membership_enter" or
             "valheim_zone_snapshot_publish" or
             "valheim_zone_snapshot_ack" or
-            "valheim_zone_membership_leave") ||
+            "valheim_zone_membership_leave" or
+            "valheim_motion_resync_publish") ||
         payloadFields == null || payloadFields.Length > 6 * 1024 * 1024)
       return false;
     lock (_gate) {
@@ -975,6 +1144,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   void ClearOutbound() {
     while (_outbound.TryDequeue(out _))
       Interlocked.Decrement(ref _outboundCount);
+    while (_motionOutbound.TryDequeue(out _))
+      Interlocked.Decrement(ref _motionOutboundCount);
   }
 
   long NextClientSequence() {
@@ -1246,6 +1417,15 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     public ReceivedFrame(WebSocketMessageType type, byte[] data) {
       Type = type;
       Data = data;
+    }
+  }
+
+  sealed class MotionOutbound {
+    public readonly ushort Sequence;
+    public readonly ValheimMotionSnapshot Snapshot;
+    public MotionOutbound(ushort sequence, ValheimMotionSnapshot snapshot) {
+      Sequence = sequence;
+      Snapshot = snapshot;
     }
   }
 }

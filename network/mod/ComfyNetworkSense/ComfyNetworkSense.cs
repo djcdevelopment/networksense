@@ -22,7 +22,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.44";
+  public const string PluginVersion = "0.5.45";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -115,7 +115,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipLeaseCutoverRunner =
         new(_lumberjacksGameSessionRunner);
     _worldZoneCutoverRunner = new(_lumberjacksGameSessionRunner);
-    _lumberjacksMotionRunner = new();
+    _lumberjacksMotionRunner = new(_lumberjacksGameSessionRunner);
     _motionTestController = new(RecordTransportControl);
     _nativeCutoverScenarioController =
         new(
@@ -123,7 +123,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             _routedRpcCutoverRunner,
             _zdoJournalCutoverRunner,
             _ownershipLeaseCutoverRunner,
-            _worldZoneCutoverRunner);
+            _worldZoneCutoverRunner,
+            _lumberjacksMotionRunner);
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();

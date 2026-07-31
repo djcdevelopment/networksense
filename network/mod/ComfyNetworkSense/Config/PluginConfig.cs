@@ -108,6 +108,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> ZdoJournalCanonicalSessionEnabled { get; private set; }
   public static ConfigEntry<bool> OwnershipLeaseCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> WorldZoneCutoverEnabled { get; private set; }
+  public static ConfigEntry<bool> MotionAuthorityCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -1015,6 +1016,15 @@ public static class PluginConfig {
             "C5 gate: replace the server-shaped native PeerInfo world fields with a validated "
             + "Lumberjacks descriptor and make explicit Lumberjacks zone membership authoritative. "
             + "Default OFF until the C5 connected-world boundary is deliberately armed.");
+
+    MotionAuthorityCutoverEnabled =
+        config.Bind(
+            "NativeCutover",
+            "motionAuthorityCutoverEnabled",
+            false,
+            "C6 gate: carry player motion on the canonical Lumberjacks UDP/WebSocket binding, "
+            + "make it the sole remote transform writer, hold on stale input, and recover only "
+            + "through an explicit reliable resync. Default OFF until the C6 boundary is armed.");
 
     ServerRuntimeControlEnabled =
         config.Bind(
