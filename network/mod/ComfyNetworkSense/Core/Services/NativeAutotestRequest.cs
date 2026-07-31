@@ -32,6 +32,8 @@ public sealed class NativeAutotestRequest {
   public bool zdo_journal_cutover;
   public bool zdo_journal_canonical_session;
   public bool ownership_lease_cutover;
+  public bool world_zone_cutover;
+  public string world_descriptor_fault;
 
   string _path;
   static string _activeRunId = string.Empty;
@@ -42,6 +44,8 @@ public sealed class NativeAutotestRequest {
   static bool _activeZdoJournalCutover;
   static bool _activeZdoJournalCanonicalSession;
   static bool _activeOwnershipLeaseCutover;
+  static bool _activeWorldZoneCutover;
+  static string _activeWorldDescriptorFault = string.Empty;
 
   public string RunId => run_id ?? string.Empty;
   public string Client => client ?? string.Empty;
@@ -53,6 +57,8 @@ public sealed class NativeAutotestRequest {
   public bool ZdoJournalCutover => zdo_journal_cutover;
   public bool ZdoJournalCanonicalSession => zdo_journal_canonical_session;
   public bool OwnershipLeaseCutover => ownership_lease_cutover;
+  public bool WorldZoneCutover => world_zone_cutover;
+  public string WorldDescriptorFault => world_descriptor_fault ?? string.Empty;
   public static string ActiveRunId => _activeRunId;
   public static string ActiveClient => _activeClient;
   public static string ActiveCharacter => _activeCharacter;
@@ -63,6 +69,8 @@ public sealed class NativeAutotestRequest {
       _activeZdoJournalCanonicalSession;
   public static bool ActiveOwnershipLeaseCutover =>
       _activeOwnershipLeaseCutover;
+  public static bool ActiveWorldZoneCutover => _activeWorldZoneCutover;
+  public static string ActiveWorldDescriptorFault => _activeWorldDescriptorFault;
 
   public static bool TryLoad(out NativeAutotestRequest request, out string detail) {
     request = null;
@@ -123,6 +131,13 @@ public sealed class NativeAutotestRequest {
       _activeZdoJournalCutover = parsed.ZdoJournalCutover;
       _activeZdoJournalCanonicalSession = parsed.ZdoJournalCanonicalSession;
       _activeOwnershipLeaseCutover = parsed.OwnershipLeaseCutover;
+      if (parsed.WorldDescriptorFault is not (
+              "" or "wrong_protocol" or "wrong_world_generation")) {
+        detail = "request_world_descriptor_fault_invalid";
+        return false;
+      }
+      _activeWorldZoneCutover = parsed.WorldZoneCutover;
+      _activeWorldDescriptorFault = parsed.WorldDescriptorFault;
       NativeNetworkLedger.SetRunContext(parsed.RunId, parsed.Client);
       NativeNetworkLedger.SetPoisonOverride(parsed.NativeNetworkPoison);
       request = parsed;

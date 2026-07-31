@@ -1302,6 +1302,7 @@ static class ZdoJournalCutoverPatches {
   static void CreateSyncListPostfix(object peer, List<ZDO> toSync) {
     ZdoJournalCutoverRunner.ObserveCreateSyncList(toSync);
     OwnershipLeaseCutoverRunner.FilterNativeSync(peer, toSync);
+    WorldZoneCutoverRunner.FilterNativeSync(toSync);
   }
 
   [HarmonyPatch(typeof(ZDOMan), "RPC_ZDOData")]

@@ -229,6 +229,24 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   public bool TryQueueOwnershipActionResult(string payloadFields) =>
       TryQueueSemantic("valheim_ownership_action_result", payloadFields);
 
+  public bool TryQueueWorldDescriptorPublish(string payloadFields) =>
+      TryQueueSemantic("valheim_world_descriptor_publish", payloadFields);
+
+  public bool TryQueueWorldDescriptorRequest(string payloadFields) =>
+      TryQueueSemantic("valheim_world_descriptor_request", payloadFields);
+
+  public bool TryQueueZoneMembershipEnter(string payloadFields) =>
+      TryQueueSemantic("valheim_zone_membership_enter", payloadFields);
+
+  public bool TryQueueZoneSnapshotPublish(string payloadFields) =>
+      TryQueueSemantic("valheim_zone_snapshot_publish", payloadFields);
+
+  public bool TryQueueZoneSnapshotAck(string payloadFields) =>
+      TryQueueSemantic("valheim_zone_snapshot_ack", payloadFields);
+
+  public bool TryQueueZoneMembershipLeave(string payloadFields) =>
+      TryQueueSemantic("valheim_zone_membership_leave", payloadFields);
+
   public bool AbortForOwnershipProbe() {
     ClientWebSocket socket;
     lock (_gate) socket = _socket;
@@ -470,6 +488,18 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             "valheim_ownership_action_completed" or
             "valheim_ownership_result_receipt") {
           OwnershipLeaseCutoverRunner.EnqueueCanonicalFrame(type, text);
+          continue;
+        }
+        if (type is
+            "valheim_world_descriptor" or
+            "valheim_world_descriptor_receipt" or
+            "valheim_world_descriptor_status" or
+            "valheim_zone_snapshot_build" or
+            "valheim_zone_snapshot_chunk" or
+            "valheim_zone_snapshot_complete" or
+            "valheim_zone_snapshot_release" or
+            "valheim_zone_membership_left") {
+          WorldZoneCutoverRunner.EnqueueCanonicalFrame(type, text);
         }
       }
     } finally {
@@ -898,7 +928,13 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             "valheim_ownership_lease_request" or
             "valheim_ownership_lease_issue" or
             "valheim_ownership_action" or
-            "valheim_ownership_action_result") ||
+            "valheim_ownership_action_result" or
+            "valheim_world_descriptor_publish" or
+            "valheim_world_descriptor_request" or
+            "valheim_zone_membership_enter" or
+            "valheim_zone_snapshot_publish" or
+            "valheim_zone_snapshot_ack" or
+            "valheim_zone_membership_leave") ||
         payloadFields == null || payloadFields.Length > 6 * 1024 * 1024)
       return false;
     lock (_gate) {
@@ -952,9 +988,12 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       return (PluginConfig.RoutedRpcCutoverEnabled?.Value == true ||
               (PluginConfig.ZdoJournalCutoverEnabled?.Value == true &&
                PluginConfig.ZdoJournalCanonicalSessionEnabled?.Value == true) ||
-              PluginConfig.OwnershipLeaseCutoverEnabled?.Value == true)
+              PluginConfig.OwnershipLeaseCutoverEnabled?.Value == true ||
+              PluginConfig.WorldZoneCutoverEnabled?.Value == true)
           && ZNet.GetUID() != 0;
-    if (Player.m_localPlayer == null) return false;
+    if (Player.m_localPlayer == null &&
+        !(PluginConfig.WorldZoneCutoverEnabled?.Value == true ||
+          NativeAutotestRequest.ActiveWorldZoneCutover)) return false;
     return !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value)
         && !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksClientAccessKey.Value);
   }

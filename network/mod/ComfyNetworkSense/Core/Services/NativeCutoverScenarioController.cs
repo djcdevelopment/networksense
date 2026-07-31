@@ -37,6 +37,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly RoutedRpcCutoverRunner _routedRpc;
   readonly ZdoJournalCutoverRunner _zdoJournal;
   readonly OwnershipLeaseCutoverRunner _ownershipLease;
+  readonly WorldZoneCutoverRunner _worldZone;
 
   NativeCutoverScenarioManifest _manifest;
   NativeCutoverScenarioAction[] _actions = Array.Empty<NativeCutoverScenarioAction>();
@@ -55,11 +56,13 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       LumberjacksGameSessionRunner gameSession,
       RoutedRpcCutoverRunner routedRpc,
       ZdoJournalCutoverRunner zdoJournal,
-      OwnershipLeaseCutoverRunner ownershipLease) {
+      OwnershipLeaseCutoverRunner ownershipLease,
+      WorldZoneCutoverRunner worldZone) {
     _gameSession = gameSession;
     _routedRpc = routedRpc;
     _zdoJournal = zdoJournal;
     _ownershipLease = ownershipLease;
+    _worldZone = worldZone;
     Directory.CreateDirectory(_directory);
     _manifestPath = Path.Combine(_directory, ManifestFileName);
     _receiptPath = Path.Combine(_directory, ReceiptFileName);
@@ -192,6 +195,8 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "zdo_journal_observe":
           break;
         case "ownership_lease_pickup":
+        case "zone_membership_resume":
+        case "zone_membership_withhold":
           break;
         default:
           return "manifest_action_kind_invalid";
@@ -372,6 +377,28 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           _sessionProbeStarted = true;
         }
         if (!_ownershipLease.TryGetProbeResult(
+                _active.id, out bool terminal, out bool success,
+                out string probeDetail) || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "zone_membership_resume":
+      case "zone_membership_withhold": {
+        if (!_sessionProbeStarted) {
+          string mode =
+              kind == "zone_membership_resume" ? "resume_once" : "withhold";
+          if (!_worldZone.BeginMembershipProbe(
+                  _active.id, mode,
+                  Mathf.Max(10.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail == "world_zone_client_not_ready") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_worldZone.TryGetMembershipProbeResult(
                 _active.id, out bool terminal, out bool success,
                 out string probeDetail) || !terminal) return;
         if (success) CompleteActive(probeDetail);

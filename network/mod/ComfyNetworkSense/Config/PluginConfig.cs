@@ -107,6 +107,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> ZdoJournalCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoJournalCanonicalSessionEnabled { get; private set; }
   public static ConfigEntry<bool> OwnershipLeaseCutoverEnabled { get; private set; }
+  public static ConfigEntry<bool> WorldZoneCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -1005,6 +1006,15 @@ public static class PluginConfig {
             + "logical-peer-bound Lumberjacks lease; suppress its native request, release, "
             + "CreateSyncList and destroyed-ZDO paths. Default OFF until the C4 ownership "
             + "boundary is deliberately armed.");
+
+    WorldZoneCutoverEnabled =
+        config.Bind(
+            "NativeCutover",
+            "worldZoneCutoverEnabled",
+            false,
+            "C5 gate: replace the server-shaped native PeerInfo world fields with a validated "
+            + "Lumberjacks descriptor and make explicit Lumberjacks zone membership authoritative. "
+            + "Default OFF until the C5 connected-world boundary is deliberately armed.");
 
     ServerRuntimeControlEnabled =
         config.Bind(
