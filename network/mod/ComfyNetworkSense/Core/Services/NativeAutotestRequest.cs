@@ -34,6 +34,7 @@ public sealed class NativeAutotestRequest {
   public bool ownership_lease_cutover;
   public bool world_zone_cutover;
   public bool motion_authority_cutover;
+  public bool socket_quarantine_cutover;
   public string world_descriptor_fault;
 
   string _path;
@@ -47,6 +48,7 @@ public sealed class NativeAutotestRequest {
   static bool _activeOwnershipLeaseCutover;
   static bool _activeWorldZoneCutover;
   static bool _activeMotionAuthorityCutover;
+  static bool _activeSocketQuarantineCutover;
   static string _activeWorldDescriptorFault = string.Empty;
 
   public string RunId => run_id ?? string.Empty;
@@ -61,6 +63,7 @@ public sealed class NativeAutotestRequest {
   public bool OwnershipLeaseCutover => ownership_lease_cutover;
   public bool WorldZoneCutover => world_zone_cutover;
   public bool MotionAuthorityCutover => motion_authority_cutover;
+  public bool SocketQuarantineCutover => socket_quarantine_cutover;
   public string WorldDescriptorFault => world_descriptor_fault ?? string.Empty;
   public static string ActiveRunId => _activeRunId;
   public static string ActiveClient => _activeClient;
@@ -75,6 +78,8 @@ public sealed class NativeAutotestRequest {
   public static bool ActiveWorldZoneCutover => _activeWorldZoneCutover;
   public static bool ActiveMotionAuthorityCutover =>
       _activeMotionAuthorityCutover;
+  public static bool ActiveSocketQuarantineCutover =>
+      _activeSocketQuarantineCutover;
   public static string ActiveWorldDescriptorFault => _activeWorldDescriptorFault;
 
   public static bool TryLoad(out NativeAutotestRequest request, out string detail) {
@@ -143,6 +148,7 @@ public sealed class NativeAutotestRequest {
       }
       _activeWorldZoneCutover = parsed.WorldZoneCutover;
       _activeMotionAuthorityCutover = parsed.MotionAuthorityCutover;
+      _activeSocketQuarantineCutover = parsed.SocketQuarantineCutover;
       _activeWorldDescriptorFault = parsed.WorldDescriptorFault;
       NativeNetworkLedger.SetRunContext(parsed.RunId, parsed.Client);
       NativeNetworkLedger.SetPoisonOverride(parsed.NativeNetworkPoison);

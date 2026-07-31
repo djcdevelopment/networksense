@@ -109,6 +109,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> OwnershipLeaseCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> WorldZoneCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> MotionAuthorityCutoverEnabled { get; private set; }
+  public static ConfigEntry<bool> SocketQuarantineCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -1024,7 +1025,16 @@ public static class PluginConfig {
             false,
             "C6 gate: carry player motion on the canonical Lumberjacks UDP/WebSocket binding, "
             + "make it the sole remote transform writer, hold on stale input, and recover only "
-            + "through an explicit reliable resync. Default OFF until the C6 boundary is armed.");
+             + "through an explicit reliable resync. Default OFF until the C6 boundary is armed.");
+
+    SocketQuarantineCutoverEnabled =
+        config.Bind(
+            "NativeCutover",
+            "socketQuarantineCutoverEnabled",
+            false,
+            "C7 early falsifier: close the selected native ZSteamSocket and hold the existing "
+            + "Lumberjacks logical peer/Valheim scene for 60-120 seconds. Default OFF until "
+            + "the C7 socket-quarantine cell is deliberately armed.");
 
     ServerRuntimeControlEnabled =
         config.Bind(

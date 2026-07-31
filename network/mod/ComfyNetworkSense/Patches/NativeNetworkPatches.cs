@@ -10,14 +10,21 @@ static class NativeSteamSocketPatches {
   [HarmonyPatch("SendQueuedPackages")]
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
-  static bool SendQueuedPackagesPrefix() =>
-      !NativeNetworkLedger.Observe(
-          "steam_send_queued_packages", "outbound", "steam_packet_batch");
+  static bool SendQueuedPackagesPrefix(ZSteamSocket __instance) {
+    if (SocketQuarantineCutoverRunner.SuppressSocketSend(__instance))
+      return false;
+    return !NativeNetworkLedger.Observe(
+        "steam_send_queued_packages", "outbound", "steam_packet_batch");
+  }
 
   [HarmonyPatch(nameof(ZSteamSocket.Recv))]
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
-  static bool RecvPrefix(ref ZPackage __result) {
+  static bool RecvPrefix(ZSteamSocket __instance, ref ZPackage __result) {
+    if (SocketQuarantineCutoverRunner.SuppressSocketReceive(__instance)) {
+      __result = null;
+      return false;
+    }
     bool blocked = NativeNetworkLedger.Observe(
         "steam_recv", "inbound", "steam_packet_poll");
     if (blocked) {
@@ -106,8 +113,35 @@ static class NativeHandshakeLedgerPatches {
 static class DirectControlNativeInvokePatch {
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
-  static bool InvokePrefix(string method, object[] parameters) =>
-      !DirectControlCutoverRunner.SuppressNativeInvoke(method, parameters);
+  static bool InvokePrefix(ZRpc __instance, string method, object[] parameters) {
+    if (SocketQuarantineCutoverRunner.SuppressNativeInvoke(__instance, method))
+      return false;
+    return !DirectControlCutoverRunner.SuppressNativeInvoke(method, parameters);
+  }
+}
+
+[HarmonyPatch(typeof(ZRpc), nameof(ZRpc.Update))]
+static class SocketQuarantineRpcUpdatePatch {
+  [HarmonyPrefix]
+  [HarmonyPriority(Priority.First)]
+  static bool UpdatePrefix(ZRpc __instance, ref ZRpc.ErrorCode __result) =>
+      !SocketQuarantineCutoverRunner.TryVirtualizeRpcUpdate(
+          __instance, ref __result);
+}
+
+[HarmonyPatch(typeof(ZRpc), nameof(ZRpc.IsConnected))]
+static class SocketQuarantineRpcConnectedPatch {
+  [HarmonyPostfix]
+  static void ConnectedPostfix(ZRpc __instance, ref bool __result) =>
+      SocketQuarantineCutoverRunner.VirtualizeRpcConnected(
+          __instance, ref __result);
+}
+
+[HarmonyPatch(typeof(ZNet), nameof(ZNet.GetConnectionStatus))]
+static class SocketQuarantineConnectionStatusPatch {
+  [HarmonyPostfix]
+  static void ConnectionStatusPostfix(ref ZNet.ConnectionStatus __result) =>
+      SocketQuarantineCutoverRunner.VirtualizeConnectionStatus(ref __result);
 }
 
 [HarmonyPatch(typeof(ZDOMan))]

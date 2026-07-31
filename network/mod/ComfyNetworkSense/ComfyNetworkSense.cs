@@ -66,6 +66,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   ZdoJournalCutoverRunner _zdoJournalCutoverRunner;
   OwnershipLeaseCutoverRunner _ownershipLeaseCutoverRunner;
   WorldZoneCutoverRunner _worldZoneCutoverRunner;
+  SocketQuarantineCutoverRunner _socketQuarantineCutoverRunner;
   readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
   bool _routeRunning;
@@ -115,6 +116,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipLeaseCutoverRunner =
         new(_lumberjacksGameSessionRunner);
     _worldZoneCutoverRunner = new(_lumberjacksGameSessionRunner);
+    _socketQuarantineCutoverRunner =
+        new(_lumberjacksGameSessionRunner, _worldZoneCutoverRunner);
     _lumberjacksMotionRunner = new(_lumberjacksGameSessionRunner);
     _motionTestController = new(RecordTransportControl);
     _nativeCutoverScenarioController =
@@ -124,7 +127,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             _zdoJournalCutoverRunner,
             _ownershipLeaseCutoverRunner,
             _worldZoneCutoverRunner,
-            _lumberjacksMotionRunner);
+            _lumberjacksMotionRunner,
+            _socketQuarantineCutoverRunner);
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
@@ -298,6 +302,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _routedRpcCutoverRunner?.Update(now);
       _ownershipLeaseCutoverRunner?.Update(now);
       _worldZoneCutoverRunner?.Update(now);
+      _socketQuarantineCutoverRunner?.Update(now);
       _lumberjacksMotionRunner?.Update(now);
     }
 
@@ -858,6 +863,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _ownershipLeaseCutoverRunner = null;
     _worldZoneCutoverRunner?.Dispose();
     _worldZoneCutoverRunner = null;
+    _socketQuarantineCutoverRunner?.Dispose();
+    _socketQuarantineCutoverRunner = null;
     _lumberjacksMotionRunner?.Dispose();
     _lumberjacksMotionRunner = null;
     _motionTestController?.Dispose();

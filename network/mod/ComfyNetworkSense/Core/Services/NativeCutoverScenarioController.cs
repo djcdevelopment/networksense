@@ -39,6 +39,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly OwnershipLeaseCutoverRunner _ownershipLease;
   readonly WorldZoneCutoverRunner _worldZone;
   readonly LumberjacksMotionRunner _motion;
+  readonly SocketQuarantineCutoverRunner _socketQuarantine;
 
   NativeCutoverScenarioManifest _manifest;
   NativeCutoverScenarioAction[] _actions = Array.Empty<NativeCutoverScenarioAction>();
@@ -59,13 +60,15 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       ZdoJournalCutoverRunner zdoJournal,
       OwnershipLeaseCutoverRunner ownershipLease,
       WorldZoneCutoverRunner worldZone,
-      LumberjacksMotionRunner motion) {
+      LumberjacksMotionRunner motion,
+      SocketQuarantineCutoverRunner socketQuarantine) {
     _gameSession = gameSession;
     _routedRpc = routedRpc;
     _zdoJournal = zdoJournal;
     _ownershipLease = ownershipLease;
     _worldZone = worldZone;
     _motion = motion;
+    _socketQuarantine = socketQuarantine;
     Directory.CreateDirectory(_directory);
     _manifestPath = Path.Combine(_directory, ManifestFileName);
     _receiptPath = Path.Combine(_directory, ReceiptFileName);
@@ -214,7 +217,11 @@ public sealed class NativeCutoverScenarioController : IDisposable {
                action.distance_meters < 0.5f) ||
               !AllowedDirection(action.direction) ||
               !SafeToken(action.target_tag, 80))
-            return "manifest_motion_probe_invalid";
+             return "manifest_motion_probe_invalid";
+           break;
+        case "socket_quarantine":
+          if (action.duration_seconds is < 60.0f or > 120.0f)
+            return "manifest_socket_quarantine_invalid";
           break;
         default:
           return "manifest_action_kind_invalid";
@@ -475,7 +482,31 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         else FailActive(probeDetail);
         break;
       }
-    }
+      case "socket_quarantine":
+        if (!_sessionProbeStarted) {
+          if (!_socketQuarantine.Begin(
+                  _active.id, _active.duration_seconds,
+                  out string startDetail)) {
+            if (startDetail is
+                "lumberjacks_session_not_ready" or
+                "lumberjacks_world_descriptor_not_ready" or
+                "valheim_scene_not_ready" or
+                "connected_native_server_socket_not_found")
+              return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_socketQuarantine.TryGetResult(
+                _active.id, out bool quarantineTerminal,
+                out bool quarantineSuccess, out string quarantineDetail)
+            || !quarantineTerminal)
+          return;
+        if (quarantineSuccess) CompleteActive(quarantineDetail);
+        else FailActive(quarantineDetail);
+        break;
+      }
   }
 
   bool TryInteractNearest(NativeCutoverScenarioAction action, out string detail) {

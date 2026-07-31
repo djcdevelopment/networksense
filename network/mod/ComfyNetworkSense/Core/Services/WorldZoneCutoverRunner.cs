@@ -85,6 +85,8 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
       PluginConfig.WorldZoneCutoverEnabled?.Value == true ||
       NativeAutotestRequest.ActiveWorldZoneCutover;
 
+  public bool DescriptorAccepted => _descriptor != null && !_descriptorRejected;
+
   public void Update(float now) {
     if (_disposed) return;
     DrainFrames();
