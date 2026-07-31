@@ -351,14 +351,24 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           CompleteActive("local_owner_observed");
         break;
       case "zone_cross": {
+        // The raw position write can be reverted by the character's own
+        // per-tick processing, and completing off the intended target let
+        // the next action sample the pre-cross zone (full31's stale
+        // membership enter). Complete only when the zone read at tick entry
+        // - before this tick's write - already reports the new zone, so the
+        // move has demonstrably survived a full engine tick before any
+        // dependent action samples it.
+        Vector2i settledZone = ZoneSystem.GetZone(
+            ((Component)Player.m_localPlayer).transform.position);
+        if (settledZone.x != _originZone.x || settledZone.y != _originZone.y) {
+          CompleteActive(
+              "zone_changed_from=" + _originZone.x + "," + _originZone.y
+              + "_to=" + settledZone.x + "," + settledZone.y);
+          break;
+        }
         Vector3 target = _origin + Direction(_active.direction) * _active.distance_meters;
         target.y = _origin.y;
         ((Component)Player.m_localPlayer).transform.position = target;
-        Vector2i currentZone = ZoneSystem.GetZone(target);
-        if (currentZone.x != _originZone.x || currentZone.y != _originZone.y)
-          CompleteActive(
-              "zone_changed_from=" + _originZone.x + "," + _originZone.y
-              + "_to=" + currentZone.x + "," + currentZone.y);
         break;
       }
       case "teleport_to": {
