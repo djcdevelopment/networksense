@@ -403,7 +403,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           ["logical_peer_id"] = _logicalPeerId,
           ["resume_epoch"] = _resumeEpoch,
           ["last_server_sequence"] = _lastServerSequence,
-          ["next_client_sequence"] = _nextClientSequence,
+          ["next_client_sequence"] = Interlocked.Read(ref _nextClientSequence),
           ["outbound_queue_depth"] = Volatile.Read(ref _outboundCount),
           ["motion_outbound_queue_depth"] =
               Volatile.Read(ref _motionOutboundCount),
@@ -777,7 +777,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       ClearOutbound();
       lock (_gate) {
         _lastServerSequence = 0;
-        _nextClientSequence = 0;
+        Interlocked.Exchange(ref _nextClientSequence, 0);
       }
       ZdoJournalCutoverRunner.NotifySessionReincarnated();
     }
@@ -1196,6 +1196,13 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
 
   bool TryQueueEnvelope(
       string type, Func<long, string> payloadFactory, out long sequence) {
+    // The _outboundGate critical section must never acquire _gate: the main
+    // thread enters here holding _gate (BeginProbe -> TryQueueEnvelope) while
+    // the session worker enters without it, and a nested _gate acquisition
+    // below deadlocked both threads the instant a herd reconnect lined them
+    // up (full29, 14:26:44.94). ConnectionId reads _gate, so snapshot it
+    // before taking _outboundGate; the sequence counter is lock-free.
+    string connectionId = ConnectionId;
     lock (_outboundGate) {
       sequence = NextClientSequence();
       bool queued = TryQueue(BuildEnvelope(type, sequence, payloadFactory(sequence)));
@@ -1203,7 +1210,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         _events.Enqueue(new SessionEvent(
             queued ? "ownership_frame_queued" : "ownership_frame_queue_rejected",
             sequence,
-            ConnectionId,
+            connectionId,
             "type=" + type
             + " queue_depth=" + Volatile.Read(ref _outboundCount)
                 .ToString(CultureInfo.InvariantCulture)));
@@ -1226,9 +1233,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       Interlocked.Decrement(ref _motionOutboundCount);
   }
 
-  long NextClientSequence() {
-    lock (_gate) return ++_nextClientSequence;
-  }
+  long NextClientSequence() => Interlocked.Increment(ref _nextClientSequence);
 
   bool ShouldRun() {
     if (PluginConfig.LumberjacksGameSessionEnabled?.Value != true) return false;
