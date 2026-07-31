@@ -708,6 +708,20 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           ZDOID.None, _active.radius_meters, requireLocalTarget: true,
           out ZDO sourceZdo, out ZDO targetZdo, out string findDetail);
       if (source == null) {
+        // Far-portal dependency delivery is AoI-transient right after a
+        // relocation: full32 failed 2s into a 22s deadline while the linked
+        // portal's ZDO was still in flight. Wait for the correlated arrival,
+        // bounded by the action deadline, instead of failing on capacity
+        // timing; malformed portal state still fails immediately below.
+        if (findDetail is
+            "portal_target_descriptor_missing" or
+            "distant_portal_pair_not_in_aoi") {
+          if (now >= _nextActionDiagnosticAt) {
+            _nextActionDiagnosticAt = now + 5.0f;
+            WriteReceipt("portal_pair_await_dependencies", _active.id, findDetail);
+          }
+          return;
+        }
         FailActive(findDetail);
         return;
       }
