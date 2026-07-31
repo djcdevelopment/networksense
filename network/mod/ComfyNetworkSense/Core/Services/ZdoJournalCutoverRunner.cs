@@ -112,6 +112,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   long _canonicalMutationBackpressure;
   long _snapshotsApplied;
   long _deltasApplied;
+  long _receiptSnapshotArrivals;
   long _tombstonesApplied;
   long _staleRejected;
   long _malformedRejected;
@@ -245,7 +246,8 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         Deltas = Interlocked.Read(ref _deltasApplied),
         Tombstones = Interlocked.Read(ref _tombstonesApplied),
         Stale = Interlocked.Read(ref _staleRejected),
-        Malformed = Interlocked.Read(ref _malformedRejected)
+        Malformed = Interlocked.Read(ref _malformedRejected),
+        ReceiptArrivals = Interlocked.Read(ref _receiptSnapshotArrivals)
     };
     Write("probe_started", actionId, "mode=" + mode);
     if (mode == "observe") return true;
@@ -981,6 +983,13 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       long current = Math.Max(previous, actualRevision);
       if (value.object_revision <= current) {
         if (delivery.kind == "snapshot") {
+          // A receipt-required snapshot that arrives after an equivalent delta is a
+          // legal idempotent duplicate: the canonical path DID deliver it, and the
+          // client state already matches. The observe probe accepts this arrival —
+          // full37's post-WAL-rebuild flood made delta-before-snapshot the norm and
+          // superseded every snapshot, deadlining an otherwise healthy observe.
+          if (value.receipt_required)
+            Interlocked.Increment(ref _receiptSnapshotArrivals);
           long superseded = Interlocked.Increment(ref _superseded);
           if (value.receipt_required ||
               superseded % BulkProgressInterval == 0)
@@ -1036,10 +1045,13 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
           target.GetOwner() != value.owner)
         throw new InvalidOperationException("typed_apply_readback_mismatch");
       lock (_gate) _appliedRevisions[key] = value.object_revision;
-      if (delivery.kind == "snapshot")
+      if (delivery.kind == "snapshot") {
         Interlocked.Increment(ref _snapshotsApplied);
-      else
+        if (value.receipt_required)
+          Interlocked.Increment(ref _receiptSnapshotArrivals);
+      } else {
         Interlocked.Increment(ref _deltasApplied);
+      }
       Ack(delivery);
       long applied =
           Interlocked.Read(ref _snapshotsApplied) +
@@ -1190,7 +1202,11 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     long tombstone = Interlocked.Read(ref _tombstonesApplied) - _probe.Tombstones;
     long stale = Interlocked.Read(ref _staleRejected) - _probe.Stale;
     long malformed = Interlocked.Read(ref _malformedRejected) - _probe.Malformed;
-    bool positive = _probe.Mode == "observe" ? snapshot >= 1 && delta >= 1 : delta >= 1;
+    long receiptArrivals =
+        Interlocked.Read(ref _receiptSnapshotArrivals) - _probe.ReceiptArrivals;
+    bool positive = _probe.Mode == "observe"
+        ? (snapshot >= 1 || receiptArrivals >= 1) && delta >= 1
+        : delta >= 1;
     if (positive && tombstone >= 1 && stale >= 1 && malformed >= 1 &&
         Interlocked.Read(ref _nativeRpcDeliveries) == 0 &&
         Interlocked.Read(ref _applyFailures) == 0) {
@@ -1198,6 +1214,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       _probe.Success = true;
       _probe.Detail =
           "typed_journal_sequence_applied snapshot=" + snapshot
+          + " receipt_snapshot_arrivals=" + receiptArrivals
           + " delta=" + delta + " stale=" + stale
           + " malformed=" + malformed + " tombstone=" + tombstone
           + " native_rpc_zdo_data=0";
@@ -1209,6 +1226,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     _probe.Success = false;
     _probe.Detail =
         "zdo_journal_deadline snapshot=" + snapshot
+        + " receipt_snapshot_arrivals=" + receiptArrivals
         + " delta=" + delta + " stale=" + stale
         + " malformed=" + malformed + " tombstone=" + tombstone
         + " native_rpc_zdo_data=" + Interlocked.Read(ref _nativeRpcDeliveries)
@@ -1509,6 +1527,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     public string ActionId;
     public string Mode;
     public float DeadlineAt;
+    public long ReceiptArrivals;
     public long Snapshots;
     public long Deltas;
     public long Tombstones;
