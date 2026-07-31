@@ -1357,8 +1357,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     while (offset < payload.Length) {
       int end = payload.IndexOf("\r\n", offset, StringComparison.Ordinal);
       if (end < 0) break;
-      int size = Convert.ToInt32(
-          payload.Substring(offset, end - offset).Trim(), 16);
+      int size = ParseHexSpan(payload.AsSpan(offset, end - offset).Trim());
       if (size == 0) break;
       offset = end + 2;
       if (offset + size > payload.Length)
@@ -1367,6 +1366,18 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       offset += size + 2;
     }
     return result.ToString();
+  }
+
+  static int ParseHexSpan(ReadOnlySpan<char> hex) {
+    int value = 0;
+    for (int i = 0; i < hex.Length; i++) {
+      char c = hex[i];
+      int digit = (c >= '0' && c <= '9') ? (c - '0') :
+                  (c >= 'a' && c <= 'f') ? (c - 'a' + 10) :
+                  (c >= 'A' && c <= 'F') ? (c - 'A' + 10) : 0;
+      value = (value * 16) + digit;
+    }
+    return value;
   }
 
   void Write(string state, string actionId, string detail) {
@@ -1405,11 +1416,11 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   static string Escape(string value) =>
       (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
 
-  static string Compact(string value) =>
-      string.IsNullOrWhiteSpace(value)
-          ? "empty"
-          : value.Replace('\r', ' ').Replace('\n', ' ')
-              .Substring(0, Math.Min(160, value.Length));
+  static string Compact(string value) {
+      if (string.IsNullOrWhiteSpace(value)) return "empty";
+      string flat = value.Replace('\r', ' ').Replace('\n', ' ');
+      return flat.Length <= 160 ? flat : flat.Substring(0, 160);
+  }
 
   public Dictionary<string, object> Snapshot() =>
       new() {

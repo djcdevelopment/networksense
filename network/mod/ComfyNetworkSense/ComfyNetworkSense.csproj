@@ -72,6 +72,11 @@
     <None Include="README.md" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="System.Memory" Version="4.6.3" />
+    <PackageReference Include="System.Text.Json" Version="10.0.10" />
+  </ItemGroup>
+
   <Target Name="CopyAssembly" AfterTargets="Build" Condition="Exists('$(PluginOutputPath)')">
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(PluginOutputPath)" />
   </Target>

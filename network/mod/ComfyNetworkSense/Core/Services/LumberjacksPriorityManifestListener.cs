@@ -346,9 +346,9 @@ public sealed class LumberjacksPriorityManifestListener : IDisposable {
 
     value = value.Trim();
     if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) {
-      value = "ws://" + value.Substring("http://".Length);
+      value = value.Replace("http://", "ws://");
     } else if (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) {
-      value = "wss://" + value.Substring("https://".Length);
+      value = value.Replace("https://", "wss://");
     }
 
     return value;

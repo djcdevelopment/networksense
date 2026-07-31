@@ -1492,8 +1492,8 @@ public sealed class LumberjacksMotionRunner : IDisposable {
     string value = Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_GATEWAY_URL");
     if (string.IsNullOrWhiteSpace(value)) value = PluginConfig.LumberjacksGatewayUrl.Value;
     value = (value ?? "ws://127.0.0.1:4000").Trim();
-    if (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return "wss://" + value.Substring(8);
-    if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) return "ws://" + value.Substring(7);
+    if (value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return value.Replace("https://", "wss://");
+    if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) return value.Replace("http://", "ws://");
     return value;
   }
 

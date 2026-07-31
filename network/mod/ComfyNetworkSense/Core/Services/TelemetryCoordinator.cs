@@ -755,7 +755,7 @@ public sealed class TelemetryCoordinator : IDisposable {
         result.Add(suggestion);
       }
     } else if (requestKind == "config-suggestion") {
-      foreach (string reason in ExtractJsonValues(json, "\"reason\":\"", "\"")) {
+      foreach (string reason in ExtractJsonPropertyStringValues(json, "reason")) {
         result.Add(reason);
       }
 
@@ -787,9 +787,9 @@ public sealed class TelemetryCoordinator : IDisposable {
 
   static IEnumerable<string> FormatReportSummary(string json) {
     List<string> result = [];
-    string fps = ExtractJsonNumber(json, "\"fps\":");
-    string p95 = ExtractJsonNumber(json, "\"frame_time_p95_ms\":");
-    string cpu = ExtractJsonNumber(json, "\"cpu_bound_estimate\":");
+    string fps = ExtractJsonPropertyNumber(json, "fps");
+    string p95 = ExtractJsonPropertyNumber(json, "frame_time_p95_ms");
+    string cpu = ExtractJsonPropertyNumber(json, "cpu_bound_estimate");
     string pulse = json.Contains("\"server_pulse_available\":true") ? "server pulse data is available" : "no server pulse data in this local view";
 
     if (!string.IsNullOrWhiteSpace(fps)) {
@@ -802,58 +802,49 @@ public sealed class TelemetryCoordinator : IDisposable {
   }
 
   static string[] ExtractJsonStringArray(string json, string propertyName) {
-    string marker = $"\"{propertyName}\":[";
-    int start = json.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-
-    if (start < 0) {
-      return [];
-    }
-
-    start += marker.Length;
-    int end = json.IndexOf(']', start);
-
-    if (end < 0) {
-      return [];
-    }
-
     List<string> values = [];
-    foreach (string value in ExtractJsonValues(json.Substring(start, end - start), "\"", "\"")) {
-      values.Add(value);
+    byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(json);
+    System.Text.Json.Utf8JsonReader reader = new(utf8);
+    while (reader.Read()) {
+      if (reader.TokenType == System.Text.Json.JsonTokenType.PropertyName && reader.GetString() == propertyName) {
+        if (reader.Read() && reader.TokenType == System.Text.Json.JsonTokenType.StartArray) {
+          while (reader.Read() && reader.TokenType != System.Text.Json.JsonTokenType.EndArray) {
+            if (reader.TokenType == System.Text.Json.JsonTokenType.String) {
+              values.Add(reader.GetString());
+            }
+          }
+        }
+        break;
+      }
     }
-
     return values.ToArray();
   }
 
-  static IEnumerable<string> ExtractJsonValues(string text, string prefix, string suffix) {
-    int index = 0;
-    while (index < text.Length) {
-      int start = text.IndexOf(prefix, index, StringComparison.OrdinalIgnoreCase);
-      if (start < 0) {
-        yield break;
+  static string[] ExtractJsonPropertyStringValues(string json, string propertyName) {
+    List<string> values = [];
+    byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(json);
+    System.Text.Json.Utf8JsonReader reader = new(utf8);
+    while (reader.Read()) {
+      if (reader.TokenType == System.Text.Json.JsonTokenType.PropertyName && reader.GetString() == propertyName) {
+        if (reader.Read() && reader.TokenType == System.Text.Json.JsonTokenType.String) {
+          values.Add(reader.GetString());
+        }
       }
-      start += prefix.Length;
-      int end = text.IndexOf(suffix, start, StringComparison.OrdinalIgnoreCase);
-      if (end < 0) {
-        yield break;
-      }
-      yield return text.Substring(start, end - start).Replace("\\\"", "\"");
-      index = end + suffix.Length;
     }
+    return values.ToArray();
   }
 
-  static string ExtractJsonNumber(string json, string marker) {
-    int start = json.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-    if (start < 0) {
-      return string.Empty;
+  static string ExtractJsonPropertyNumber(string json, string propertyName) {
+    byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(json);
+    System.Text.Json.Utf8JsonReader reader = new(utf8);
+    while (reader.Read()) {
+      if (reader.TokenType == System.Text.Json.JsonTokenType.PropertyName && reader.GetString() == propertyName) {
+        if (reader.Read() && reader.TokenType == System.Text.Json.JsonTokenType.Number) {
+          return reader.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+      }
     }
-
-    start += marker.Length;
-    int end = start;
-    while (end < json.Length && "0123456789.-".IndexOf(json[end]) >= 0) {
-      end++;
-    }
-
-    return json.Substring(start, end - start);
+    return string.Empty;
   }
 
   static string ModeLabel(NetworkSenseMode mode) {
