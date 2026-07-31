@@ -15,6 +15,12 @@ error to retry in a loop. Report and stop.
 [CmdletBinding()]
 param()
 
+# Probe semantics: native ssh/tailscale stderr noise (e.g. the OpenSSH post-quantum
+# KEX warning, first seen 2026-07-31) must stay non-terminating even when a caller
+# invokes this script in-process under -ErrorAction Stop. Lane health is decided by
+# the explicit [PASS]/[FAIL] checks and the exit code, never by stderr chatter.
+$ErrorActionPreference = 'Continue'
+
 $SshAlias = 'i5'
 $Fqdn     = 'i5-laptop.tail8e749c.ts.net'
 $script:AnyFail = $false

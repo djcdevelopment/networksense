@@ -57,6 +57,12 @@ param(
 $SshAlias = 'i5'
 $SshOpts  = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8')
 
+# Native ssh/scp stderr noise (e.g. the OpenSSH post-quantum KEX warning, first
+# seen 2026-07-31) must stay non-terminating even when a caller invokes this script
+# in-process under -ErrorAction Stop. Delivery is decided by the explicit SHA256
+# verification and throws below, never by stderr chatter.
+$ErrorActionPreference = 'Continue'
+
 if ($ValheimPlugins) {
     $Dest = 'C:/Program Files (x86)/Steam/steamapps/common/Valheim/BepInEx/plugins'
 }
