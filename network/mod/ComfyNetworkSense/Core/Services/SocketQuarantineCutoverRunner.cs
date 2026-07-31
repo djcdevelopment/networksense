@@ -314,7 +314,8 @@ public sealed class SocketQuarantineCutoverRunner : IDisposable {
   public static void VirtualizeConnectionStatus(
       ref ZNet.ConnectionStatus result) {
     SocketQuarantineCutoverRunner active = Volatile.Read(ref _active);
-    if (active == null || active._terminal || active._disposed)
+    if (active == null || !active._started ||
+        active._terminal || active._disposed)
       return;
     result = ZNet.ConnectionStatus.Connected;
   }
