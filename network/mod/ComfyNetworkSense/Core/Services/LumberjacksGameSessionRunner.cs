@@ -29,6 +29,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   readonly object _gate = new();
   readonly ConcurrentQueue<SessionEvent> _events = new();
   readonly ConcurrentQueue<string> _outbound = new();
+  readonly object _outboundGate = new();
   readonly TelemetryLogWriter _writer = new();
 
   CancellationTokenSource _cts;
@@ -60,7 +61,9 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   public bool UdpReady { get { lock (_gate) return _udpReady; } }
   public string State { get { lock (_gate) return _state; } }
   public string LastError { get { lock (_gate) return _lastError; } }
+  public string ConnectionId { get { lock (_gate) return _connectionId; } }
   public string LogicalPeerId { get { lock (_gate) return _logicalPeerId; } }
+  public long ResumeEpoch { get { lock (_gate) return _resumeEpoch; } }
 
   public LumberjacksGameSessionRunner() {
     LumberjacksGameSessionRunner previous = Interlocked.Exchange(ref _active, this);
@@ -109,12 +112,11 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           Mode = mode,
           DeadlineAt = Time.unscaledTime + Mathf.Clamp(deadlineSeconds, 1.0f, 30.0f)
       };
-      if (!TryQueue(BuildEnvelope(
+      if (!TryQueueEnvelope(
               "valheim_direct_pulse_probe",
-              NextClientSequence(),
               "\"run_id\":\"" + Escape(runId)
               + "\",\"action_id\":\"" + Escape(actionId)
-              + "\",\"mode\":\"" + Escape(mode) + "\""))) {
+              + "\",\"mode\":\"" + Escape(mode) + "\"")) {
         _directProbe = null;
         detail = "client_send_queue_full";
         return false;
@@ -195,8 +197,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         + "\",\"method_hash\":" + methodHash.ToString(CultureInfo.InvariantCulture)
         + ",\"parameters_base64\":\"" + Escape(parametersBase64)
         + "\",\"delivery_mode\":\"" + deliveryMode + "\"";
-    if (!TryQueue(BuildEnvelope(
-            "valheim_routed_rpc_send", NextClientSequence(), fields))) {
+    if (!TryQueueEnvelope("valheim_routed_rpc_send", fields)) {
       detail = "client_send_queue_full";
       return false;
     }
@@ -205,17 +206,36 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   }
 
   public bool QueueReliableAck(long serverSequence) =>
-      serverSequence > 0 && TryQueue(BuildEnvelope(
+      serverSequence > 0 && TryQueueEnvelope(
           "reliable_ack",
-          NextClientSequence(),
           "\"through_sequence\":"
-          + serverSequence.ToString(CultureInfo.InvariantCulture)));
+          + serverSequence.ToString(CultureInfo.InvariantCulture));
 
   public bool TryQueueZdoJournalMutation(string payloadFields) =>
       TryQueueSemantic("valheim_zdo_mutation", payloadFields);
 
   public bool TryQueueZdoJournalInterest(string payloadFields) =>
       TryQueueSemantic("valheim_zdo_interest", payloadFields);
+
+  public bool TryQueueOwnershipLeaseRequest(string payloadFields) =>
+      TryQueueSemantic("valheim_ownership_lease_request", payloadFields);
+
+  public bool TryQueueOwnershipLeaseIssue(string payloadFields) =>
+      TryQueueSemantic("valheim_ownership_lease_issue", payloadFields);
+
+  public bool TryQueueOwnershipAction(string payloadFields) =>
+      TryQueueSemantic("valheim_ownership_action", payloadFields);
+
+  public bool TryQueueOwnershipActionResult(string payloadFields) =>
+      TryQueueSemantic("valheim_ownership_action_result", payloadFields);
+
+  public bool AbortForOwnershipProbe() {
+    ClientWebSocket socket;
+    lock (_gate) socket = _socket;
+    if (socket == null || socket.State != WebSocketState.Open) return false;
+    socket.Abort();
+    return true;
+  }
 
   public bool QueueZdoJournalAck(
       string worldEpoch, long journalSequence, long reliableSequence) {
@@ -266,12 +286,11 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           InitialConnectionId = _connectionId,
           InitialResumeEpoch = _resumeEpoch
       };
-      if (!TryQueue(BuildEnvelope(
+      if (!TryQueueEnvelope(
               "valheim_session_probe",
-              NextClientSequence(),
               "\"run_id\":\"" + Escape(runId)
               + "\",\"probe_id\":\"" + Escape(_probe.ProbeId)
-              + "\",\"mode\":\"" + Escape(mode) + "\""))) {
+              + "\",\"mode\":\"" + Escape(mode) + "\"")) {
         _probe = null;
         detail = "client_send_queue_full";
         return false;
@@ -440,6 +459,17 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         if (string.Equals(type, "valheim_zdo_interest_status",
                 StringComparison.OrdinalIgnoreCase)) {
           HandleZdoInterestStatusWorker(text);
+          continue;
+        }
+        if (type is
+            "valheim_ownership_lease_command" or
+            "valheim_ownership_lease_granted" or
+            "valheim_ownership_lease_receipt" or
+            "valheim_ownership_action_rejected" or
+            "valheim_ownership_action_authorized" or
+            "valheim_ownership_action_completed" or
+            "valheim_ownership_result_receipt") {
+          OwnershipLeaseCutoverRunner.EnqueueCanonicalFrame(type, text);
         }
       }
     } finally {
@@ -461,6 +491,14 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           WebSocketMessageType.Text,
           true,
           token).ConfigureAwait(false);
+      string type = ExtractJsonString(text, "type");
+      if (IsOwnershipType(type)) {
+        _events.Enqueue(new SessionEvent(
+            "ownership_frame_sent",
+            ExtractJsonLong(text, "seq"),
+            ConnectionId,
+            "type=" + type));
+      }
     }
   }
 
@@ -536,12 +574,11 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         + " server_instance_id=" + serverInstance
         + " world_id=" + world
         + " udp_ready=" + (_udp != null ? "true" : "false")));
-    if (_localPeerUid == 0 || !TryQueue(BuildEnvelope(
+    if (_localPeerUid == 0 || !TryQueueEnvelope(
             "valheim_peer_bind",
-            NextClientSequence(),
             "\"role\":\"" + _localRole
             + "\",\"peer_uid\":"
-            + _localPeerUid.ToString(CultureInfo.InvariantCulture)))) {
+            + _localPeerUid.ToString(CultureInfo.InvariantCulture))) {
       throw new InvalidDataException("failed to queue Valheim peer binding");
     }
     _events.Enqueue(new SessionEvent(
@@ -595,18 +632,19 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       }
     }
 
-    TryQueue(BuildEnvelope(
+    TryQueueEnvelope(
         "reliable_ack",
-        NextClientSequence(),
-        "\"through_sequence\":" + sequence.ToString(CultureInfo.InvariantCulture)));
+        "\"through_sequence\":" + sequence.ToString(CultureInfo.InvariantCulture));
     if (shouldRespond) {
-      long clientSequence = NextClientSequence();
-      TryQueue(BuildEnvelope(
+      TryQueueEnvelope(
           "valheim_control_response",
-          clientSequence,
-          "\"probe_id\":\"" + Escape(probeId)
-          + "\",\"request_sequence\":" + sequence.ToString(CultureInfo.InvariantCulture)
-          + ",\"client_sequence\":" + clientSequence.ToString(CultureInfo.InvariantCulture)));
+          clientSequence =>
+              "\"probe_id\":\"" + Escape(probeId)
+              + "\",\"request_sequence\":"
+              + sequence.ToString(CultureInfo.InvariantCulture)
+              + ",\"client_sequence\":"
+              + clientSequence.ToString(CultureInfo.InvariantCulture),
+          out long clientSequence);
       _events.Enqueue(new SessionEvent(
           "control_response_sent", sequence, connectionId,
           "client_sequence=" + clientSequence));
@@ -639,10 +677,9 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         throw new InvalidDataException("control receipt was not ordered after its request");
       _lastServerSequence = sequence;
     }
-    TryQueue(BuildEnvelope(
+    TryQueueEnvelope(
         "reliable_ack",
-        NextClientSequence(),
-        "\"through_sequence\":" + sequence.ToString(CultureInfo.InvariantCulture)));
+        "\"through_sequence\":" + sequence.ToString(CultureInfo.InvariantCulture));
     _events.Enqueue(new SessionEvent(
         "probe_passed", sequence, connectionId,
         "request_sequence=" + requestSequence
@@ -779,11 +816,10 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           }
           // The worker only banks the frame. Acknowledge reliable delivery after the
           // selected typed handler has run on Unity's main thread.
-          TryQueue(BuildEnvelope(
+          TryQueueEnvelope(
               "reliable_ack",
-              NextClientSequence(),
               "\"through_sequence\":"
-              + item.Sequence.ToString(CultureInfo.InvariantCulture)));
+              + item.Sequence.ToString(CultureInfo.InvariantCulture));
           break;
         case "native_direct_pulse_received":
           lock (_gate) {
@@ -858,15 +894,47 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     if (type is not (
             "valheim_zdo_mutation" or
             "valheim_zdo_interest" or
-            "valheim_zdo_ack") ||
+            "valheim_zdo_ack" or
+            "valheim_ownership_lease_request" or
+            "valheim_ownership_lease_issue" or
+            "valheim_ownership_action" or
+            "valheim_ownership_action_result") ||
         payloadFields == null || payloadFields.Length > 6 * 1024 * 1024)
       return false;
     lock (_gate) {
       if (!_webSocketConnected || string.IsNullOrEmpty(_logicalPeerId))
         return false;
     }
-    return TryQueue(BuildEnvelope(type, NextClientSequence(), payloadFields));
+    return TryQueueEnvelope(type, payloadFields);
   }
+
+  bool TryQueueEnvelope(string type, string payloadFields) =>
+      TryQueueEnvelope(type, _ => payloadFields, out _);
+
+  bool TryQueueEnvelope(
+      string type, Func<long, string> payloadFactory, out long sequence) {
+    lock (_outboundGate) {
+      sequence = NextClientSequence();
+      bool queued = TryQueue(BuildEnvelope(type, sequence, payloadFactory(sequence)));
+      if (IsOwnershipType(type)) {
+        _events.Enqueue(new SessionEvent(
+            queued ? "ownership_frame_queued" : "ownership_frame_queue_rejected",
+            sequence,
+            ConnectionId,
+            "type=" + type
+            + " queue_depth=" + Volatile.Read(ref _outboundCount)
+                .ToString(CultureInfo.InvariantCulture)));
+      }
+      return queued;
+    }
+  }
+
+  static bool IsOwnershipType(string type) =>
+      type is
+          "valheim_ownership_lease_request" or
+          "valheim_ownership_lease_issue" or
+          "valheim_ownership_action" or
+          "valheim_ownership_action_result";
 
   void ClearOutbound() {
     while (_outbound.TryDequeue(out _))
@@ -883,7 +951,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     if (ZNet.instance.IsServer())
       return (PluginConfig.RoutedRpcCutoverEnabled?.Value == true ||
               (PluginConfig.ZdoJournalCutoverEnabled?.Value == true &&
-               PluginConfig.ZdoJournalCanonicalSessionEnabled?.Value == true))
+               PluginConfig.ZdoJournalCanonicalSessionEnabled?.Value == true) ||
+              PluginConfig.OwnershipLeaseCutoverEnabled?.Value == true)
           && ZNet.GetUID() != 0;
     if (Player.m_localPlayer == null) return false;
     return !string.IsNullOrWhiteSpace(PluginConfig.LumberjacksEnrollmentId.Value)

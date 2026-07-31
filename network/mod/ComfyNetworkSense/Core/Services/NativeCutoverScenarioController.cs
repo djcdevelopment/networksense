@@ -36,6 +36,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly LumberjacksGameSessionRunner _gameSession;
   readonly RoutedRpcCutoverRunner _routedRpc;
   readonly ZdoJournalCutoverRunner _zdoJournal;
+  readonly OwnershipLeaseCutoverRunner _ownershipLease;
 
   NativeCutoverScenarioManifest _manifest;
   NativeCutoverScenarioAction[] _actions = Array.Empty<NativeCutoverScenarioAction>();
@@ -53,10 +54,12 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   public NativeCutoverScenarioController(
       LumberjacksGameSessionRunner gameSession,
       RoutedRpcCutoverRunner routedRpc,
-      ZdoJournalCutoverRunner zdoJournal) {
+      ZdoJournalCutoverRunner zdoJournal,
+      OwnershipLeaseCutoverRunner ownershipLease) {
     _gameSession = gameSession;
     _routedRpc = routedRpc;
     _zdoJournal = zdoJournal;
+    _ownershipLease = ownershipLease;
     Directory.CreateDirectory(_directory);
     _manifestPath = Path.Combine(_directory, ManifestFileName);
     _receiptPath = Path.Combine(_directory, ReceiptFileName);
@@ -187,6 +190,8 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "routed_withhold":
         case "zdo_journal_drive":
         case "zdo_journal_observe":
+          break;
+        case "ownership_lease_pickup":
           break;
         default:
           return "manifest_action_kind_invalid";
@@ -347,6 +352,26 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           _sessionProbeStarted = true;
         }
         if (!_zdoJournal.TryGetProbeResult(
+                _active.id, out bool terminal, out bool success,
+                out string probeDetail) || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "ownership_lease_pickup": {
+        if (!_sessionProbeStarted) {
+          if (!_ownershipLease.BeginProbe(
+                  _active.id,
+                  Mathf.Max(20.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail is "lumberjacks_session_not_connected"
+                or "ownership_lease_client_not_ready") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_ownershipLease.TryGetProbeResult(
                 _active.id, out bool terminal, out bool success,
                 out string probeDetail) || !terminal) return;
         if (success) CompleteActive(probeDetail);

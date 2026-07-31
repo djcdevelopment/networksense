@@ -22,7 +22,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.41";
+  public const string PluginVersion = "0.5.42";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -64,6 +64,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   DirectControlCutoverRunner _directControlCutoverRunner;
   RoutedRpcCutoverRunner _routedRpcCutoverRunner;
   ZdoJournalCutoverRunner _zdoJournalCutoverRunner;
+  OwnershipLeaseCutoverRunner _ownershipLeaseCutoverRunner;
   readonly TransportStatusOverlay _transportStatusOverlay = new();
   Harmony _harmony;
   bool _routeRunning;
@@ -110,13 +111,16 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksGameSessionRunner = new();
     _routedRpcCutoverRunner = new(_lumberjacksGameSessionRunner);
     _zdoJournalCutoverRunner = new(_lumberjacksGameSessionRunner);
+    _ownershipLeaseCutoverRunner =
+        new(_lumberjacksGameSessionRunner);
     _lumberjacksMotionRunner = new();
     _motionTestController = new(RecordTransportControl);
     _nativeCutoverScenarioController =
         new(
             _lumberjacksGameSessionRunner,
             _routedRpcCutoverRunner,
-            _zdoJournalCutoverRunner);
+            _zdoJournalCutoverRunner,
+            _ownershipLeaseCutoverRunner);
     _netcodeProbeRunner = new();
     _zdoRedirectRunner = new();
     _gameplayEventProducer = new();
@@ -288,6 +292,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       // Register the typed C3 handler before the routed adapter drains a just-arrived request.
       _zdoJournalCutoverRunner?.Update(now);
       _routedRpcCutoverRunner?.Update(now);
+      _ownershipLeaseCutoverRunner?.Update(now);
       _lumberjacksMotionRunner?.Update(now);
     }
 
@@ -547,6 +552,22 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             zdoCanonicalEnabled
                 ? "zdo_semantics_bound_to_canonical_session"
                 : "zdo_semantics_restored_to_http_lab_seam");
+        break;
+
+      case "ownershipLeaseCutoverEnabled":
+        if (!bool.TryParse(requestedValue, out bool ownershipLeaseEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        bool oldOwnershipLease =
+            PluginConfig.OwnershipLeaseCutoverEnabled.Value;
+        PluginConfig.OwnershipLeaseCutoverEnabled.Value =
+            ownershipLeaseEnabled;
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldOwnershipLease),
+            Bool(PluginConfig.OwnershipLeaseCutoverEnabled.Value),
+            ownershipLeaseEnabled
+                ? "logical_peer_ownership_leases_armed"
+                : "selected_ownership_native_path_restored");
         break;
 
       default:
@@ -814,6 +835,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _routedRpcCutoverRunner = null;
     _zdoJournalCutoverRunner?.Dispose();
     _zdoJournalCutoverRunner = null;
+    _ownershipLeaseCutoverRunner?.Dispose();
+    _ownershipLeaseCutoverRunner = null;
     _lumberjacksMotionRunner?.Dispose();
     _lumberjacksMotionRunner = null;
     _motionTestController?.Dispose();

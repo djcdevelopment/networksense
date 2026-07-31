@@ -752,8 +752,15 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       }
 
       if (value.tombstone) {
-        if (existing != null)
-          HandleDestroyedZdoMethod.Invoke(ZDOMan.instance, new object[] { uid });
+        if (existing != null) {
+          OwnershipLeaseCutoverRunner.EnterCanonicalDestroy();
+          try {
+            HandleDestroyedZdoMethod.Invoke(
+                ZDOMan.instance, new object[] { uid });
+          } finally {
+            OwnershipLeaseCutoverRunner.ExitCanonicalDestroy();
+          }
+        }
         if (ZDOMan.instance.GetZDO(uid) != null)
           throw new InvalidOperationException("tombstone_readback_present");
         lock (_gate) _appliedRevisions[key] = value.object_revision;
@@ -1283,13 +1290,19 @@ static class ZdoJournalCutoverPatches {
 
   [HarmonyPatch(typeof(ZDOMan), "HandleDestroyedZDO")]
   [HarmonyPrefix]
-  static void DestroyPrefix(ZDOID uid) =>
-      ZdoJournalCutoverRunner.CaptureTombstone(uid);
+  static bool DestroyPrefix(ZDOID uid) {
+    if (OwnershipLeaseCutoverRunner.ShouldBlockHandleDestroyed(uid))
+      return false;
+    ZdoJournalCutoverRunner.CaptureTombstone(uid);
+    return true;
+  }
 
   [HarmonyPatch(typeof(ZDOMan), "CreateSyncList")]
   [HarmonyPostfix]
-  static void CreateSyncListPostfix(List<ZDO> toSync) =>
-      ZdoJournalCutoverRunner.ObserveCreateSyncList(toSync);
+  static void CreateSyncListPostfix(object peer, List<ZDO> toSync) {
+    ZdoJournalCutoverRunner.ObserveCreateSyncList(toSync);
+    OwnershipLeaseCutoverRunner.FilterNativeSync(peer, toSync);
+  }
 
   [HarmonyPatch(typeof(ZDOMan), "RPC_ZDOData")]
   [HarmonyPrefix]

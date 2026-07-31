@@ -106,6 +106,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> RoutedRpcCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoJournalCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoJournalCanonicalSessionEnabled { get; private set; }
+  public static ConfigEntry<bool> OwnershipLeaseCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ServerRuntimeControlEnabled { get; private set; }
   public static ConfigEntry<float> ServerRuntimeControlPollSeconds { get; private set; }
   public static ConfigEntry<float> HudScale { get; private set; }
@@ -994,6 +995,16 @@ public static class PluginConfig {
             "C4 gate: carry the C3 journal mutation, interest, delivery and acknowledgement "
             + "frames on the canonical authenticated Lumberjacks game session. Default OFF "
             + "until durable logical-peer identity is deliberately proven.");
+
+    OwnershipLeaseCutoverEnabled =
+        config.Bind(
+            "NativeCutover",
+            "ownershipLeaseCutoverEnabled",
+            false,
+            "C4 gate: authorize the selected pickup ownership transition with an expiring, "
+            + "logical-peer-bound Lumberjacks lease; suppress its native request, release, "
+            + "CreateSyncList and destroyed-ZDO paths. Default OFF until the C4 ownership "
+            + "boundary is deliberately armed.");
 
     ServerRuntimeControlEnabled =
         config.Bind(

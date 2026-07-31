@@ -31,6 +31,7 @@ public sealed class NativeAutotestRequest {
   public bool routed_rpc_cutover;
   public bool zdo_journal_cutover;
   public bool zdo_journal_canonical_session;
+  public bool ownership_lease_cutover;
 
   string _path;
   static string _activeRunId = string.Empty;
@@ -40,6 +41,7 @@ public sealed class NativeAutotestRequest {
   static bool _activeRoutedRpcCutover;
   static bool _activeZdoJournalCutover;
   static bool _activeZdoJournalCanonicalSession;
+  static bool _activeOwnershipLeaseCutover;
 
   public string RunId => run_id ?? string.Empty;
   public string Client => client ?? string.Empty;
@@ -50,6 +52,7 @@ public sealed class NativeAutotestRequest {
   public bool RoutedRpcCutover => routed_rpc_cutover;
   public bool ZdoJournalCutover => zdo_journal_cutover;
   public bool ZdoJournalCanonicalSession => zdo_journal_canonical_session;
+  public bool OwnershipLeaseCutover => ownership_lease_cutover;
   public static string ActiveRunId => _activeRunId;
   public static string ActiveClient => _activeClient;
   public static string ActiveCharacter => _activeCharacter;
@@ -58,6 +61,8 @@ public sealed class NativeAutotestRequest {
   public static bool ActiveZdoJournalCutover => _activeZdoJournalCutover;
   public static bool ActiveZdoJournalCanonicalSession =>
       _activeZdoJournalCanonicalSession;
+  public static bool ActiveOwnershipLeaseCutover =>
+      _activeOwnershipLeaseCutover;
 
   public static bool TryLoad(out NativeAutotestRequest request, out string detail) {
     request = null;
@@ -117,6 +122,7 @@ public sealed class NativeAutotestRequest {
       _activeRoutedRpcCutover = parsed.RoutedRpcCutover;
       _activeZdoJournalCutover = parsed.ZdoJournalCutover;
       _activeZdoJournalCanonicalSession = parsed.ZdoJournalCanonicalSession;
+      _activeOwnershipLeaseCutover = parsed.OwnershipLeaseCutover;
       NativeNetworkLedger.SetRunContext(parsed.RunId, parsed.Client);
       NativeNetworkLedger.SetPoisonOverride(parsed.NativeNetworkPoison);
       request = parsed;
