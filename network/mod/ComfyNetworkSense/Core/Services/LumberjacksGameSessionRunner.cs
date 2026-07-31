@@ -1201,6 +1201,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         character = PluginConfig.AutoJoinCharacterName?.Value;
       if (!string.IsNullOrWhiteSpace(character))
         value += "&valheim_character=" + Uri.EscapeDataString(character.Trim());
+      if (NativeAutotestRequest.ActiveColdJoinFault == "invalid_enrollment")
+        value += "&c7_require_enrollment=true";
     }
     if (!string.IsNullOrEmpty(resumeToken))
       value += "&resume=" + Uri.EscapeDataString(resumeToken);
