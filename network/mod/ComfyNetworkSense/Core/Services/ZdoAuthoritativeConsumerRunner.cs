@@ -423,36 +423,8 @@ public sealed class ZdoAuthoritativeConsumerRunner : IDisposable {
     string headers = raw.Substring(0, split);
     string payload = raw.Substring(split + 4);
     if (headers.IndexOf("transfer-encoding: chunked", StringComparison.OrdinalIgnoreCase) >= 0)
-      return DecodeChunked(payload);
+      return WireParsers.DecodeChunkedBody(payload);
     return payload;
-  }
-
-  static string DecodeChunked(string payload) {
-    StringBuilder result = new();
-    int offset = 0;
-    while (offset < payload.Length) {
-      int end = payload.IndexOf("\r\n", offset, StringComparison.Ordinal);
-      if (end < 0) break;
-      int size = ParseHexSpan(payload.AsSpan(offset, end - offset).Trim());
-      if (size == 0) break;
-      offset = end + 2;
-      if (offset + size > payload.Length) break;
-      result.Append(payload, offset, size);
-      offset += size + 2;
-    }
-    return result.ToString();
-  }
-
-  static int ParseHexSpan(ReadOnlySpan<char> hex) {
-    int value = 0;
-    for (int i = 0; i < hex.Length; i++) {
-      char c = hex[i];
-      int digit = (c >= '0' && c <= '9') ? (c - '0') :
-                  (c >= 'a' && c <= 'f') ? (c - 'a' + 10) :
-                  (c >= 'A' && c <= 'F') ? (c - 'A' + 10) : 0;
-      value = (value * 16) + digit;
-    }
-    return value;
   }
 
   public Dictionary<string, object> Snapshot() {

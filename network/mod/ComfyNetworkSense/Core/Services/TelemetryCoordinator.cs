@@ -801,51 +801,14 @@ public sealed class TelemetryCoordinator : IDisposable {
     return result;
   }
 
-  static string[] ExtractJsonStringArray(string json, string propertyName) {
-    List<string> values = [];
-    byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(json);
-    System.Text.Json.Utf8JsonReader reader = new(utf8);
-    while (reader.Read()) {
-      if (reader.TokenType == System.Text.Json.JsonTokenType.PropertyName && reader.GetString() == propertyName) {
-        if (reader.Read() && reader.TokenType == System.Text.Json.JsonTokenType.StartArray) {
-          while (reader.Read() && reader.TokenType != System.Text.Json.JsonTokenType.EndArray) {
-            if (reader.TokenType == System.Text.Json.JsonTokenType.String) {
-              values.Add(reader.GetString());
-            }
-          }
-        }
-        break;
-      }
-    }
-    return values.ToArray();
-  }
+  static string[] ExtractJsonStringArray(string json, string propertyName) =>
+      WireParsers.ExtractJsonStringArray(json, propertyName);
 
-  static string[] ExtractJsonPropertyStringValues(string json, string propertyName) {
-    List<string> values = [];
-    byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(json);
-    System.Text.Json.Utf8JsonReader reader = new(utf8);
-    while (reader.Read()) {
-      if (reader.TokenType == System.Text.Json.JsonTokenType.PropertyName && reader.GetString() == propertyName) {
-        if (reader.Read() && reader.TokenType == System.Text.Json.JsonTokenType.String) {
-          values.Add(reader.GetString());
-        }
-      }
-    }
-    return values.ToArray();
-  }
+  static string[] ExtractJsonPropertyStringValues(string json, string propertyName) =>
+      WireParsers.ExtractJsonPropertyStringValues(json, propertyName);
 
-  static string ExtractJsonPropertyNumber(string json, string propertyName) {
-    byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(json);
-    System.Text.Json.Utf8JsonReader reader = new(utf8);
-    while (reader.Read()) {
-      if (reader.TokenType == System.Text.Json.JsonTokenType.PropertyName && reader.GetString() == propertyName) {
-        if (reader.Read() && reader.TokenType == System.Text.Json.JsonTokenType.Number) {
-          return reader.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
-      }
-    }
-    return string.Empty;
-  }
+  static string ExtractJsonPropertyNumber(string json, string propertyName) =>
+      WireParsers.ExtractJsonPropertyNumber(json, propertyName);
 
   static string ModeLabel(NetworkSenseMode mode) {
     return mode switch {

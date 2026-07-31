@@ -74,10 +74,13 @@
 
   <ItemGroup>
     <PackageReference Include="System.Memory" Version="4.6.3" />
-    <PackageReference Include="System.Text.Json" Version="10.0.10" />
   </ItemGroup>
 
-  <Target Name="CopyAssembly" AfterTargets="Build" Condition="Exists('$(PluginOutputPath)')">
+  <!-- Deploys go through the SHA-verified lanes (Deploy-Mod / Deploy-ToI5).
+       The build only touches the live plugins folder when explicitly asked:
+       an unguarded auto-copy once replaced the pinned DLL mid-program. -->
+  <Target Name="CopyAssembly" AfterTargets="Build"
+          Condition="Exists('$(PluginOutputPath)') And '$(ComfyCopyToPlugins)' == 'true'">
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(PluginOutputPath)" />
   </Target>
 </Project>
