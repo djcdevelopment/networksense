@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
@@ -36,12 +37,24 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   const float InterestSeconds = 2.0f;
   const float WorkerSeconds = 0.20f;
   const int ApplyPerUpdate = 32;
-  const int InterestRadiusZones = 32;
+  const int TeleportApplyPerUpdate = 256;
+  const int BulkProgressInterval = 1024;
+  // Vanilla's active+distant CreateSyncList square is two zones from the
+  // player. Keep the live stream equally bounded. C3 alone expands to three
+  // zones to preserve its explicit outside-native-ring negative control.
+  const int WorldInterestRadiusZones = 2;
+  const int ProbeInterestRadiusZones = 3;
 
   static readonly int ProbeTagHash = ProbeTagName.GetStableHashCode();
   static readonly int ProbeValueHash = ProbeValueName.GetStableHashCode();
   static readonly int ProbePrefabHash =
       "ComfyNetworkSense_C3Probe".GetStableHashCode();
+  static readonly int PlayerPrefabHash = "Player".GetStableHashCode();
+  static readonly HashSet<int> PortalPrefabHashes = new() {
+      "portal_wood".GetStableHashCode(),
+      "portal".GetStableHashCode(),
+      "portal_stone".GetStableHashCode()
+  };
   static readonly MethodInfo CreateNewZdoMethod =
       AccessTools.Method(
           typeof(ZDOMan), "CreateNewZDO",
@@ -58,6 +71,8 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   readonly ConcurrentQueue<CanonicalAck> _canonicalAcks = new();
   readonly ConcurrentQueue<CanonicalEvent> _canonicalEvents = new();
   readonly Dictionary<string, long> _appliedRevisions =
+      new(StringComparer.Ordinal);
+  readonly Dictionary<string, ServerInterest> _serverInterests =
       new(StringComparer.Ordinal);
   readonly TelemetryLogWriter _writer = new();
   readonly object _gate = new();
@@ -78,10 +93,23 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   int _interestedRecipients;
   int _interestZoneX;
   int _interestZoneY;
+  int _registeredInterestZoneX;
+  int _registeredInterestZoneY;
+  int _registeredInterestRadius;
+  int _prefetchInterestZoneX;
+  int _prefetchInterestZoneY;
+  long _interestZoneEpoch;
+  bool _hasRegisteredInterest;
+  bool _hasPrefetchInterest;
   long _sourceSequence;
   long _createSyncLists;
   long _nativeCandidates;
   long _nativeRpcDeliveries;
+  long _canonicalDeliveriesBanked;
+  long _canonicalAcksQueued;
+  long _serverSnapshotsQueued;
+  long _canonicalMutationsQueued;
+  long _canonicalMutationBackpressure;
   long _snapshotsApplied;
   long _deltasApplied;
   long _tombstonesApplied;
@@ -110,34 +138,62 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
 
     DrainCanonicalEvents();
 
+    bool clientReady = false;
+    bool bootstrapInterestReady = false;
+    Vector2i bootstrapZone = default;
     if (server) {
       DriveServer(now);
     } else {
       DrainClient();
       EvaluateProbe();
-      if (Player.m_localPlayer == null ||
-          ZNet.instance == null ||
-          (ZNet.instance.GetPeers()?.Count ?? 0) == 0)
-        return;
+      clientReady =
+          Player.m_localPlayer != null &&
+          ZNet.instance != null &&
+          (ZNet.instance.GetPeers()?.Count ?? 0) > 0;
+      bootstrapInterestReady =
+          !clientReady &&
+          ZNet.instance != null &&
+          WorldZoneCutoverRunner.TryGetInitialZone(out bootstrapZone);
+      if (!clientReady && !bootstrapInterestReady) return;
     }
 
-    bool registerInterest =
-        !server && _probe != null && !_probe.Terminal &&
-        now >= _nextInterest;
+    bool registerInterest = false;
+    Vector2i currentZone = default;
+    int interestRadius = WorldInterestRadiusZones;
+    if (!server && (clientReady || bootstrapInterestReady)) {
+      Vector2i playerZone = clientReady
+          ? ZoneSystem.GetZone(
+              ((Component) Player.m_localPlayer).transform.position)
+          : bootstrapZone;
+      if (clientReady && _hasPrefetchInterest &&
+          playerZone.x == _prefetchInterestZoneX &&
+          playerZone.y == _prefetchInterestZoneY &&
+          !Player.m_localPlayer.IsTeleporting())
+        _hasPrefetchInterest = false;
+      currentZone = _hasPrefetchInterest
+          ? new Vector2i(_prefetchInterestZoneX, _prefetchInterestZoneY)
+          : playerZone;
+      interestRadius = _probe != null && !_probe.Terminal
+          ? ProbeInterestRadiusZones
+          : WorldInterestRadiusZones;
+      registerInterest =
+          now >= _nextInterest &&
+          (!_hasRegisteredInterest ||
+           currentZone.x != _registeredInterestZoneX ||
+           currentZone.y != _registeredInterestZoneY ||
+           interestRadius != _registeredInterestRadius);
+    }
     if (registerInterest) {
-      _nextInterest = now + InterestSeconds;
-      Vector3 position =
-          ((Component) Player.m_localPlayer).transform.position;
-      Vector2i zone = ZoneSystem.GetZone(position);
-      Volatile.Write(ref _interestZoneX, zone.x);
-      Volatile.Write(ref _interestZoneY, zone.y);
+      Volatile.Write(ref _interestZoneX, currentZone.x);
+      Volatile.Write(ref _interestZoneY, currentZone.y);
     }
 
     if (CanonicalEnabled()) {
       if (server) {
         QueueCanonicalMutations();
       } else {
-        if (registerInterest) QueueCanonicalInterest();
+        if (registerInterest && QueueCanonicalInterest(interestRadius))
+          MarkInterestRegistered(currentZone, interestRadius, now);
         FlushCanonicalAcks();
       }
       return;
@@ -148,6 +204,12 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       try {
         _nextWorker = now + WorkerSeconds;
         _ = Task.Run(() => Work(server, registerInterest));
+        if (registerInterest) MarkInterestRegistered(
+            currentZone,
+            _probe != null && !_probe.Terminal
+                ? ProbeInterestRadiusZones
+                : WorldInterestRadiusZones,
+            now);
       } catch {
         Interlocked.Exchange(ref _workerInFlight, 0);
         throw;
@@ -235,10 +297,17 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       throw new InvalidDataException("canonical_zdo_delivery_invalid");
     delivery.reliable_seq = envelope.seq;
     active._clientInbound.Enqueue(delivery);
-    active.Write("canonical_delivery_banked", active._probe?.ActionId ?? "client",
-        "reliable_seq=" + envelope.seq
-        + " delivery_seq=" + delivery.seq
-        + " logical_peer_id=" + active._gameSession.LogicalPeerId);
+    long banked = Interlocked.Increment(
+        ref active._canonicalDeliveriesBanked);
+    if (delivery.@object.receipt_required ||
+        banked % BulkProgressInterval == 0)
+      active.Write("canonical_delivery_progress",
+          active._probe?.ActionId ?? "client",
+          "banked=" + banked
+          + " inbound=" + active._clientInbound.Count
+          + " reliable_seq=" + envelope.seq
+          + " delivery_seq=" + delivery.seq
+          + " logical_peer_id=" + active._gameSession.LogicalPeerId);
   }
 
   public static void EnqueueCanonicalMutationReceipt(
@@ -288,6 +357,11 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       long reliableSequence,
       string runId,
       string worldEpoch,
+      string logicalPeerId,
+      long zoneEpoch,
+      int zoneX,
+      int zoneY,
+      int radiusZones,
       long interested,
       long pending,
       long durable) {
@@ -298,6 +372,11 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         ReliableSequence = reliableSequence,
         RunId = runId,
         WorldEpoch = worldEpoch,
+        LogicalPeerId = logicalPeerId,
+        ZoneEpoch = zoneEpoch,
+        ZoneX = zoneX,
+        ZoneY = zoneY,
+        RadiusZones = radiusZones,
         Count = interested,
         Pending = pending,
         Durable = durable,
@@ -309,14 +388,28 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || !Enabled() || !IsServer() || zdo == null) return;
     try {
-      string runId = zdo.GetString(ProbeTagHash, string.Empty);
-      if (!SafeToken(runId, 80) ||
-          !string.Equals(runId, active._runId, StringComparison.Ordinal)) return;
+      if (!active.ServerInterestContains(zdo.GetSector())) return;
       active._serverOutbound.Enqueue(active.Snapshot(zdo, tombstone: false));
     } catch (Exception exception) {
       active.Write("capture_failed", "mutation",
           exception.GetType().Name + ":" + exception.Message);
     }
+  }
+
+  public static void NotifyHardRelocation(Vector3 target) {
+    ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || !Enabled() || IsServer() || !Finite(target))
+      return;
+    Vector2i zone = ZoneSystem.GetZone(target);
+    active._prefetchInterestZoneX = zone.x;
+    active._prefetchInterestZoneY = zone.y;
+    active._hasPrefetchInterest = true;
+    active._nextInterest = 0.0f;
+    active.Write("hard_relocation_interest_requested", "client",
+        "zone=" + zone.x + "," + zone.y
+        + " target=" + target.x.ToString("0.##", CultureInfo.InvariantCulture)
+        + "," + target.y.ToString("0.##", CultureInfo.InvariantCulture)
+        + "," + target.z.ToString("0.##", CultureInfo.InvariantCulture));
   }
 
   public static void CaptureTombstone(ZDOID uid) {
@@ -326,8 +419,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     try {
       ZDO zdo = ZDOMan.instance.GetZDO(uid);
       if (zdo == null) return;
-      string runId = zdo.GetString(ProbeTagHash, string.Empty);
-      if (!string.Equals(runId, active._runId, StringComparison.Ordinal)) return;
+      if (!active.ServerInterestContains(zdo.GetSector())) return;
       JournalObject tombstone = active.Snapshot(zdo, tombstone: true);
       tombstone.object_revision++;
       tombstone.source_seq = Interlocked.Increment(ref active._sourceSequence);
@@ -418,9 +510,9 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       Write("drive_request_duplicate", actionId, "existing_drive_active");
       return;
     }
-    // Four zones east: inside Lumberjacks' explicit C3 interest but outside Valheim's
+    // Three zones east: inside Lumberjacks' explicit interest but outside Valheim's
     // near/distant CreateSyncList rings. This is the acceptance object's negative control.
-    Vector3 position = origin + new Vector3(256.0f, 0.0f, 0.0f);
+    Vector3 position = origin + new Vector3(192.0f, 0.0f, 0.0f);
     ZDO zdo = ZDOMan.instance.CreateNewZDO(position, ProbePrefabHash);
     _watchedZdo = zdo.m_uid.ToString();
     _drive = new() {
@@ -445,6 +537,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         return;
       }
       JournalObject current = Snapshot(_drive.Zdo, tombstone: false);
+      current.receipt_required = true;
       JournalObject stale = Clone(current);
       stale.delivery_only = true;
       stale.source_seq = Interlocked.Increment(ref _sourceSequence);
@@ -500,9 +593,94 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         zone_y = zone.y,
         body_b64 = tombstone ? string.Empty : body.GetBase64(),
         tombstone = tombstone,
-        delivery_only = false
+        delivery_only = false,
+        receipt_required = false,
+        delivery_recipient_id = string.Empty
     };
   }
+
+  void QueueInterestSnapshot(CanonicalEvent item) {
+    if (!SafeToken(item.LogicalPeerId, 80) || item.ZoneEpoch < 1 ||
+        item.RadiusZones is < 0 or > ProbeInterestRadiusZones ||
+        ZDOMan.instance == null)
+      throw new InvalidDataException("canonical_interest_snapshot_invalid");
+
+    if (_serverInterests.TryGetValue(
+            item.LogicalPeerId, out ServerInterest existing) &&
+        string.Equals(existing.RunId, item.RunId, StringComparison.Ordinal) &&
+        existing.ZoneEpoch == item.ZoneEpoch &&
+        existing.ZoneX == item.ZoneX && existing.ZoneY == item.ZoneY &&
+        existing.RadiusZones == item.RadiusZones &&
+        item.Durable > 0) {
+      Write("interest_snapshot_duplicate", "server",
+          "recipient_id=" + item.LogicalPeerId
+          + " zone_epoch=" + item.ZoneEpoch);
+      return;
+    }
+
+    _serverInterests[item.LogicalPeerId] = new() {
+        RunId = item.RunId,
+        ZoneEpoch = item.ZoneEpoch,
+        ZoneX = item.ZoneX,
+        ZoneY = item.ZoneY,
+        RadiusZones = item.RadiusZones
+    };
+
+    List<ZDO> selected = new();
+    ZDOMan.instance.FindSectorObjects(
+        new Vector2i(item.ZoneX, item.ZoneY),
+        item.RadiusZones, 0, selected);
+    Vector3 center =
+        ZoneSystem.GetZonePos(new Vector2i(item.ZoneX, item.ZoneY));
+    List<ZDO> ordered = selected
+        .Where(zdo => zdo != null && zdo.GetPrefab() != 0 &&
+            zdo.GetPrefab() != PlayerPrefabHash)
+        .GroupBy(zdo => zdo.m_uid)
+        .Select(group => group.First())
+        .OrderBy(zdo => PortalPrefabHashes.Contains(zdo.GetPrefab()) ? 0 : 1)
+        .ThenBy(zdo => (zdo.GetPosition() - center).sqrMagnitude)
+        .ToList();
+    HashSet<ZDOID> selectedIds = new(ordered.Select(zdo => zdo.m_uid));
+    HashSet<ZDOID> dependencyIds = new();
+    int linkedDependencies = 0;
+    foreach (ZDO portal in ordered.Where(
+                 zdo => PortalPrefabHashes.Contains(zdo.GetPrefab()))) {
+      _serverOutbound.Enqueue(Snapshot(portal, tombstone: false));
+      ZDOID targetId = portal.GetConnectionZDOID(
+          ZDOExtraData.ConnectionType.Portal);
+      if (targetId == ZDOID.None || selectedIds.Contains(targetId) ||
+          !dependencyIds.Add(targetId))
+        continue;
+      ZDO target = ZDOMan.instance.GetZDO(targetId);
+      if (target == null || target.GetPrefab() == 0) continue;
+      JournalObject dependency = Snapshot(target, tombstone: false);
+      dependency.delivery_recipient_id = item.LogicalPeerId;
+      _serverOutbound.Enqueue(dependency);
+      linkedDependencies++;
+    }
+    foreach (ZDO zdo in ordered.Where(
+                 zdo => !PortalPrefabHashes.Contains(zdo.GetPrefab())))
+      _serverOutbound.Enqueue(Snapshot(zdo, tombstone: false));
+    long queued = Interlocked.Add(
+        ref _serverSnapshotsQueued, ordered.Count + linkedDependencies);
+    Write("interest_snapshot_queued", "server",
+        "recipient_id=" + item.LogicalPeerId
+        + " zone_epoch=" + item.ZoneEpoch
+        + " zone=" + item.ZoneX + "," + item.ZoneY
+        + " radius_zones=" + item.RadiusZones
+        + " objects=" + ordered.Count
+        + " portals=" +
+        ordered.Count(zdo => PortalPrefabHashes.Contains(zdo.GetPrefab()))
+        + " linked_dependencies=" + linkedDependencies
+        + " server_outbound=" + _serverOutbound.Count
+        + " queued_total=" + queued);
+  }
+
+  bool ServerInterestContains(Vector2i zone) =>
+      _serverInterests.Values.Any(value =>
+          string.Equals(value.RunId, _runId, StringComparison.Ordinal) &&
+          Math.Abs(value.ZoneX - zone.x) <= value.RadiusZones &&
+          Math.Abs(value.ZoneY - zone.y) <= value.RadiusZones);
 
   void QueueCanonicalMutations() {
     int sent = 0;
@@ -516,32 +694,66 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       if (!_gameSession.TryQueueZdoJournalMutation(
               payload.Substring(1, payload.Length - 2))) {
         _serverOutbound.Enqueue(value);
+        long refused = Interlocked.Increment(
+            ref _canonicalMutationBackpressure);
+        if (refused == 1 || refused % 128 == 0) {
+          IDictionary<string, object> session = _gameSession.Snapshot();
+          Write("canonical_mutation_backpressure", "server",
+              "refused=" + refused
+              + " source_seq=" + value.source_seq
+              + " payload_bytes=" + payload.Length
+              + " server_outbound=" + _serverOutbound.Count
+              + " session_state=" + session["state"]
+              + " websocket_connected=" + session["websocket_connected"]
+              + " session_outbound=" + session["outbound_queue_depth"]);
+        }
         break;
       }
-      Write("mutation_posted", "server",
-          "transport=canonical_session source_seq=" + value.source_seq
-          + " object_revision=" + value.object_revision
-          + " tombstone=" + value.tombstone
-          + " delivery_only=" + value.delivery_only);
+      long queued = Interlocked.Increment(
+          ref _canonicalMutationsQueued);
+      if (queued == 1 || queued % BulkProgressInterval == 0)
+        Write("canonical_mutation_queue_progress", "server",
+            "queued=" + queued
+            + " source_seq=" + value.source_seq
+            + " payload_bytes=" + payload.Length
+            + " server_outbound=" + _serverOutbound.Count);
+      if (value.receipt_required || value.tombstone || value.delivery_only)
+        Write("mutation_posted", "server",
+            "transport=canonical_session source_seq=" + value.source_seq
+            + " object_revision=" + value.object_revision
+            + " tombstone=" + value.tombstone
+            + " delivery_only=" + value.delivery_only);
     }
   }
 
-  void QueueCanonicalInterest() {
+  bool QueueCanonicalInterest(int radiusZones) {
     int zoneX = Volatile.Read(ref _interestZoneX);
     int zoneY = Volatile.Read(ref _interestZoneY);
+    long zoneEpoch = Interlocked.Read(ref _interestZoneEpoch) + 1;
     string fields =
         "\"run_id\":\"" + Escape(_runId)
         + "\",\"world_epoch\":\"" + Escape(_worldEpoch)
-        + "\",\"zone_epoch\":1"
+        + "\",\"zone_epoch\":" + zoneEpoch.ToString(CultureInfo.InvariantCulture)
         + ",\"zone_x\":" + zoneX.ToString(CultureInfo.InvariantCulture)
         + ",\"zone_y\":" + zoneY.ToString(CultureInfo.InvariantCulture)
         + ",\"radius_zones\":"
-        + InterestRadiusZones.ToString(CultureInfo.InvariantCulture)
+        + radiusZones.ToString(CultureInfo.InvariantCulture)
         + ",\"refresh\":false";
-    if (!_gameSession.TryQueueZdoJournalInterest(fields)) return;
+    if (!_gameSession.TryQueueZdoJournalInterest(fields)) return false;
+    Interlocked.Exchange(ref _interestZoneEpoch, zoneEpoch);
     Write("canonical_interest_queued", _probe?.ActionId ?? "client",
-        "zone=" + zoneX + "," + zoneY
+        "zone_epoch=" + zoneEpoch + " zone=" + zoneX + "," + zoneY
+        + " radius_zones=" + radiusZones
         + " logical_peer_id=" + _gameSession.LogicalPeerId);
+    return true;
+  }
+
+  void MarkInterestRegistered(Vector2i zone, int radiusZones, float now) {
+    _registeredInterestZoneX = zone.x;
+    _registeredInterestZoneY = zone.y;
+    _registeredInterestRadius = radiusZones;
+    _hasRegisteredInterest = true;
+    _nextInterest = now + InterestSeconds;
   }
 
   void FlushCanonicalAcks() {
@@ -549,9 +761,14 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     while (count++ < 64 && _canonicalAcks.TryDequeue(out CanonicalAck ack)) {
       if (_gameSession.QueueZdoJournalAck(
               ack.WorldEpoch, ack.JournalSequence, ack.ReliableSequence)) {
-        Write("canonical_ack_queued", _probe?.ActionId ?? "client",
-            "delivery_seq=" + ack.JournalSequence
-            + " reliable_seq=" + ack.ReliableSequence);
+        long queued = Interlocked.Increment(ref _canonicalAcksQueued);
+        if ((_probe != null && !_probe.Terminal) ||
+            queued % BulkProgressInterval == 0)
+          Write("canonical_ack_progress", _probe?.ActionId ?? "client",
+              "queued=" + queued
+              + " remaining=" + _canonicalAcks.Count
+              + " delivery_seq=" + ack.JournalSequence
+              + " reliable_seq=" + ack.ReliableSequence);
         continue;
       }
       _canonicalAcks.Enqueue(ack);
@@ -593,8 +810,13 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
           break;
         case "interest_status":
           Volatile.Write(ref _interestedRecipients, checked((int) item.Count));
+          QueueInterestSnapshot(item);
           Write("canonical_interest_status", "server",
-              "interested_recipients=" + item.Count
+              "recipient_id=" + item.LogicalPeerId
+              + " zone_epoch=" + item.ZoneEpoch
+              + " zone=" + item.ZoneX + "," + item.ZoneY
+              + " radius_zones=" + item.RadiusZones
+              + " interested_recipients=" + item.Count
               + " pending=" + item.Pending
               + " durable_objects=" + item.Durable);
           break;
@@ -660,10 +882,13 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         ["recipient_id"] = _recipientId,
         ["run_id"] = _runId,
         ["world_epoch"] = _worldEpoch,
-        ["zone_epoch"] = 1,
+        ["zone_epoch"] = Math.Max(
+            1, Interlocked.Read(ref _interestZoneEpoch)),
         ["zone_x"] = zoneX,
         ["zone_y"] = zoneY,
-        ["radius_zones"] = InterestRadiusZones,
+        ["radius_zones"] = _probe != null && !_probe.Terminal
+            ? ProbeInterestRadiusZones
+            : WorldInterestRadiusZones,
         ["refresh"] = false
     };
     string response = Send(
@@ -704,8 +929,12 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   }
 
   void DrainClient() {
+    int budget =
+        Player.m_localPlayer != null && Player.m_localPlayer.IsTeleporting()
+            ? TeleportApplyPerUpdate
+            : ApplyPerUpdate;
     int count = 0;
-    while (count++ < ApplyPerUpdate &&
+    while (count++ < budget &&
         _clientInbound.TryDequeue(out JournalDelivery delivery))
       Apply(delivery);
   }
@@ -737,10 +966,15 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       long current = Math.Max(previous, actualRevision);
       if (value.object_revision <= current) {
         if (delivery.kind == "snapshot") {
-          Interlocked.Increment(ref _superseded);
-          Write("snapshot_superseded", _probe?.ActionId ?? "client",
-              "seq=" + delivery.seq + " uid=" + key
-              + " incoming=" + value.object_revision + " current=" + current);
+          long superseded = Interlocked.Increment(ref _superseded);
+          if (value.receipt_required ||
+              superseded % BulkProgressInterval == 0)
+            Write("snapshot_superseded_progress",
+                _probe?.ActionId ?? "client",
+                "superseded=" + superseded
+                + " seq=" + delivery.seq + " uid=" + key
+                + " incoming=" + value.object_revision
+                + " current=" + current);
         } else {
           Interlocked.Increment(ref _staleRejected);
           Write("stale_rejected_before_mutation", _probe?.ActionId ?? "client",
@@ -792,13 +1026,18 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       else
         Interlocked.Increment(ref _deltasApplied);
       Ack(delivery);
-      Write(
-          delivery.kind == "snapshot"
-              ? "snapshot_applied_typed" : "delta_applied_typed",
-          _probe?.ActionId ?? "client",
-          "seq=" + delivery.seq + " uid=" + key
-          + " object_revision=" + value.object_revision
-          + " value=" + target.GetInt(ProbeValueHash, -1));
+      long applied =
+          Interlocked.Read(ref _snapshotsApplied) +
+          Interlocked.Read(ref _deltasApplied);
+      if (value.receipt_required || value.prefab == ProbePrefabHash ||
+          applied % BulkProgressInterval == 0)
+        Write("typed_apply_progress", _probe?.ActionId ?? "client",
+            "applied=" + applied
+            + " inbound=" + _clientInbound.Count
+            + " seq=" + delivery.seq + " uid=" + key
+            + " kind=" + delivery.kind
+            + " object_revision=" + value.object_revision
+            + " value=" + target.GetInt(ProbeValueHash, -1));
     } catch (InvalidDataException exception) {
       Interlocked.Increment(ref _malformedRejected);
       Ack(delivery);
@@ -828,6 +1067,19 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       _clientAcks.Enqueue(delivery.seq);
     }
   }
+
+  public string DescribeRuntimeProgress() =>
+      "banked=" + Interlocked.Read(ref _canonicalDeliveriesBanked)
+      + " inbound=" + _clientInbound.Count
+      + " applied=" +
+          (Interlocked.Read(ref _snapshotsApplied) +
+           Interlocked.Read(ref _deltasApplied))
+      + " superseded=" + Interlocked.Read(ref _superseded)
+      + " apply_failures=" + Interlocked.Read(ref _applyFailures);
+
+  public static string DescribeActiveRuntimeProgress() =>
+      Volatile.Read(ref _active)?.DescribeRuntimeProgress()
+      ?? "zdo_journal=unavailable";
 
   static void ValidateBody(byte[] body, int expectedPrefab) {
     if (body == null || body.Length is < 6 or > MaxBodyBytes)
@@ -999,7 +1251,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       !float.IsNaN(value.z) && !float.IsInfinity(value.z);
 
   static long Revision(uint dataRevision, ushort ownerRevision) =>
-      ((long) dataRevision << 16) | ownerRevision;
+      Math.Max(1L, ((long) dataRevision << 16) | ownerRevision);
 
   static JournalObject Clone(JournalObject value) =>
       new() {
@@ -1021,7 +1273,9 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
           zone_y = value.zone_y,
           body_b64 = value.body_b64,
           tombstone = value.tombstone,
-          delivery_only = value.delivery_only
+          delivery_only = value.delivery_only,
+          receipt_required = value.receipt_required,
+          delivery_recipient_id = value.delivery_recipient_id
       };
 
   static Dictionary<string, object> ToDictionary(JournalObject value) =>
@@ -1044,7 +1298,10 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
           ["zone_y"] = value.zone_y,
           ["body_b64"] = value.body_b64 ?? string.Empty,
           ["tombstone"] = value.tombstone,
-          ["delivery_only"] = value.delivery_only
+          ["delivery_only"] = value.delivery_only,
+          ["receipt_required"] = value.receipt_required,
+          ["delivery_recipient_id"] =
+              value.delivery_recipient_id ?? string.Empty
       };
 
   static T Deserialize<T>(string raw) where T : class {
@@ -1164,6 +1421,13 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
           ["create_sync_lists"] = Interlocked.Read(ref _createSyncLists),
           ["native_candidates"] = Interlocked.Read(ref _nativeCandidates),
           ["native_rpc_zdo_data"] = Interlocked.Read(ref _nativeRpcDeliveries),
+          ["server_snapshots_queued"] =
+              Interlocked.Read(ref _serverSnapshotsQueued),
+          ["server_outbound"] = _serverOutbound.Count,
+          ["canonical_mutations_queued"] =
+              Interlocked.Read(ref _canonicalMutationsQueued),
+          ["canonical_mutation_backpressure"] =
+              Interlocked.Read(ref _canonicalMutationBackpressure),
           ["snapshots_applied"] = Interlocked.Read(ref _snapshotsApplied),
           ["deltas_applied"] = Interlocked.Read(ref _deltasApplied),
           ["tombstones_applied"] = Interlocked.Read(ref _tombstonesApplied),
@@ -1230,6 +1494,9 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     [DataMember(Name = "body_b64")] public string body_b64;
     [DataMember(Name = "tombstone")] public bool tombstone;
     [DataMember(Name = "delivery_only")] public bool delivery_only;
+    [DataMember(Name = "receipt_required")] public bool receipt_required;
+    [DataMember(Name = "delivery_recipient_id")]
+    public string delivery_recipient_id;
   }
 
   sealed class DriveState {
@@ -1273,6 +1540,18 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     public long Count;
     public long Pending;
     public long Durable;
+    public long ZoneEpoch;
+    public int ZoneX;
+    public int ZoneY;
+    public int RadiusZones;
+  }
+
+  sealed class ServerInterest {
+    public string RunId;
+    public long ZoneEpoch;
+    public int ZoneX;
+    public int ZoneY;
+    public int RadiusZones;
   }
 }
 
@@ -1309,4 +1588,16 @@ static class ZdoJournalCutoverPatches {
   [HarmonyPrefix]
   static void RpcZdoDataPrefix(ZPackage pkg) =>
       ZdoJournalCutoverRunner.ObserveNativeZdoData(pkg);
+}
+
+[HarmonyPatch(
+    typeof(Player), nameof(Player.TeleportTo),
+    new[] { typeof(Vector3), typeof(Quaternion), typeof(bool) })]
+static class ZdoJournalHardRelocationPatches {
+  [HarmonyPostfix]
+  static void TeleportToPostfix(
+      Player __instance, Vector3 pos, bool __result) {
+    if (__result && ReferenceEquals(__instance, Player.m_localPlayer))
+      ZdoJournalCutoverRunner.NotifyHardRelocation(pos);
+  }
 }

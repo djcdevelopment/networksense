@@ -30,6 +30,7 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   readonly LumberjacksGameSessionRunner _gameSession;
   readonly WorldZoneCutoverRunner _worldZone;
   readonly ConcurrentQueue<CanonicalFrame> _frames = new();
+  readonly ConcurrentQueue<CanonicalMotion> _motion = new();
   readonly Dictionary<ZRpc, LogicalPeer> _byRpc = new();
   readonly Dictionary<string, LogicalPeer> _byLogical =
       new(StringComparer.Ordinal);
@@ -41,6 +42,7 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   bool _descriptorFailureWritten;
   bool _disposed;
   long _suppressedInvokes;
+  long _refPosRejected;
 
   public LogicalPeerCutoverRunner(
       LumberjacksGameSessionRunner gameSession,
@@ -66,6 +68,10 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   public static void EnqueueCanonicalFrame(string type, string json) =>
       Volatile.Read(ref _active)?._frames.Enqueue(new(type, json));
 
+  public static void EnqueueCanonicalMotion(
+      ushort sequence, ValheimMotionSnapshot snapshot) =>
+      Volatile.Read(ref _active)?._motion.Enqueue(new(sequence, snapshot));
+
   public void Update(float now) {
     if (_disposed) return;
     if (!Selected) {
@@ -73,6 +79,7 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
       return;
     }
     DrainFrames();
+    DrainMotion();
     if (ZNet.instance == null || ZNet.instance.IsServer() || _clientConstructed ||
         _remotePeerUid == 0 || string.IsNullOrWhiteSpace(_remoteLogicalPeerId))
       return;
@@ -97,6 +104,49 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
         + " remote_logical_peer_id=" + _remoteLogicalPeerId
         + " world_epoch=" + worldEpoch
         + " native_socket=false native_handshake=false");
+  }
+
+  void DrainMotion() {
+    while (_motion.TryDequeue(out CanonicalMotion motion)) {
+      if (ZNet.instance == null || !ZNet.instance.IsServer()) continue;
+      ZDOID characterId = new(
+          motion.Snapshot.ZdoUserId, motion.Snapshot.ZdoId);
+      LogicalPeer matched = null;
+      foreach (LogicalPeer candidate in _byLogical.Values) {
+        if (candidate.Peer.m_characterID == characterId) {
+          matched = candidate;
+          break;
+        }
+      }
+      if (matched == null) {
+        long rejected = Interlocked.Increment(ref _refPosRejected);
+        if (rejected <= 4 || IsPowerOfTwo(rejected))
+          Write(
+              "logical_refpos_rejected",
+              "reason=character_generation_not_authorized character_id="
+              + characterId + " sequence=" + motion.Sequence
+              + " count=" + rejected);
+        continue;
+      }
+      matched.Peer.m_refPos = new Vector3(
+          motion.Snapshot.X,
+          motion.Snapshot.Y,
+          motion.Snapshot.Z);
+      if (!matched.RefPosWritten) {
+        matched.RefPosWritten = true;
+        Write(
+            "logical_refpos_applied",
+            "logical_peer_id=" + matched.LogicalPeerId
+            + " character_id=" + characterId
+            + " sequence=" + motion.Sequence
+            + " position="
+            + motion.Snapshot.X.ToString("0.###", CultureInfo.InvariantCulture)
+            + ","
+            + motion.Snapshot.Y.ToString("0.###", CultureInfo.InvariantCulture)
+            + ","
+            + motion.Snapshot.Z.ToString("0.###", CultureInfo.InvariantCulture));
+      }
+    }
   }
 
   void DrainFrames() {
@@ -427,11 +477,22 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
     }
   }
 
+  readonly struct CanonicalMotion {
+    public readonly ushort Sequence;
+    public readonly ValheimMotionSnapshot Snapshot;
+    public CanonicalMotion(
+        ushort sequence, ValheimMotionSnapshot snapshot) {
+      Sequence = sequence;
+      Snapshot = snapshot;
+    }
+  }
+
   sealed class LogicalPeer {
     public readonly string LogicalPeerId;
     public readonly string Role;
     public readonly ZNetPeer Peer;
     public readonly LogicalSocket Socket;
+    public bool RefPosWritten;
     public LogicalPeer(
         string logicalPeerId, string role, ZNetPeer peer, LogicalSocket socket) {
       LogicalPeerId = logicalPeerId;

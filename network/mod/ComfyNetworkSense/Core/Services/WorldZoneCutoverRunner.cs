@@ -7,6 +7,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -47,6 +49,18 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
   static readonly AccessTools.FieldRef<ZDOMan, Dictionary<ZDOID, ZDO>>
       ObjectsById = AccessTools.FieldRefAccess<ZDOMan, Dictionary<ZDOID, ZDO>>(
           "m_objectsByID");
+  static readonly FieldInfo LocationIconsField =
+      AccessTools.Field(typeof(ZoneSystem), "m_locationIcons");
+  static readonly MethodInfo ClearGlobalKeysMethod =
+      AccessTools.Method(typeof(ZoneSystem), "ClearGlobalKeys");
+  static readonly MethodInfo GlobalKeyAddMethod =
+      AccessTools.Method(
+          typeof(ZoneSystem), "GlobalKeyAdd",
+          new[] { typeof(string), typeof(bool) });
+  static readonly MethodInfo GlobalKeyRemoveMethod =
+      AccessTools.Method(
+          typeof(ZoneSystem), "GlobalKeyRemove",
+          new[] { typeof(string), typeof(bool) });
   static WorldZoneCutoverRunner _active;
 
   readonly LumberjacksGameSessionRunner _gameSession;
@@ -65,6 +79,11 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
   float _nextPublishAt;
   float _nextRequestAt;
   bool _descriptorRejected;
+  bool _worldBootstrapApplied;
+  bool _worldBootstrapApplyFailed;
+  bool _bootstrapTerminalWritten;
+  float _respawnObservedAt;
+  float _nextBootstrapProgressAt;
   MembershipProbe _membership;
   long _nextZoneEpoch;
   long _nativeSyncCandidates;
@@ -87,6 +106,80 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
 
   public bool DescriptorAccepted => _descriptor != null && !_descriptorRejected;
   public bool DescriptorRejected => _descriptorRejected;
+
+  public static bool TrySetPortalTraversal(
+      bool enabled,
+      out bool previous,
+      out bool effective,
+      out string detail) {
+    previous = false;
+    effective = false;
+    detail = string.Empty;
+    WorldZoneCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || ZNet.instance == null ||
+        !ZNet.instance.IsServer() || ZoneSystem.instance == null ||
+        GlobalKeyAddMethod == null || GlobalKeyRemoveMethod == null) {
+      detail = "portal_traversal_runtime_not_ready";
+      return false;
+    }
+    try {
+      previous =
+          !ZoneSystem.instance.GetGlobalKey(GlobalKeys.NoPortals);
+      if (enabled != previous) {
+        if (enabled) {
+          GlobalKeyRemoveMethod.Invoke(
+              ZoneSystem.instance,
+              new object[] { GlobalKeys.NoPortals.ToString(), false });
+        } else {
+          GlobalKeyAddMethod.Invoke(
+              ZoneSystem.instance,
+              new object[] { GlobalKeys.NoPortals.ToString(), false });
+        }
+      }
+      effective =
+          !ZoneSystem.instance.GetGlobalKey(GlobalKeys.NoPortals);
+      if (effective != enabled) {
+        detail = "portal_traversal_runtime_state_mismatch";
+        return false;
+      }
+      active._publishedRunId = string.Empty;
+      active._publishedConnectionId = string.Empty;
+      active._nextPublishAt = 0f;
+      detail = previous == effective ? "unchanged" : "runtime_only";
+      active.Write(
+          "portal_traversal_runtime_changed", "server",
+          "previous=" + previous + " effective=" + effective
+          + " persistence=false");
+      return true;
+    } catch (Exception exception) {
+      detail = "portal_traversal_runtime_failed:"
+          + (exception.InnerException ?? exception).GetType().Name;
+      return false;
+    }
+  }
+
+  public static bool TryGetInitialZone(out Vector2i zone) {
+    WorldZoneCutoverRunner active = Volatile.Read(ref _active);
+    if (active?._descriptor == null || active._descriptorRejected) {
+      zone = default;
+      return false;
+    }
+    try {
+      PlayerProfile profile = Game.instance?.GetPlayerProfile();
+      if (profile != null && profile.HaveLogoutPoint()) {
+        zone = ZoneSystem.GetZone(profile.GetLogoutPoint());
+        return true;
+      }
+      if (profile != null && profile.HaveCustomSpawnPoint()) {
+        zone = ZoneSystem.GetZone(profile.GetCustomSpawnPoint());
+        return true;
+      }
+    } catch { }
+    zone = new Vector2i(
+        active._descriptor.initial_zone_x,
+        active._descriptor.initial_zone_y);
+    return true;
+  }
 
   public bool TryCreateLogicalWorld(
       out World world,
@@ -146,6 +239,8 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
 
     if (_descriptor != null && _pendingRpc != null && _pendingPeerInfo != null)
       ResumePendingPeerInfo();
+    ApplyWorldBootstrap();
+    EvaluateBootstrap(now);
     EvaluateMembershipDeadline(now);
   }
 
@@ -161,7 +256,35 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     if (world == null || world.m_uid == 0 || string.IsNullOrWhiteSpace(world.m_name) ||
         string.IsNullOrWhiteSpace(world.m_seedName)) return;
 
-    Vector2i zone = ZoneSystem.GetZone(Vector3.zero);
+    if (ZoneSystem.instance == null || Game.instance == null) return;
+    string startLocationName = Game.instance.m_StartLocation;
+    if (string.IsNullOrWhiteSpace(startLocationName) ||
+        !ZoneSystem.instance.GetLocationIcon(
+            startLocationName, out Vector3 startLocation) ||
+        !Finite(startLocation))
+      return;
+    Dictionary<Vector3, string> locationIcons = new();
+    ZoneSystem.instance.GetLocationIcons(locationIcons);
+    if (locationIcons.Count is < 1 or > 4096 ||
+        !locationIcons.Any(item =>
+            string.Equals(
+                item.Value, startLocationName, StringComparison.Ordinal)))
+      return;
+    List<string> globalKeys = ZoneSystem.instance.GetGlobalKeys();
+    if (globalKeys.Count > 512) return;
+    globalKeys.Sort(StringComparer.Ordinal);
+    List<KeyValuePair<Vector3, string>> orderedIcons = locationIcons
+        .Where(item => Finite(item.Key) &&
+            !string.IsNullOrWhiteSpace(item.Value) &&
+            item.Value.Length <= 128)
+        .OrderBy(item => item.Value, StringComparer.Ordinal)
+        .ThenBy(item => item.Key.x)
+        .ThenBy(item => item.Key.y)
+        .ThenBy(item => item.Key.z)
+        .ToList();
+    if (orderedIcons.Count != locationIcons.Count) return;
+
+    Vector2i zone = ZoneSystem.GetZone(startLocation);
     string worldEpoch = "world-" + unchecked((ulong)world.m_uid)
         .ToString("x16", CultureInfo.InvariantCulture);
     string fields =
@@ -180,7 +303,10 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
         + ZNet.instance.GetTimeSeconds().ToString("R", CultureInfo.InvariantCulture)
         + ",\"save_epoch\":1"
         + ",\"initial_zone_x\":" + zone.x.ToString(CultureInfo.InvariantCulture)
-        + ",\"initial_zone_y\":" + zone.y.ToString(CultureInfo.InvariantCulture);
+        + ",\"initial_zone_y\":" + zone.y.ToString(CultureInfo.InvariantCulture)
+        + ",\"start_location_name\":\"" + Escape(startLocationName) + "\""
+        + ",\"global_keys\":" + JsonStringArray(globalKeys)
+        + ",\"location_icons\":" + JsonLocationIcons(orderedIcons);
     if (!_gameSession.TryQueueWorldDescriptorPublish(fields)) return;
     _publishedRunId = runId;
     _publishedConnectionId = connectionId;
@@ -188,7 +314,9 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     Write("descriptor_published", "server",
         "world_epoch=" + worldEpoch
         + " world_generation_version=" + world.m_worldGenVersion
-        + " initial_zone=" + zone.x + "," + zone.y);
+        + " initial_zone=" + zone.x + "," + zone.y
+        + " global_keys=" + globalKeys.Count
+        + " location_icons=" + orderedIcons.Count);
   }
 
   void DrainFrames() {
@@ -214,7 +342,9 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
             "world_epoch=" + _descriptor.world_epoch
             + " world_generation_version=" + _descriptor.world_generation_version
             + " initial_zone=" + _descriptor.initial_zone_x + ","
-            + _descriptor.initial_zone_y);
+            + _descriptor.initial_zone_y
+            + " global_keys=" + _descriptor.global_keys.Length
+            + " location_icons=" + _descriptor.location_icons.Length);
         Acknowledge(reliableSequence);
         continue;
       }
@@ -728,24 +858,17 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
         "reason=" + reason + " destroyed=" + destroyed);
   }
 
-  static WorldDescriptor ParseDescriptor(string json) =>
-      new() {
-          schema_version = (int)ExtractJsonLong(json, "schema_version"),
-          protocol_version = (int)ExtractJsonLong(json, "protocol_version"),
-          release_id = ExtractJsonString(json, "release_id"),
-          run_id = ExtractJsonString(json, "run_id"),
-          world_epoch = ExtractJsonString(json, "world_epoch"),
-          world_name = ExtractJsonString(json, "world_name"),
-          seed = (int)ExtractJsonLong(json, "seed"),
-          seed_name = ExtractJsonString(json, "seed_name"),
-          world_uid = ExtractJsonLong(json, "world_uid"),
-          world_generation_version =
-              (int)ExtractJsonLong(json, "world_generation_version"),
-          network_time = ExtractJsonDouble(json, "network_time"),
-          save_epoch = ExtractJsonLong(json, "save_epoch"),
-          initial_zone_x = (int)ExtractJsonLong(json, "initial_zone_x"),
-          initial_zone_y = (int)ExtractJsonLong(json, "initial_zone_y")
-      };
+  static WorldDescriptor ParseDescriptor(string json) {
+    try {
+      DataContractJsonSerializer serializer =
+          new(typeof(WorldDescriptorEnvelope));
+      using MemoryStream stream =
+          new(Encoding.UTF8.GetBytes(json ?? string.Empty));
+      return (serializer.ReadObject(stream) as WorldDescriptorEnvelope)?.payload;
+    } catch {
+      return null;
+    }
+  }
 
   string Validate(WorldDescriptor value) {
     if (value == null || value.schema_version != 1 ||
@@ -767,7 +890,127 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     if (double.IsNaN(value.network_time) || double.IsInfinity(value.network_time) ||
         value.network_time < 0)
       return "descriptor_network_time_invalid";
+    if (string.IsNullOrWhiteSpace(value.start_location_name) ||
+        value.start_location_name.Length > 128 ||
+        value.global_keys == null || value.global_keys.Length > 512 ||
+        value.global_keys.Any(key =>
+            string.IsNullOrWhiteSpace(key) || key.Length > 256 ||
+            key.Any(char.IsControl)) ||
+        value.location_icons == null ||
+        value.location_icons.Length is < 1 or > 4096 ||
+        value.location_icons.Any(icon =>
+            icon == null || string.IsNullOrWhiteSpace(icon.name) ||
+            icon.name.Length > 128 || icon.name.Any(char.IsControl) ||
+            !Finite(new Vector3(icon.x, icon.y, icon.z))) ||
+        !value.location_icons.Any(icon =>
+            string.Equals(
+                icon.name, value.start_location_name,
+                StringComparison.Ordinal)))
+      return "descriptor_bootstrap_invalid";
     return string.Empty;
+  }
+
+  void ApplyWorldBootstrap() {
+    if (_descriptor == null || _descriptorRejected ||
+        _worldBootstrapApplied || _worldBootstrapApplyFailed ||
+        ZoneSystem.instance == null || ZNet.World == null)
+      return;
+    try {
+      if (LocationIconsField?.GetValue(ZoneSystem.instance)
+              is not Dictionary<Vector3, string> locationIcons ||
+          ClearGlobalKeysMethod == null || GlobalKeyAddMethod == null)
+        throw new MissingMemberException("world_bootstrap_consumer_unavailable");
+
+      locationIcons.Clear();
+      foreach (WorldLocationIcon icon in _descriptor.location_icons)
+        locationIcons[new Vector3(icon.x, icon.y, icon.z)] = icon.name;
+
+      ClearGlobalKeysMethod.Invoke(ZoneSystem.instance, Array.Empty<object>());
+      foreach (string key in _descriptor.global_keys)
+        GlobalKeyAddMethod.Invoke(
+            ZoneSystem.instance, new object[] { key, false });
+
+      _worldBootstrapApplied = true;
+      Write("world_bootstrap_applied_typed", "client",
+          "start_location=" + _descriptor.start_location_name
+          + " global_keys=" + _descriptor.global_keys.Length
+          + " location_icons=" + _descriptor.location_icons.Length
+          + " native_routed_rpc=false");
+    } catch (Exception exception) {
+      _worldBootstrapApplyFailed = true;
+      Exception cause = exception.InnerException ?? exception;
+      BootstrapFailed(
+          "world_bootstrap_apply_failed:" + cause.GetType().Name);
+    }
+  }
+
+  void EvaluateBootstrap(float now) {
+    if (_bootstrapTerminalWritten || _descriptor == null ||
+        !NativeAutotestRequest.ActiveSteamFreeColdJoin ||
+        Game.instance == null || ZNet.instance == null ||
+        ZNet.instance.IsServer())
+      return;
+    if (Player.m_localPlayer != null) {
+      _bootstrapTerminalWritten = true;
+      Write("bootstrap_ready", NativeAutotestRequest.ActiveClient,
+          BootstrapDetail());
+      return;
+    }
+    if (!Game.instance.WaitingForRespawn()) return;
+    if (_respawnObservedAt <= 0f) {
+      _respawnObservedAt = now;
+      _nextBootstrapProgressAt = now;
+    }
+    if (now >= _nextBootstrapProgressAt) {
+      _nextBootstrapProgressAt = now + 2.0f;
+      Write("bootstrap_progress", NativeAutotestRequest.ActiveClient,
+          BootstrapDetail());
+    }
+    if (!_worldBootstrapApplied && now - _respawnObservedAt >= 2.0f) {
+      BootstrapFailed("world_bootstrap_not_applied");
+      return;
+    }
+    if (now - _respawnObservedAt >= 25.0f)
+      BootstrapFailed("respawn_contract_deadline");
+  }
+
+  string BootstrapDetail() {
+    string startName = _descriptor?.start_location_name ?? string.Empty;
+    bool startIcon = false;
+    Vector3 startPosition = Vector3.zero;
+    try {
+      startIcon = ZoneSystem.instance != null &&
+          ZoneSystem.instance.GetLocationIcon(startName, out startPosition);
+    } catch { }
+    Vector3 reference = Vector3.zero;
+    try { reference = ZNet.instance?.GetReferencePosition() ?? Vector3.zero; }
+    catch { }
+    Vector2i referenceZone = ZoneSystem.GetZone(reference);
+    bool zoneLoaded = false;
+    bool areaReady = false;
+    try {
+      zoneLoaded = ZoneSystem.instance != null &&
+          ZoneSystem.instance.IsZoneLoaded(referenceZone);
+      areaReady = ZNetScene.instance != null &&
+          ZNetScene.instance.IsAreaReady(reference);
+    } catch { }
+    return "bootstrap_applied=" + _worldBootstrapApplied
+        + " start_icon=" + startIcon
+        + " start_position=" + Format(startPosition)
+        + " reference_position=" + Format(reference)
+        + " reference_zone=" + referenceZone.x + "," + referenceZone.y
+        + " zone_loaded=" + zoneLoaded
+        + " area_ready=" + areaReady
+        + " local_player=" + (Player.m_localPlayer != null)
+        + " " + ZdoJournalCutoverRunner.DescribeActiveRuntimeProgress();
+  }
+
+  void BootstrapFailed(string reason) {
+    if (_bootstrapTerminalWritten) return;
+    _bootstrapTerminalWritten = true;
+    string detail = "reason=" + reason + " " + BootstrapDetail();
+    Write("bootstrap_failed", NativeAutotestRequest.ActiveClient, detail);
+    LabAutoJoinPatches.FailBootstrap(detail);
   }
 
   void RejectDescriptor(string reason) {
@@ -936,7 +1179,40 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
   }
 
   static string Escape(string value) =>
-      (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"");
+      (value ?? string.Empty)
+          .Replace("\\", "\\\\")
+          .Replace("\"", "\\\"")
+          .Replace("\r", "\\r")
+          .Replace("\n", "\\n")
+          .Replace("\t", "\\t");
+
+  static string JsonStringArray(IEnumerable<string> values) =>
+      "[" + string.Join(
+          ",", values.Select(value => "\"" + Escape(value) + "\"")) + "]";
+
+  static string JsonLocationIcons(
+      IEnumerable<KeyValuePair<Vector3, string>> icons) {
+    StringBuilder json = new("[");
+    bool first = true;
+    foreach (KeyValuePair<Vector3, string> icon in icons) {
+      if (!first) json.Append(',');
+      first = false;
+      json.Append("{\"name\":\"").Append(Escape(icon.Value))
+          .Append("\",\"x\":")
+          .Append(icon.Key.x.ToString("R", CultureInfo.InvariantCulture))
+          .Append(",\"y\":")
+          .Append(icon.Key.y.ToString("R", CultureInfo.InvariantCulture))
+          .Append(",\"z\":")
+          .Append(icon.Key.z.ToString("R", CultureInfo.InvariantCulture))
+          .Append('}');
+    }
+    return json.Append(']').ToString();
+  }
+
+  static string Format(Vector3 value) =>
+      value.x.ToString("0.##", CultureInfo.InvariantCulture) + ","
+      + value.y.ToString("0.##", CultureInfo.InvariantCulture) + ","
+      + value.z.ToString("0.##", CultureInfo.InvariantCulture);
 
   static string EmptyAsNone(string value) =>
       string.IsNullOrEmpty(value) ? "none" : value;
@@ -1005,21 +1281,56 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     }
   }
 
+  [DataContract]
+  sealed class WorldDescriptorEnvelope {
+    [DataMember(Name = "payload")]
+    public WorldDescriptor payload { get; set; }
+  }
+
+  [DataContract]
   sealed class WorldDescriptor {
+    [DataMember(Name = "schema_version")]
     public int schema_version = 0;
+    [DataMember(Name = "protocol_version")]
     public int protocol_version = 0;
+    [DataMember(Name = "release_id")]
     public string release_id = string.Empty;
+    [DataMember(Name = "run_id")]
     public string run_id = string.Empty;
+    [DataMember(Name = "world_epoch")]
     public string world_epoch = string.Empty;
+    [DataMember(Name = "world_name")]
     public string world_name = string.Empty;
+    [DataMember(Name = "seed")]
     public int seed = 0;
+    [DataMember(Name = "seed_name")]
     public string seed_name = string.Empty;
+    [DataMember(Name = "world_uid")]
     public long world_uid = 0;
+    [DataMember(Name = "world_generation_version")]
     public int world_generation_version = 0;
+    [DataMember(Name = "network_time")]
     public double network_time = 0;
+    [DataMember(Name = "save_epoch")]
     public long save_epoch = 0;
+    [DataMember(Name = "initial_zone_x")]
     public int initial_zone_x = 0;
+    [DataMember(Name = "initial_zone_y")]
     public int initial_zone_y = 0;
+    [DataMember(Name = "start_location_name")]
+    public string start_location_name = string.Empty;
+    [DataMember(Name = "global_keys")]
+    public string[] global_keys = Array.Empty<string>();
+    [DataMember(Name = "location_icons")]
+    public WorldLocationIcon[] location_icons = Array.Empty<WorldLocationIcon>();
+  }
+
+  [DataContract]
+  sealed class WorldLocationIcon {
+    [DataMember(Name = "name")] public string name = string.Empty;
+    [DataMember(Name = "x")] public float x { get; set; }
+    [DataMember(Name = "y")] public float y { get; set; }
+    [DataMember(Name = "z")] public float z { get; set; }
   }
 
   sealed class MembershipProbe {

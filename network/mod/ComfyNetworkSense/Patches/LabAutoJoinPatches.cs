@@ -21,6 +21,7 @@ public static class LabAutoJoinPatches
     private static bool _armed;
     private static bool _completed;
     private static bool _joined;
+    private static bool _bootstrapFailed;
     private static NativeAutotestRequest _nativeRequest;
 
     private static FieldInfo _profilesField;
@@ -256,6 +257,13 @@ public static class LabAutoJoinPatches
             + " renderer_type=" + SafeMarker(SystemInfo.graphicsDeviceType.ToString())
             + " graphics_memory_mb=" + SystemInfo.graphicsMemorySize);
         _nativeRequest.Consume();
+    }
+
+    public static void FailBootstrap(string detail)
+    {
+        if (_nativeRequest == null || _bootstrapFailed || _joined) return;
+        _bootstrapFailed = true;
+        _nativeRequest.Record("bootstrap_failed", detail ?? string.Empty);
     }
 
     private static bool TryDeriveHostIndex(out int index)

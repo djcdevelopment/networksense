@@ -8,11 +8,13 @@ using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
+using HarmonyLib;
 using UnityEngine;
 
 /// <summary>
@@ -27,17 +29,32 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   const float InterframeDisplacementThresholdMeters = 0.05f;
   const string AuthorityReceiptFileName = "motion-authority-cutover.jsonl";
   const int GapFrameCount = 20;
+  static readonly MethodInfo CreateNewZdoMethod =
+      AccessTools.Method(
+          typeof(ZDOMan), "CreateNewZDO",
+          new[] { typeof(ZDOID), typeof(Vector3), typeof(int) });
+  static readonly MethodInfo HandleDestroyedZdoMethod =
+      AccessTools.Method(
+          typeof(ZDOMan), "HandleDestroyedZDO",
+          new[] { typeof(ZDOID) });
+  [ThreadStatic]
+  static int _canonicalPositionScopeDepth;
   static LumberjacksMotionRunner _active;
 
   readonly ConcurrentQueue<ReceivedMotion> _received = new();
   readonly ConcurrentQueue<CanonicalFrame> _canonicalFrames = new();
   readonly Dictionary<string, RemoteMotion> _remote = new(StringComparer.Ordinal);
+  readonly Dictionary<string, RemotePlayerDescriptor> _remoteDescriptors =
+      new(StringComparer.Ordinal);
+  readonly Dictionary<string, string> _remoteDescriptorKeysByLogicalPeer =
+      new(StringComparer.Ordinal);
   readonly HashSet<string> _appliedResyncKeys = new(StringComparer.Ordinal);
   readonly Dictionary<ZDOID, GameObject> _playerInstances = new();
   readonly HashSet<string> _drainedKeys = new(StringComparer.Ordinal);
   readonly HashSet<string> _remoteDiscoveryWritten = new(StringComparer.Ordinal);
   readonly HashSet<string> _missingInstanceWritten = new(StringComparer.Ordinal);
   readonly HashSet<string> _localInstanceWritten = new(StringComparer.Ordinal);
+  readonly HashSet<string> _motionWithoutDescriptorWritten = new(StringComparer.Ordinal);
   readonly object _outboundLock = new();
   readonly object _statusLock = new();
   readonly LumberjacksGameSessionRunner _gameSession;
@@ -213,9 +230,29 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         }
 
         ZDOID zdoId = new(remote.Snapshot.ZdoUserId, remote.Snapshot.ZdoId);
+        string descriptorKey = zdoId.UserID + ":" + zdoId.ID;
+        if (!_remoteDescriptors.TryGetValue(
+                descriptorKey, out RemotePlayerDescriptor descriptor)) {
+          remote.HasAppliedPosition = false;
+          if (_motionWithoutDescriptorWritten.Add(descriptorKey))
+            WriteAuthority(
+                "remote_motion_held", _probe?.ActionId ?? string.Empty,
+                "reason=reliable_descriptor_missing uid=" + descriptorKey);
+          continue;
+        }
+        Vector3 target = new(
+            remote.Snapshot.X,
+            remote.Snapshot.Y,
+            remote.Snapshot.Z);
+        ZDO canonicalZdo = ZDOMan.instance?.GetZDO(zdoId);
+        if (canonicalZdo != null)
+          ApplyCanonicalZdoPosition(canonicalZdo, target);
         Interlocked.Increment(ref _zdoLookupAttempts);
         long bindStarted = measurePhases ? Stopwatch.GetTimestamp() : 0;
         GameObject instance = ResolveInstance(zdoId, now);
+        if (instance == null &&
+            EnsureLogicalRemoteZdo(zdoId, remote.Snapshot, descriptor))
+          instance = ResolveInstance(zdoId, now);
         if (measurePhases) {
           _bindMeasurementCount++;
           RecordMainThreadTotalAndMax(
@@ -253,7 +290,6 @@ public sealed class LumberjacksMotionRunner : IDisposable {
             _interframeDisplacementOverThreshold++;
         }
 
-        Vector3 target = new(remote.Snapshot.X, remote.Snapshot.Y, remote.Snapshot.Z);
         float targetError = Vector3.Distance(current, target);
         if (measurePhases) {
           _targetErrorSamples++;
@@ -590,6 +626,13 @@ public sealed class LumberjacksMotionRunner : IDisposable {
     while (_received.TryDequeue(out ReceivedMotion received)) {
       drained++;
       string key = received.Snapshot.ZdoUserId + ":" + received.Snapshot.ZdoId;
+      if (!_remoteDescriptors.ContainsKey(key)) {
+        if (_motionWithoutDescriptorWritten.Add(key))
+          WriteAuthority(
+              "remote_motion_rejected", _probe?.ActionId ?? string.Empty,
+              "reason=reliable_descriptor_missing uid=" + key);
+        continue;
+      }
       if (!_drainedKeys.Add(key)) _coalescedInDrain++;
       if (_remote.TryGetValue(key, out RemoteMotion existing) &&
           !ValheimMotionCodec.IsNewer(received.Sequence, existing.Sequence)) {
@@ -781,7 +824,13 @@ public sealed class LumberjacksMotionRunner : IDisposable {
     }
 
     ZDOID remoteId = new(selected.Snapshot.ZdoUserId, selected.Snapshot.ZdoId);
+    string descriptorKey = remoteId.UserID + ":" + remoteId.ID;
     GameObject remoteInstance = ResolveInstance(remoteId, Time.unscaledTime);
+    if (remoteInstance == null &&
+        _remoteDescriptors.TryGetValue(
+            descriptorKey, out RemotePlayerDescriptor descriptor) &&
+        EnsureLogicalRemoteZdo(remoteId, selected.Snapshot, descriptor))
+      remoteInstance = ResolveInstance(remoteId, Time.unscaledTime);
     if (remoteInstance != null &&
         remoteInstance != Player.m_localPlayer.gameObject) {
       complete = true;
@@ -850,11 +899,10 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   void EvaluateProbe(float now) {
     MotionProbe probe = _probe;
     if (probe == null || probe.Terminal) return;
-    if (now > probe.DeadlineAt) {
-      FailProbe("motion_probe_deadline_exceeded");
+    bool deadlineExpired = now > probe.DeadlineAt;
+    if (now - probe.StartedAt < probe.DurationSeconds &&
+        !deadlineExpired)
       return;
-    }
-    if (now - probe.StartedAt < probe.DurationSeconds) return;
 
     long sent =
         Interlocked.Read(ref _canonicalMotionSent) - probe.SentBefore;
@@ -928,6 +976,11 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         + " failures=" + failures
         + " gap_dropped=" + probe.GapDropped;
     if (!passed) {
+      // The sender deliberately withholds a range before publishing the
+      // correlated reliable recovery. The observer's sampling duration is the
+      // minimum evidence window, not the instant at which that asynchronous
+      // recovery must already have arrived.
+      if (probe.Mode == "observe_gap" && !deadlineExpired) return;
       FailProbe(reason + " " + counts);
       return;
     }
@@ -985,6 +1038,15 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   void DrainCanonicalFrames() {
     while (_canonicalFrames.TryDequeue(out CanonicalFrame frame)) {
       long reliableSequence = ExtractJsonLong(frame.Text, "seq");
+      if (frame.Type == "valheim_remote_player_descriptor") {
+        ApplyRemotePlayerDescriptor(frame.Text, reliableSequence);
+        continue;
+      }
+      if (frame.Type == "valheim_remote_player_tombstone") {
+        ApplyRemotePlayerTombstone(frame.Text, reliableSequence);
+        continue;
+      }
+
       string runId = ExtractJsonString(frame.Text, "run_id");
       string actionId = ExtractJsonString(frame.Text, "action_id");
       if (!string.Equals(
@@ -1053,6 +1115,125 @@ public sealed class LumberjacksMotionRunner : IDisposable {
           (ushort) motionSequence, snapshot, reliableSequence,
           actionId, gapStart, gapEnd);
     }
+  }
+
+  void ApplyRemotePlayerDescriptor(string text, long reliableSequence) {
+    string logicalPeerId = ExtractJsonString(text, "logical_peer_id");
+    long peerUid = ExtractJsonLong(text, "peer_uid");
+    string character = ExtractJsonString(text, "character");
+    long userId = ExtractJsonLong(text, "zdo_user_id");
+    long zdoIdLong = ExtractJsonLong(text, "zdo_id");
+    long generation = ExtractJsonLong(text, "generation");
+    if (!SafeToken(logicalPeerId, 96) || peerUid == 0 || userId == 0 ||
+        zdoIdLong is <= 0 or > uint.MaxValue || generation <= 0 ||
+        reliableSequence <= 0) {
+      Interlocked.Increment(ref _authorityFailures);
+      WriteAuthority(
+          "remote_player_descriptor_rejected", string.Empty,
+          "reason=payload_invalid logical_peer_id=" + SafeMarker(logicalPeerId));
+      return;
+    }
+
+    string key = userId + ":" + zdoIdLong;
+    if (_remoteDescriptorKeysByLogicalPeer.TryGetValue(
+            logicalPeerId, out string previousKey) &&
+        !string.Equals(previousKey, key, StringComparison.Ordinal)) {
+      RemoveRemotePlayer(previousKey, "descriptor_generation_replaced");
+    }
+
+    RemotePlayerDescriptor descriptor = new(
+        logicalPeerId,
+        peerUid,
+        string.IsNullOrWhiteSpace(character) ? "LumberjacksPeer" : character,
+        userId,
+        (uint) zdoIdLong,
+        generation,
+        ExtractJsonFloat(text, "x"),
+        ExtractJsonFloat(text, "y"),
+        ExtractJsonFloat(text, "z"));
+    _remoteDescriptors[key] = descriptor;
+    _remoteDescriptorKeysByLogicalPeer[logicalPeerId] = key;
+    _motionWithoutDescriptorWritten.Remove(key);
+    bool acknowledged = _gameSession?.QueueReliableAck(reliableSequence) == true;
+    WriteAuthority(
+        "remote_player_descriptor_applied", string.Empty,
+        "logical_peer_id=" + logicalPeerId
+        + " uid=" + key
+        + " generation=" + generation
+        + " ack_queued=" + (acknowledged ? "true" : "false"));
+  }
+
+  void ApplyRemotePlayerTombstone(string text, long reliableSequence) {
+    string logicalPeerId = ExtractJsonString(text, "logical_peer_id");
+    long userId = ExtractJsonLong(text, "zdo_user_id");
+    long zdoIdLong = ExtractJsonLong(text, "zdo_id");
+    long generation = ExtractJsonLong(text, "generation");
+    string reason = ExtractJsonString(text, "reason");
+    if (!SafeToken(logicalPeerId, 96) || userId == 0 ||
+        zdoIdLong is <= 0 or > uint.MaxValue || generation <= 0 ||
+        reliableSequence <= 0) {
+      Interlocked.Increment(ref _authorityFailures);
+      WriteAuthority(
+          "remote_player_tombstone_rejected", string.Empty,
+          "reason=payload_invalid logical_peer_id=" + SafeMarker(logicalPeerId));
+      return;
+    }
+
+    string key = userId + ":" + zdoIdLong;
+    if (_remoteDescriptors.TryGetValue(key, out RemotePlayerDescriptor descriptor) &&
+        descriptor.Generation == generation &&
+        string.Equals(
+            descriptor.LogicalPeerId, logicalPeerId, StringComparison.Ordinal)) {
+      RemoveRemotePlayer(key, reason);
+    }
+    bool acknowledged = _gameSession?.QueueReliableAck(reliableSequence) == true;
+    WriteAuthority(
+        "remote_player_tombstone_applied", string.Empty,
+        "logical_peer_id=" + logicalPeerId
+        + " uid=" + key
+        + " generation=" + generation
+        + " reason=" + SafeMarker(reason)
+        + " ack_queued=" + (acknowledged ? "true" : "false"));
+  }
+
+  void RemoveRemotePlayer(string key, string reason) {
+    if (_remoteDescriptors.TryGetValue(
+            key, out RemotePlayerDescriptor descriptor)) {
+      _remoteDescriptorKeysByLogicalPeer.Remove(descriptor.LogicalPeerId);
+      _remoteDescriptors.Remove(key);
+    }
+    _remote.Remove(key);
+    _remoteDiscoveryWritten.Remove(key);
+    _missingInstanceWritten.Remove(key);
+    _motionWithoutDescriptorWritten.Remove(key);
+
+    string[] parts = key.Split(':');
+    if (parts.Length != 2 ||
+        !long.TryParse(
+            parts[0], NumberStyles.Integer, CultureInfo.InvariantCulture,
+            out long userId) ||
+        !uint.TryParse(
+            parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture,
+            out uint zdoId))
+      return;
+
+    ZDOID uid = new(userId, zdoId);
+    _playerInstances.Remove(uid);
+    if (ZDOMan.instance != null && HandleDestroyedZdoMethod != null) {
+      try {
+        HandleDestroyedZdoMethod.Invoke(
+            ZDOMan.instance, new object[] { uid });
+      } catch (Exception exception) {
+        WriteAuthority(
+            "remote_player_tombstone_destroy_failed", string.Empty,
+            "uid=" + key
+            + " reason=" + SafeMarker(exception.GetType().Name)
+            + ":" + SafeMarker(exception.Message));
+      }
+    }
+    WriteAuthority(
+        "remote_player_evicted", string.Empty,
+        "uid=" + key + " reason=" + SafeMarker(reason));
   }
 
   void ApplyReliableResync(
@@ -1139,7 +1320,8 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   public static bool MaskNativePosition(ZDO zdo) {
     LumberjacksMotionRunner active = Volatile.Read(ref _active);
     if (active == null || !AuthorityEnabled() ||
-        zdo == null || !active.HasRemote(zdo.m_uid))
+        zdo == null || _canonicalPositionScopeDepth > 0 ||
+        !active.HasRemote(zdo.m_uid))
       return false;
     long count = Interlocked.Increment(ref active._nativePositionMasked);
     if (count <= 4 || IsPowerOfTwo(count)) {
@@ -1149,6 +1331,15 @@ public sealed class LumberjacksMotionRunner : IDisposable {
           "count=" + count + " uid=" + zdo.m_uid);
     }
     return true;
+  }
+
+  static void ApplyCanonicalZdoPosition(ZDO zdo, Vector3 position) {
+    _canonicalPositionScopeDepth++;
+    try {
+      zdo.InternalSetPosition(position);
+    } finally {
+      _canonicalPositionScopeDepth--;
+    }
   }
 
   bool IsCanonicalRemote(ZSyncTransform transform) {
@@ -1225,6 +1416,66 @@ public sealed class LumberjacksMotionRunner : IDisposable {
       return player;
     }
     return null;
+  }
+
+  bool EnsureLogicalRemoteZdo(
+      ZDOID zdoId,
+      ValheimMotionSnapshot snapshot,
+      RemotePlayerDescriptor descriptor) {
+    if (!LogicalPeerCutoverRunner.Selected ||
+        ZNet.instance == null || ZNet.instance.IsServer() ||
+        ZDOMan.instance == null || ZNetScene.instance == null ||
+        zdoId.IsNone() || zdoId.UserID == ZDOMan.GetSessionID())
+      return false;
+
+    if (ZDOMan.instance.GetZDO(zdoId) != null) return true;
+    if (CreateNewZdoMethod == null) {
+      WriteAuthority(
+          "logical_remote_seed_failed", _probe?.ActionId ?? string.Empty,
+          "reason=create_new_zdo_method_missing uid=" + zdoId);
+      return false;
+    }
+
+    GameObject playerPrefab = ZNetScene.instance.GetPrefab("Player");
+    if (playerPrefab == null) {
+      WriteAuthority(
+          "logical_remote_seed_failed", _probe?.ActionId ?? string.Empty,
+          "reason=player_prefab_missing uid=" + zdoId);
+      return false;
+    }
+
+    try {
+      Vector3 position =
+          new(snapshot.X, snapshot.Y, snapshot.Z);
+      int prefabHash = playerPrefab.name.GetStableHashCode();
+      ZDO zdo = (ZDO) CreateNewZdoMethod.Invoke(
+          ZDOMan.instance,
+          new object[] { zdoId, position, prefabHash });
+      if (zdo == null)
+        throw new InvalidOperationException("create_new_zdo_returned_null");
+      zdo.SetPrefab(prefabHash);
+      zdo.Set(ZDOVars.s_playerID, descriptor.PeerUid);
+      zdo.Set(ZDOVars.s_playerName, descriptor.Character);
+      zdo.SetOwnerInternal(zdoId.UserID);
+      zdo.Persistent = false;
+      zdo.SetType(ZDO.ObjectType.Prioritized);
+      ZDOMan.instance.AddToSector(zdo, zdo.GetSector());
+      WriteAuthority(
+          "logical_remote_seeded", _probe?.ActionId ?? string.Empty,
+          "uid=" + zdoId
+          + " prefab=" + playerPrefab.name
+          + " owner=" + zdoId.UserID
+          + " generation=" + descriptor.Generation
+          + " source=reliable_aoi_descriptor");
+      return true;
+    } catch (Exception exception) {
+      WriteAuthority(
+          "logical_remote_seed_failed", _probe?.ActionId ?? string.Empty,
+          "reason=" + exception.GetType().Name
+          + ":" + SafeMarker(exception.Message)
+          + " uid=" + zdoId);
+      return false;
+    }
   }
 
   void RebuildPlayerIndex() {
@@ -1416,6 +1667,33 @@ public sealed class LumberjacksMotionRunner : IDisposable {
       ActionId = actionId ?? string.Empty;
       GapStart = gapStart;
       GapEnd = gapEnd;
+    }
+  }
+  sealed class RemotePlayerDescriptor {
+    public readonly string LogicalPeerId;
+    public readonly long PeerUid;
+    public readonly string Character;
+    public readonly long ZdoUserId;
+    public readonly uint ZdoId;
+    public readonly long Generation;
+    public readonly Vector3 InitialPosition;
+    public RemotePlayerDescriptor(
+        string logicalPeerId,
+        long peerUid,
+        string character,
+        long zdoUserId,
+        uint zdoId,
+        long generation,
+        float x,
+        float y,
+        float z) {
+      LogicalPeerId = logicalPeerId;
+      PeerUid = peerUid;
+      Character = character;
+      ZdoUserId = zdoUserId;
+      ZdoId = zdoId;
+      Generation = generation;
+      InitialPosition = new Vector3(x, y, z);
     }
   }
   sealed class RemoteMotion {

@@ -24,6 +24,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   const int ReceiveBufferBytes = 8192;
   const int MaxOutboundFrames = 256;
   const int MaxMotionFrames = 64;
+  const float HeartbeatIntervalSeconds = 2.0f;
   const string ReceiptFileName = "lumberjacks-game-session.jsonl";
   static LumberjacksGameSessionRunner _active;
 
@@ -58,6 +59,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   long _motionReceivedUdp;
   long _motionReceivedWebSocket;
   float _nextConnectAt;
+  float _nextHeartbeatAt;
   bool _webSocketConnected;
   bool _udpReady;
   bool _disposed;
@@ -85,6 +87,14 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       return;
     }
     if (!IsRunning && now >= _nextConnectAt) Start(now);
+    if (WebSocketConnected && now >= _nextHeartbeatAt) {
+      if (TryQueueEnvelope(
+              "valheim_session_heartbeat",
+              "\"role\":\"" + _localRole + "\""))
+        _nextHeartbeatAt = now + HeartbeatIntervalSeconds;
+      else
+        _nextHeartbeatAt = now + 0.5f;
+    }
     DrainEvents();
     EvaluateProbeDeadline(now);
     EvaluateDirectProbeDeadline(now);
@@ -308,7 +318,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       float deadlineSeconds,
       out string detail) {
     detail = string.Empty;
-    if (!SafeToken(actionId, 80) || mode is not ("resume" or "withhold_receipt")) {
+    if (!SafeToken(actionId, 80) ||
+        mode is not ("resume" or "withhold_receipt" or "external_resume")) {
       detail = "probe_parameters_invalid";
       return false;
     }
@@ -336,8 +347,15 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           StartedAt = Time.unscaledTime,
           DeadlineAt = Time.unscaledTime + Mathf.Clamp(deadlineSeconds, 1.0f, 60.0f),
           InitialConnectionId = _connectionId,
+          InitialLogicalPeerId = _logicalPeerId,
           InitialResumeEpoch = _resumeEpoch
       };
+      if (mode == "external_resume") {
+        WriteReceipt("probe_started", actionId,
+            "mode=" + mode + " connection_id=" + _connectionId
+            + " resume_epoch=" + _resumeEpoch);
+        return true;
+      }
       if (!TryQueueEnvelope(
               "valheim_session_probe",
               "\"run_id\":\"" + Escape(runId)
@@ -420,6 +438,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       _localPeerUid = 0;
     }
     _nextConnectAt = now + 2.0f;
+    _nextHeartbeatAt = now + HeartbeatIntervalSeconds;
     _cts = new CancellationTokenSource();
     SetState("connecting", false, false, string.Empty);
     _connectionTask = Task.Run(() => RunConnections(_cts.Token));
@@ -493,6 +512,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             Interlocked.Increment(ref _motionReceivedWebSocket);
             LumberjacksMotionRunner.EnqueueCanonicalMotion(
                 motionSequence, motion, udp: false);
+            LogicalPeerCutoverRunner.EnqueueCanonicalMotion(
+                motionSequence, motion);
           }
           continue;
         }
@@ -526,6 +547,12 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             "valheim_logical_peer_detached" or
             "valheim_logical_peer_control") {
           LogicalPeerCutoverRunner.EnqueueCanonicalFrame(type, text);
+          continue;
+        }
+        if (type is
+            "valheim_remote_player_descriptor" or
+            "valheim_remote_player_tombstone") {
+          LumberjacksMotionRunner.EnqueueCanonicalFrame(type, text);
           continue;
         }
         if (string.Equals(type, "valheim_zdo_delivery", StringComparison.OrdinalIgnoreCase)) {
@@ -661,6 +688,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             Interlocked.Increment(ref _motionReceivedUdp);
             LumberjacksMotionRunner.EnqueueCanonicalMotion(
                 sequence, motion, udp: true);
+            LogicalPeerCutoverRunner.EnqueueCanonicalMotion(
+                sequence, motion);
           }
         } catch (ObjectDisposedException) {
           break;
@@ -982,14 +1011,24 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     long sequence = ExtractJsonLong(text, "seq");
     string runId = ExtractJsonString(text, "run_id");
     string worldEpoch = ExtractJsonString(text, "world_epoch");
+    string recipientId = ExtractJsonString(text, "recipient_id");
+    long zoneEpoch = ExtractJsonLong(text, "zone_epoch");
+    long zoneX = ExtractJsonLong(text, "zone_x");
+    long zoneY = ExtractJsonLong(text, "zone_y");
+    long radiusZones = ExtractJsonLong(text, "radius_zones");
     long interested = ExtractJsonLong(text, "interested_recipients");
     long pending = ExtractJsonLong(text, "pending");
     long durable = ExtractJsonLong(text, "durable_objects");
     if (sequence <= 0 || !SafeToken(runId, 80) ||
-        !SafeToken(worldEpoch, 96) || interested < 0)
+        !SafeToken(worldEpoch, 96) || !SafeToken(recipientId, 80) ||
+        zoneEpoch < 1 || zoneX is < int.MinValue or > int.MaxValue ||
+        zoneY is < int.MinValue or > int.MaxValue ||
+        radiusZones is < 0 or > 32 || interested < 0)
       throw new InvalidDataException("invalid canonical ZDO interest status");
     ZdoJournalCutoverRunner.EnqueueCanonicalInterestStatus(
-        sequence, runId, worldEpoch, interested, pending, durable);
+        sequence, runId, worldEpoch, recipientId, zoneEpoch,
+        checked((int) zoneX), checked((int) zoneY),
+        checked((int) radiusZones), interested, pending, durable);
   }
 
   void DrainEvents() {
@@ -997,9 +1036,33 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       switch (item.Kind) {
         case "session_started":
           SetState("connected", true, _udp != null, string.Empty);
+          lock (_gate) {
+            if (_probe != null && !_probe.Terminal &&
+                _probe.Mode == "external_resume" &&
+                _probe.DropPerformed &&
+                (_resumeEpoch > _probe.InitialResumeEpoch ||
+                 (!string.Equals(
+                     _connectionId, _probe.InitialConnectionId,
+                     StringComparison.Ordinal) &&
+                  string.Equals(
+                      _logicalPeerId, _probe.InitialLogicalPeerId,
+                      StringComparison.Ordinal)))) {
+              _probe.Terminal = true;
+              _probe.Success = true;
+              _probe.Detail =
+                  "external_gateway_recovery_observed connection_id=" +
+                  _connectionId + " resume_epoch=" + _resumeEpoch +
+                  " logical_peer_id=" + _logicalPeerId;
+            }
+          }
           break;
         case "socket_closed":
           SetState("reconnecting", false, false, string.Empty);
+          lock (_gate) {
+            if (_probe != null && !_probe.Terminal &&
+                _probe.Mode == "external_resume")
+              _probe.DropPerformed = true;
+          }
           break;
         case "connection_error":
           SetState("reconnecting", false, false, item.Detail);
@@ -1386,6 +1449,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     public string RunId;
     public string Mode;
     public string InitialConnectionId;
+    public string InitialLogicalPeerId;
     public long InitialResumeEpoch;
     public long RequestSequence;
     public float StartedAt;

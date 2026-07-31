@@ -598,6 +598,24 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
                 : "native_world_and_zone_paths_restored");
         break;
 
+      case "portalTraversalEnabled":
+        if (!bool.TryParse(requestedValue, out bool portalTraversalEnabled)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_boolean");
+        }
+        if (!WorldZoneCutoverRunner.TrySetPortalTraversal(
+                portalTraversalEnabled,
+                out bool oldPortalTraversal,
+                out bool effectivePortalTraversal,
+                out string portalTraversalDetail)) {
+          return RuntimeControlApplyResult.Refused(portalTraversalDetail);
+        }
+        result = RuntimeControlApplyResult.Applied(
+            Bool(oldPortalTraversal),
+            Bool(effectivePortalTraversal),
+            "runtime_only_" + portalTraversalDetail
+            + "_descriptor_republish_requested");
+        break;
+
       case "motionAuthorityCutoverEnabled":
         if (!bool.TryParse(requestedValue, out bool motionAuthorityEnabled)) {
           return RuntimeControlApplyResult.Refused("value_must_be_boolean");

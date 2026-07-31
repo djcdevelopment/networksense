@@ -22,9 +22,13 @@ public static class PortalConnectionCache {
       AccessTools.Field(AccessTools.Inner(typeof(ZDOMan), "ZDOPeer"), "m_forceSend");
 
   static readonly HashSet<ZDOID> _zdosToForceSend = [];
-  static readonly Dictionary<string, ZDO> _portalsByTagCache = [];
+  static readonly Dictionary<string, HashSet<ZDOID>> _portalIdsByTag =
+      new(StringComparer.Ordinal);
+  static readonly Dictionary<ZDOID, string> _tagByPortalId = [];
+  static readonly HashSet<string> _dirtyTags = new(StringComparer.Ordinal);
 
   static float _lastSummaryLogAt = -999999.0f;
+  static ZDOMan _indexedManager;
 
   public static bool ShouldReplaceConnectPortals() {
     return PluginConfig.PortalConnectionCacheEnabled.Value
@@ -69,7 +73,6 @@ public static class PortalConnectionCache {
     using NetworkSensePerfProbe.Section section = NetworkSensePerfProbe.Measure("PortalConnectionCache.ConnectPortals");
 
     _zdosToForceSend.Clear();
-    _portalsByTagCache.Clear();
 
     List<ZDO> portalObjects = _portalObjectsRef(zdoManager);
     Dictionary<ZDOID, ZDO> objectsById = _objectsByIdRef(zdoManager);
@@ -79,69 +82,176 @@ public static class PortalConnectionCache {
       return;
     }
 
-    int disconnected = UpdateUnconnectedPortals(portalObjects, objectsById, sessionId);
-    int connected = UpdateConnectedPortals(portalObjects, sessionId);
+    EnsureIndex(zdoManager, portalObjects);
+    int disconnected = 0;
+    int connected = 0;
+    int processed = 0;
+    foreach (string tag in new List<string>(_dirtyTags)) {
+      processed++;
+      ProcessDirtyTag(
+          tag,
+          objectsById,
+          sessionId,
+          ref connected,
+          ref disconnected);
+    }
+    _dirtyTags.Clear();
     ForceSendUpdatedPortals(zdoManager);
-    LogSummary(portalObjects.Count, connected, disconnected, _zdosToForceSend.Count);
+    LogSummary(
+        portalObjects.Count,
+        processed,
+        connected,
+        disconnected,
+        _zdosToForceSend.Count);
 
     _zdosToForceSend.Clear();
-    _portalsByTagCache.Clear();
   }
 
-  static int UpdateUnconnectedPortals(
-      List<ZDO> portalObjects,
-      Dictionary<ZDOID, ZDO> objectsById,
-      long sessionId) {
-    int disconnected = 0;
+  public static void MarkDirty(ZDO portal) {
+    if (portal == null || ZDOMan.instance == null ||
+        !ShouldReplaceConnectPortals())
+      return;
 
-    foreach (ZDO zdo in portalObjects) {
-      string portalTag = zdo.GetString(ZDOVars.s_tag, string.Empty);
-      ZDOID targetZdoId = zdo.GetConnectionZDOID(ZDOExtraData.ConnectionType.Portal);
+    List<ZDO> portals = _portalObjectsRef(ZDOMan.instance);
+    if (portals == null || !portals.Contains(portal)) return;
+    EnsureIndex(ZDOMan.instance, portals);
 
-      if (targetZdoId == ZDOID.None) {
-        if (portalTag.Length > 0) {
-          _portalsByTagCache[portalTag] = zdo;
-        }
+    string currentTag = portal.GetString(ZDOVars.s_tag, string.Empty);
+    if (_tagByPortalId.TryGetValue(portal.m_uid, out string previousTag) &&
+        !string.Equals(previousTag, currentTag, StringComparison.Ordinal)) {
+      if (_portalIdsByTag.TryGetValue(previousTag, out HashSet<ZDOID> previous))
+        previous.Remove(portal.m_uid);
+      _dirtyTags.Add(previousTag);
+    }
+    _tagByPortalId[portal.m_uid] = currentTag;
+    if (!_portalIdsByTag.TryGetValue(currentTag, out HashSet<ZDOID> current))
+      _portalIdsByTag[currentTag] = current = [];
+    current.Add(portal.m_uid);
+    _dirtyTags.Add(currentTag);
+  }
 
+  public static void MarkRemoved(ZDOID uid) {
+    if (!_tagByPortalId.TryGetValue(uid, out string tag)) return;
+    _tagByPortalId.Remove(uid);
+    if (_portalIdsByTag.TryGetValue(tag, out HashSet<ZDOID> ids))
+      ids.Remove(uid);
+    _dirtyTags.Add(tag);
+  }
+
+  public static void ConnectSavedPortals(ZDOMan zdoManager) {
+    if (zdoManager == null || !ShouldReplaceConnectPortals()) return;
+
+    using NetworkSensePerfProbe.Section section =
+        NetworkSensePerfProbe.Measure("PortalConnectionCache.ConnectSavedPortals");
+    List<ZDOID> sources = ZDOExtraData.GetAllConnectionZDOIDs(
+        ZDOExtraData.ConnectionType.Portal);
+    List<ZDOID> targets = ZDOExtraData.GetAllConnectionZDOIDs(
+        ZDOExtraData.ConnectionType.Portal |
+        ZDOExtraData.ConnectionType.Target);
+    Dictionary<int, Queue<ZDOID>> targetsByHash = [];
+
+    foreach (ZDOID targetId in targets) {
+      if (ZDOExtraData.GetConnectionType(targetId) !=
+          ZDOExtraData.ConnectionType.None)
         continue;
-      }
-
-      if (portalTag.Length > 0
-          && objectsById.TryGetValue(targetZdoId, out ZDO targetZdo)
-          && targetZdo.GetString(ZDOVars.s_tag, string.Empty) == portalTag) {
-        continue;
-      }
-
-      DisconnectPortal(zdo, sessionId);
-      disconnected++;
-
-      if (portalTag.Length > 0) {
-        _portalsByTagCache[portalTag] = zdo;
-      }
+      ZDO target = zdoManager.GetZDO(targetId);
+      ZDOConnectionHashData hash = target == null
+          ? null
+          : ZDOExtraData.GetConnectionHashData(
+              targetId,
+              ZDOExtraData.ConnectionType.Portal |
+              ZDOExtraData.ConnectionType.Target);
+      if (hash == null) continue;
+      if (!targetsByHash.TryGetValue(hash.m_hash, out Queue<ZDOID> bucket))
+        targetsByHash[hash.m_hash] = bucket = new();
+      bucket.Enqueue(targetId);
     }
 
-    return disconnected;
-  }
-
-  static int UpdateConnectedPortals(List<ZDO> portalObjects, long sessionId) {
     int connected = 0;
-
-    foreach (ZDO zdo in portalObjects) {
-      string portalTag = zdo.GetString(ZDOVars.s_tag, string.Empty);
-
-      if (portalTag.Length <= 0
-          || zdo.GetConnectionZDOID(ZDOExtraData.ConnectionType.Portal) != ZDOID.None
-          || !_portalsByTagCache.TryGetValue(portalTag, out ZDO matchingZdo)
-          || matchingZdo == zdo
-          || matchingZdo.GetConnectionZDOID(ZDOExtraData.ConnectionType.Portal) != ZDOID.None) {
+    long sessionId = _sessionIdRef(zdoManager);
+    foreach (ZDOID sourceId in sources) {
+      ZDO source = zdoManager.GetZDO(sourceId);
+      ZDOConnectionHashData hash = source?.GetConnectionHashData(
+          ZDOExtraData.ConnectionType.Portal);
+      if (source == null || hash == null ||
+          !targetsByHash.TryGetValue(hash.m_hash, out Queue<ZDOID> bucket))
         continue;
-      }
 
-      ConnectPortals(zdo, matchingZdo, sessionId);
+      ZDO target = null;
+      while (bucket.Count > 0 && target == null) {
+        ZDOID targetId = bucket.Dequeue();
+        if (targetId != sourceId &&
+            ZDOExtraData.GetConnectionType(targetId) ==
+                ZDOExtraData.ConnectionType.None)
+          target = zdoManager.GetZDO(targetId);
+      }
+      if (target == null) continue;
+      source.SetOwner(sessionId);
+      target.SetOwner(sessionId);
+      source.SetConnection(
+          ZDOExtraData.ConnectionType.Portal, target.m_uid);
+      target.SetConnection(
+          ZDOExtraData.ConnectionType.Portal, source.m_uid);
       connected++;
     }
 
-    return connected;
+    if (connected > 0)
+      ComfyNetworkSense.LogInfo(
+          $"Portal saved-connection hash join connected={connected} sources={sources.Count} targets={targets.Count}.");
+  }
+
+  static void EnsureIndex(ZDOMan manager, List<ZDO> portals) {
+    if (_indexedManager == manager) return;
+    _indexedManager = manager;
+    _portalIdsByTag.Clear();
+    _tagByPortalId.Clear();
+    _dirtyTags.Clear();
+    foreach (ZDO portal in portals) {
+      if (portal == null) continue;
+      string tag = portal.GetString(ZDOVars.s_tag, string.Empty);
+      _tagByPortalId[portal.m_uid] = tag;
+      if (!_portalIdsByTag.TryGetValue(tag, out HashSet<ZDOID> ids))
+        _portalIdsByTag[tag] = ids = [];
+      ids.Add(portal.m_uid);
+      _dirtyTags.Add(tag);
+    }
+  }
+
+  static void ProcessDirtyTag(
+      string tag,
+      Dictionary<ZDOID, ZDO> objectsById,
+      long sessionId,
+      ref int connected,
+      ref int disconnected) {
+    if (!_portalIdsByTag.TryGetValue(tag, out HashSet<ZDOID> indexed))
+      return;
+
+    List<ZDO> unconnected = [];
+    foreach (ZDOID id in new List<ZDOID>(indexed)) {
+      if (!objectsById.TryGetValue(id, out ZDO portal) ||
+          portal.GetString(ZDOVars.s_tag, string.Empty) != tag) {
+        indexed.Remove(id);
+        _tagByPortalId.Remove(id);
+        continue;
+      }
+
+      ZDOID targetId = portal.GetConnectionZDOID(
+          ZDOExtraData.ConnectionType.Portal);
+      if (targetId != ZDOID.None &&
+          (!objectsById.TryGetValue(targetId, out ZDO target) ||
+           target.GetString(ZDOVars.s_tag, string.Empty) != tag)) {
+        DisconnectPortal(portal, sessionId);
+        disconnected++;
+        targetId = ZDOID.None;
+      }
+      if (targetId == ZDOID.None)
+        unconnected.Add(portal);
+    }
+
+    for (int i = 0; i + 1 < unconnected.Count; i += 2) {
+      ConnectPortals(unconnected[i], unconnected[i + 1], sessionId);
+      connected++;
+    }
   }
 
   static void DisconnectPortal(ZDO zdo, long sessionId) {
@@ -177,7 +287,12 @@ public static class PortalConnectionCache {
     }
   }
 
-  static void LogSummary(int portals, int connected, int disconnected, int forceSent) {
+  static void LogSummary(
+      int portals,
+      int dirtyTags,
+      int connected,
+      int disconnected,
+      int forceSent) {
     float logInterval = PluginConfig.PortalConnectionCacheLogIntervalSeconds.Value;
     if (logInterval <= 0.0f || Time.realtimeSinceStartup - _lastSummaryLogAt < logInterval) {
       return;
@@ -185,7 +300,7 @@ public static class PortalConnectionCache {
 
     _lastSummaryLogAt = Time.realtimeSinceStartup;
     ComfyNetworkSense.LogInfo(
-        $"Portal connection cache processed portals={portals} connected={connected} disconnected={disconnected} forceSend={forceSent}.");
+        $"Portal connection cache processed portals={portals} dirtyTags={dirtyTags} connected={connected} disconnected={disconnected} forceSend={forceSent}.");
   }
 }
 
@@ -206,5 +321,39 @@ static class PortalConnectionCachePatches {
 
     PortalConnectionCache.ConnectPortals(ZDOMan.instance);
     return false;
+  }
+}
+
+[HarmonyPatch(typeof(ZDOMan), "ConnectPortals")]
+static class PortalSavedConnectionPatches {
+  [HarmonyPrefix]
+  static bool ConnectPortalsPrefix(ZDOMan __instance) {
+    if (!PortalConnectionCache.ShouldReplaceConnectPortals())
+      return true;
+    PortalConnectionCache.ConnectSavedPortals(__instance);
+    return false;
+  }
+}
+
+[HarmonyPatch(typeof(ZDOMan), "AddPortal")]
+static class PortalAddPatches {
+  [HarmonyPostfix]
+  static void AddPortalPostfix(ZDO zdo) =>
+      PortalConnectionCache.MarkDirty(zdo);
+}
+
+[HarmonyPatch(typeof(ZDOMan), "HandleDestroyedZDO")]
+static class PortalRemovePatches {
+  [HarmonyPrefix]
+  static void HandleDestroyedZdoPrefix(ZDOID uid) =>
+      PortalConnectionCache.MarkRemoved(uid);
+}
+
+[HarmonyPatch(typeof(ZDO), nameof(ZDO.Set), new[] { typeof(int), typeof(string) })]
+static class PortalTagPatches {
+  [HarmonyPostfix]
+  static void SetStringPostfix(ZDO __instance, int hash) {
+    if (hash == ZDOVars.s_tag)
+      PortalConnectionCache.MarkDirty(__instance);
   }
 }

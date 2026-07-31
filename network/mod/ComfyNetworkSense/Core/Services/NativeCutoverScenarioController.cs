@@ -47,10 +47,17 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   float _nextPollAt;
   float _actionStartedAt;
   float _actionDeadlineAt;
+  float _nextActionDiagnosticAt;
   Vector3 _origin;
   Vector2i _originZone;
   int _inventoryBefore;
   object _ownershipTarget;
+  ZDOID _portalSourceId;
+  ZDOID _portalTargetId;
+  Vector3 _portalSourcePosition;
+  Vector3 _portalTargetPosition;
+  int _portalRoundtripStage;
+  float _portalNextTeleportAt;
   bool _sessionProbeStarted;
   bool _terminal;
 
@@ -82,6 +89,23 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       TryLoad();
       return;
     }
+
+    // God mode lives on the current Player instance, so a disconnect/reconnect can discard it
+    // while the Lumberjacks session probe is deliberately waiting for the peer to return. Keep
+    // the survival invariant armed even while JoinedClientReady is false; otherwise a replacement
+    // Player can fall from a test teleport before the next teleport action gets a chance to re-arm.
+    Player localPlayer = Player.m_localPlayer;
+    if (localPlayer != null) {
+      if (localPlayer.IsDead()) {
+        if (_active != null) FailActive("scenario_local_player_dead");
+        return;
+      }
+      if (!localPlayer.InGodMode()
+          && !EnsureTeleportSurvivalSafeguard(out string safeguardDetail)) {
+        if (_active != null) FailActive(safeguardDetail);
+        return;
+      }
+    }
     if (!JoinedClientReady()) return;
 
     if (_active == null) {
@@ -98,7 +122,20 @@ public sealed class NativeCutoverScenarioController : IDisposable {
     }
 
     if (now > _actionDeadlineAt) {
-      FailActive("deadline_exceeded");
+      string detail = "deadline_exceeded";
+      if (string.Equals(
+              _active.kind, "teleport_to",
+              StringComparison.OrdinalIgnoreCase))
+        detail += " " + DescribeTeleportReadiness();
+      else if (string.Equals(
+                   _active.kind, "portal_roundtrip",
+                   StringComparison.OrdinalIgnoreCase))
+        detail += " stage=" + _portalRoundtripStage
+            + " " + DescribeTeleportReadiness(
+                _portalRoundtripStage >= 2
+                    ? _portalSourcePosition
+                    : _portalTargetPosition);
+      FailActive(detail);
       return;
     }
     TickActive(now);
@@ -187,11 +224,18 @@ public sealed class NativeCutoverScenarioController : IDisposable {
               || !AllowedDirection(action.direction))
             return "manifest_zone_cross_invalid";
           break;
+        case "teleport_to":
+          if (action.world_x is < -20000.0f or > 20000.0f
+              || action.world_y is < -100.0f or > 2000.0f
+              || action.world_z is < -20000.0f or > 20000.0f)
+            return "manifest_teleport_target_invalid";
+          break;
         case "disconnect":
         case "disconnect_resume":
           break;
         case "session_resume_probe":
         case "session_timeout_probe":
+        case "gateway_restart_resume":
         case "direct_control_pulse":
         case "direct_control_withhold":
         case "routed_request":
@@ -207,6 +251,10 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "zone_membership_withhold":
           break;
         case "motion_rendezvous":
+          break;
+        case "portal_roundtrip":
+          if (action.radius_meters is < 1.0f or > 256.0f)
+            return "manifest_portal_radius_invalid";
           break;
         case "motion_drive":
         case "motion_observe":
@@ -236,14 +284,28 @@ public sealed class NativeCutoverScenarioController : IDisposable {
     _active = action;
     _actionStartedAt = now;
     _actionDeadlineAt = now + action.deadline_seconds;
+    _nextActionDiagnosticAt = now + 5.0f;
     _origin = ((Component)Player.m_localPlayer).transform.position;
     _originZone = ZoneSystem.GetZone(_origin);
     _inventoryBefore = InventoryCount();
     _ownershipTarget = null;
+    _portalSourceId = ZDOID.None;
+    _portalTargetId = ZDOID.None;
+    _portalSourcePosition = Vector3.zero;
+    _portalTargetPosition = Vector3.zero;
+    _portalRoundtripStage = 0;
+    _portalNextTeleportAt = now + 2.1f;
     _sessionProbeStarted = false;
     WriteReceipt("action_started", action.id, "kind=" + action.kind);
 
-    switch (action.kind.Trim().ToLowerInvariant()) {
+    string actionKind = action.kind.Trim().ToLowerInvariant();
+    if (actionKind is "teleport_to" or "portal_roundtrip"
+        && !EnsureTeleportSurvivalSafeguard(out string safeguardDetail)) {
+      FailActive(safeguardDetail);
+      return;
+    }
+
+    switch (actionKind) {
       case "pickup_nearest":
         if (!TryInteractNearest(action, out string pickupDetail))
           FailActive(pickupDetail);
@@ -299,10 +361,43 @@ public sealed class NativeCutoverScenarioController : IDisposable {
               + "_to=" + currentZone.x + "," + currentZone.y);
         break;
       }
-      case "session_resume_probe":
-      case "session_timeout_probe": {
+      case "teleport_to": {
+        Vector3 target =
+            new(_active.world_x, _active.world_y, _active.world_z);
         if (!_sessionProbeStarted) {
-          string mode = kind == "session_resume_probe" ? "resume" : "withhold_receipt";
+          bool accepted = Player.m_localPlayer.TeleportTo(
+              target,
+              ((Component)Player.m_localPlayer).transform.rotation,
+              distantTeleport: true);
+          if (!accepted) return;
+          _sessionProbeStarted = true;
+          WriteReceipt(
+              "coordinate_teleport_started", _active.id,
+              "target=" + FormatVector(target));
+          return;
+        }
+        if (now >= _nextActionDiagnosticAt) {
+          _nextActionDiagnosticAt = now + 5.0f;
+          WriteReceipt(
+              "coordinate_teleport_progress", _active.id,
+              DescribeTeleportReadiness());
+        }
+        if (!Player.m_localPlayer.IsTeleporting()
+            && Vector3.Distance(
+                   ((Component)Player.m_localPlayer).transform.position,
+                   target) <= 12.0f)
+          CompleteActive("coordinate_teleport_complete target=" + FormatVector(target));
+        break;
+      }
+      case "session_resume_probe":
+      case "session_timeout_probe":
+      case "gateway_restart_resume": {
+        if (!_sessionProbeStarted) {
+          string mode = kind switch {
+              "session_resume_probe" => "resume",
+              "session_timeout_probe" => "withhold_receipt",
+              _ => "external_resume"
+          };
           if (!_gameSession.BeginProbe(
                   _active.id, mode, Mathf.Max(1.0f, _active.deadline_seconds - 1.0f),
                   out string startDetail)) {
@@ -439,7 +534,10 @@ public sealed class NativeCutoverScenarioController : IDisposable {
                   _active.id, mode,
                   Mathf.Max(10.0f, _active.deadline_seconds - 1.0f),
                   out string startDetail)) {
-            if (startDetail == "world_zone_client_not_ready") return;
+            if (startDetail is
+                "world_zone_client_not_ready" or
+                "world_zone_enter_queue_full")
+              return;
             FailActive(startDetail);
             return;
           }
@@ -461,6 +559,9 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         if (complete) CompleteActive(rendezvousDetail);
         break;
       }
+      case "portal_roundtrip":
+        TickPortalRoundtrip(now);
+        break;
       case "motion_drive":
       case "motion_observe":
       case "motion_drive_gap":
@@ -578,6 +679,183 @@ public sealed class NativeCutoverScenarioController : IDisposable {
     }
   }
 
+  void TickPortalRoundtrip(float now) {
+    Player player = Player.m_localPlayer;
+    if (player == null) {
+      FailActive("portal_local_player_missing");
+      return;
+    }
+
+    if (_portalRoundtripStage == 0) {
+      if (now < _portalNextTeleportAt) return;
+      if (ZoneSystem.instance != null
+          && ZoneSystem.instance.GetGlobalKey(GlobalKeys.NoPortals)) {
+        FailActive("portal_global_key_disabled");
+        return;
+      }
+
+      TeleportWorld source = FindPortal(
+          ZDOID.None, _active.radius_meters, requireLocalTarget: true,
+          out ZDO sourceZdo, out ZDO targetZdo, out string findDetail);
+      if (source == null) {
+        FailActive(findDetail);
+        return;
+      }
+
+      _portalSourceId = sourceZdo.m_uid;
+      _portalTargetId = targetZdo.m_uid;
+      _portalSourcePosition = sourceZdo.GetPosition();
+      _portalTargetPosition = targetZdo.GetPosition();
+      if (_portalSourceId == _portalTargetId
+          || targetZdo.GetConnectionZDOID(
+                 ZDOExtraData.ConnectionType.Portal) != _portalSourceId) {
+        FailActive(
+            "portal_reverse_link_mismatch source=" + _portalSourceId
+            + " target=" + _portalTargetId);
+        return;
+      }
+
+      source.Teleport(player);
+      _portalRoundtripStage = 1;
+      _portalNextTeleportAt = 0.0f;
+      _nextActionDiagnosticAt = now + 1.0f;
+      WriteReceipt(
+          "portal_outbound_started", _active.id,
+          "source=" + _portalSourceId + " target=" + _portalTargetId
+          + " distance=" +
+          Vector3.Distance(_portalSourcePosition, _portalTargetPosition)
+              .ToString("0.##", CultureInfo.InvariantCulture));
+      return;
+    }
+
+    if (_portalRoundtripStage == 1) {
+      if (now >= _nextActionDiagnosticAt) {
+        _nextActionDiagnosticAt = now + 1.0f;
+        WriteReceipt(
+            "portal_outbound_progress", _active.id,
+            "stage=outbound god=" + player.InGodMode()
+            + " dead=" + player.IsDead() + " "
+            + DescribeTeleportReadiness(_portalTargetPosition));
+      }
+      if (player.IsTeleporting()
+          || Vector3.Distance(
+                 ((Component)player).transform.position,
+                 _portalTargetPosition) > 12.0f)
+        return;
+
+      if (_portalNextTeleportAt <= 0.0f) {
+        _portalNextTeleportAt = now + 2.1f;
+        return;
+      }
+      if (now < _portalNextTeleportAt) return;
+
+      TeleportWorld target = FindPortal(
+          _portalTargetId, 32.0f, requireLocalTarget: false,
+          out ZDO targetZdo, out ZDO sourceZdo, out string findDetail);
+      if (target == null) {
+        if (findDetail == "portal_not_in_aoi") return;
+        FailActive(findDetail);
+        return;
+      }
+      if (targetZdo.GetConnectionZDOID(
+              ZDOExtraData.ConnectionType.Portal) != _portalSourceId
+          || sourceZdo == null || sourceZdo.m_uid != _portalSourceId) {
+        FailActive(
+            "portal_reverse_link_mismatch source=" + _portalSourceId
+            + " target=" + _portalTargetId);
+        return;
+      }
+
+      target.Teleport(player);
+      _portalRoundtripStage = 2;
+      _portalNextTeleportAt = 0.0f;
+      _nextActionDiagnosticAt = now + 1.0f;
+      WriteReceipt(
+          "portal_return_started", _active.id,
+          "source=" + _portalTargetId + " target=" + _portalSourceId);
+      return;
+    }
+
+    if (now >= _nextActionDiagnosticAt) {
+      _nextActionDiagnosticAt = now + 1.0f;
+      WriteReceipt(
+          "portal_return_progress", _active.id,
+          "stage=return god=" + player.InGodMode()
+          + " dead=" + player.IsDead() + " "
+          + DescribeTeleportReadiness(_portalSourcePosition));
+    }
+    if (!player.IsTeleporting()
+        && Vector3.Distance(
+               ((Component)player).transform.position,
+               _portalSourcePosition) <= 12.0f) {
+      CompleteActive(
+          "portal_roundtrip_complete source=" + _portalSourceId
+          + " target=" + _portalTargetId + " forward=true reverse=true");
+    }
+  }
+
+  static TeleportWorld FindPortal(
+      ZDOID requiredId,
+      float radius,
+      bool requireLocalTarget,
+      out ZDO portalZdo,
+      out ZDO targetZdo,
+      out string detail) {
+    portalZdo = null;
+    targetZdo = null;
+    detail = "portal_not_in_aoi";
+    Vector3 playerPosition =
+        ((Component)Player.m_localPlayer).transform.position;
+    bool connectedPortalSeen = false;
+    bool missingTargetSeen = false;
+    TeleportWorld selected = null;
+    float selectedDistance = float.MaxValue;
+
+    foreach (TeleportWorld candidate
+             in Resources.FindObjectsOfTypeAll<TeleportWorld>()) {
+      if (candidate == null || candidate.gameObject == null
+          || !candidate.gameObject.activeInHierarchy)
+        continue;
+      ZNetView view = candidate.GetComponent<ZNetView>();
+      ZDO candidateZdo = view?.GetZDO();
+      if (candidateZdo == null
+          || (requiredId != ZDOID.None && candidateZdo.m_uid != requiredId))
+        continue;
+      float distance =
+          Vector3.Distance(playerPosition, candidate.transform.position);
+      if (distance > radius) continue;
+      ZDOID targetId = candidateZdo.GetConnectionZDOID(
+          ZDOExtraData.ConnectionType.Portal);
+      if (targetId == ZDOID.None) continue;
+      connectedPortalSeen = true;
+      ZDO candidateTarget = ZDOMan.instance?.GetZDO(targetId);
+      if (candidateTarget == null) {
+        missingTargetSeen = true;
+        continue;
+      }
+      if (requireLocalTarget
+          && Vector3.Distance(
+                 candidateZdo.GetPosition(), candidateTarget.GetPosition())
+             < 32.0f)
+        continue;
+      if (distance >= selectedDistance) continue;
+      selected = candidate;
+      selectedDistance = distance;
+      portalZdo = candidateZdo;
+      targetZdo = candidateTarget;
+    }
+
+    if (selected != null) {
+      detail = string.Empty;
+      return selected;
+    }
+    if (missingTargetSeen)
+      detail = "portal_target_descriptor_missing";
+    else if (connectedPortalSeen && requireLocalTarget)
+      detail = "distant_portal_pair_not_in_aoi";
+    return null;
+  }
+
   bool TryClaimOwnership(NativeCutoverScenarioAction action, out string detail) {
     detail = string.Empty;
     ZNetView nearest = null;
@@ -630,6 +908,86 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       return count == null ? -1 : Convert.ToInt32(count, CultureInfo.InvariantCulture);
     } catch {
       return -1;
+    }
+  }
+
+  bool EnsureTeleportSurvivalSafeguard(out string detail) {
+    Player player = Player.m_localPlayer;
+    if (player == null) {
+      detail = "teleport_safeguard_local_player_missing";
+      return false;
+    }
+    try {
+      if (!player.InGodMode()) player.SetGodMode(true);
+      bool enabled = player.InGodMode();
+      bool alive = !player.IsDead();
+      detail = "god=" + enabled
+          + " fly=" + player.InDebugFlyMode()
+          + " dead=" + !alive;
+      WriteReceipt(
+          enabled && alive
+              ? "teleport_safeguard_enabled"
+              : "teleport_safeguard_failed",
+          _active?.id ?? string.Empty, detail);
+      return enabled && alive;
+    } catch (Exception exception) {
+      detail = "teleport_safeguard_failed=" + exception.GetType().Name
+          + ":" + exception.Message;
+      return false;
+    }
+  }
+
+  string DescribeTeleportReadiness() {
+    Vector3 target =
+        new(_active.world_x, _active.world_y, _active.world_z);
+    return DescribeTeleportReadiness(target);
+  }
+
+  string DescribeTeleportReadiness(Vector3 target) {
+    try {
+      Vector3 current =
+          ((Component) Player.m_localPlayer).transform.position;
+      Vector3 reference = ZNet.instance.GetReferencePosition();
+      Vector2i targetZone = ZoneSystem.GetZone(target);
+      Vector2i referenceZone = ZoneSystem.GetZone(reference);
+      bool zoneLoaded =
+          ZoneSystem.instance != null &&
+          ZoneSystem.instance.IsZoneLoaded(targetZone);
+      List<ZDO> objects = new();
+      ZDOMan.instance?.FindSectorObjects(targetZone, 1, 0, objects);
+      int valid = 0;
+      int instantiated = 0;
+      if (ZNetScene.instance != null) {
+        foreach (ZDO zdo in objects) {
+          if (zdo == null || zdo.GetPrefab() == 0 ||
+              ZNetScene.instance.GetPrefab(zdo.GetPrefab()) == null)
+            continue;
+          valid++;
+          if (ZNetScene.instance.FindInstance(zdo) != null)
+            instantiated++;
+        }
+      }
+      bool areaReady =
+          ZNetScene.instance != null &&
+          ZNetScene.instance.IsAreaReady(target);
+      return
+          "teleporting=" + Player.m_localPlayer.IsTeleporting()
+          + " distance=" +
+              Vector3.Distance(current, target)
+                  .ToString("0.##", CultureInfo.InvariantCulture)
+          + " target_zone=" + targetZone.x + "," + targetZone.y
+          + " reference_zone=" + referenceZone.x + "," + referenceZone.y
+          + " zone_loaded=" + zoneLoaded
+          + " area_ready=" + areaReady
+          + " sector_objects=" + objects.Count
+          + " valid_prefabs=" + valid
+          + " instantiated=" + instantiated
+          + " missing=" + Math.Max(0, valid - instantiated)
+          + " " + (_zdoJournal?.DescribeRuntimeProgress()
+              ?? "zdo_progress=unavailable");
+    } catch (Exception exception) {
+      return "teleport_readiness_failed=" + exception.GetType().Name
+          + ":" + exception.Message;
     }
   }
 
@@ -748,6 +1106,11 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           : value.Trim().Replace(' ', '_').Replace('\t', '_')
               .Replace('\r', '_').Replace('\n', '_');
 
+  static string FormatVector(Vector3 value) =>
+      value.x.ToString("0.##", CultureInfo.InvariantCulture) + ","
+      + value.y.ToString("0.##", CultureInfo.InvariantCulture) + ","
+      + value.z.ToString("0.##", CultureInfo.InvariantCulture);
+
   static string Escape(string value) =>
       (value ?? string.Empty).Replace("\\", "\\\\").Replace("\"", "\\\"")
           .Replace("\r", "_").Replace("\n", "_");
@@ -790,6 +1153,12 @@ public sealed class NativeCutoverScenarioAction {
   public string direction;
   [DataMember(Name = "target_tag")]
   public string target_tag;
+  [DataMember(Name = "world_x")]
+  public float world_x;
+  [DataMember(Name = "world_y")]
+  public float world_y;
+  [DataMember(Name = "world_z")]
+  public float world_z;
 }
 
 [Serializable]
