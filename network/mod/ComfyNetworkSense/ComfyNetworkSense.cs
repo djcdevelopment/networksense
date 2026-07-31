@@ -656,6 +656,20 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
                 : "logical_peer_adapter_disarmed");
         break;
 
+      case "cutoverResidueCleanup":
+        if (!string.Equals(requestedValue, CutoverResidueSweeper.AllCutoverTaggedMode,
+                StringComparison.Ordinal)
+            && !IsSafeRuntimeToken(requestedValue)) {
+          return RuntimeControlApplyResult.Refused("value_must_be_run_id_or_all-cutover-tagged");
+        }
+        if (!CutoverResidueSweeper.TrySweep(requestedValue.Trim(),
+                out string sweepBefore, out string sweepAfter,
+                out string sweepEffect, out string sweepRefusal)) {
+          return RuntimeControlApplyResult.Refused(sweepRefusal);
+        }
+        result = RuntimeControlApplyResult.Applied(sweepBefore, sweepAfter, sweepEffect);
+        break;
+
       default:
         return RuntimeControlApplyResult.Refused("setting_not_allowlisted");
     }
