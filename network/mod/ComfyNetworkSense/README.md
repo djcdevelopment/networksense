@@ -173,10 +173,12 @@ dotnet build .\ComfyNetworkSense.csproj -c Release
 
 Run MCP tests:
 
+From the repository root, with the project venv activated (see
+[`network/mcp/README.md`](../../mcp/README.md) for the one-time setup):
+
 ```powershell
-cd C:\work\baseline
-$env:PYTHONPATH = "C:\work\baseline\network\mcp"
-C:\work\commandcenter\fleet-worker-node\.venv-omen\Scripts\python.exe -m unittest discover -s network\mcp\tests
+$env:PYTHONPATH = "$PWD\network\mcp"
+python -m unittest discover -s network\mcp\tests
 ```
 
 Expected MCP test result:
