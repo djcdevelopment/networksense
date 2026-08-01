@@ -298,16 +298,50 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _lumberjacksPriorityProbeRunner?.Update(deltaTime, _coordinator);
     }
 
-    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
-      _lumberjacksGameSessionRunner?.Update(now);
+    // One section per runner, not one section for the group. This block used to open a single
+    // section named "LumberjacksMotionRunner.Update" around all eight runners, so every
+    // over-threshold row charged seven other runners' cost to the motion runner. That is not a
+    // hypothetical: it sent the first pass of the C9 motion-quality analysis at the wrong
+    // component, and a reproducible ~1.9s (OMEN) / ~2.3s (i5) once-per-session cost was written
+    // into evidence as a motion defect. It was WorldGenerator.Initialize - Valheim's own world
+    // pregeneration - called from LogicalPeerCutoverRunner.ConstructPeer, which vanilla runs at
+    // the same point from ZNet.RPC_PeerInfo, so it was never even a regression. Per-runner
+    // sections would have named the culprit on the first read. See
+    // fieldlab/evidence/c9-motion-quality/README.md. The outer roll-up keeps the group total
+    // answerable and is the honest name for what the old section actually measured.
+    using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.CutoverRunners.Update")) {
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksGameSessionRunner.Update")) {
+        _lumberjacksGameSessionRunner?.Update(now);
+      }
+
       // Register the typed C3 handler before the routed adapter drains a just-arrived request.
-      _zdoJournalCutoverRunner?.Update(now);
-      _routedRpcCutoverRunner?.Update(now);
-      _ownershipLeaseCutoverRunner?.Update(now);
-      _worldZoneCutoverRunner?.Update(now);
-      _logicalPeerCutoverRunner?.Update(now);
-      _socketQuarantineCutoverRunner?.Update(now);
-      _lumberjacksMotionRunner?.Update(now);
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ZdoJournalCutoverRunner.Update")) {
+        _zdoJournalCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.RoutedRpcCutoverRunner.Update")) {
+        _routedRpcCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.OwnershipLeaseCutoverRunner.Update")) {
+        _ownershipLeaseCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.WorldZoneCutoverRunner.Update")) {
+        _worldZoneCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LogicalPeerCutoverRunner.Update")) {
+        _logicalPeerCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.SocketQuarantineCutoverRunner.Update")) {
+        _socketQuarantineCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
+        _lumberjacksMotionRunner?.Update(now);
+      }
     }
 
     using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.MotionTestController.Update")) {
