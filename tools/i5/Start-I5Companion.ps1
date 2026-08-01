@@ -201,7 +201,8 @@ if (Test-Path -LiteralPath $runner) {
         '-Profile', $profile,
         '-ComposeFile', ('"{0}"' -f (Join-Path $remoteRoot 'tools\companion\docker-compose.yml')),
         '-RepoRoot', ('"{0}"' -f $remoteRoot),
-        '-ValheimPath', ('"{0}"' -f $valheim)
+        '-ValheimPath', ('"{0}"' -f $valheim),
+        '-ReplaceExisting'
     ) | Out-Null
     Write-Output ('Workbench host runner started for profile {0}' -f $profile)
 }
