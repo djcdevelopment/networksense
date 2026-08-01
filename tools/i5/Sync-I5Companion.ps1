@@ -15,6 +15,7 @@ The script intentionally does not copy the whole repository. It syncs:
 - Lumberjacks/src/Game.Companion/**
 - Lumberjacks/tools/companion/docker-compose.yml
 - Lumberjacks/tools/companion/docker-compose.valheim.yml
+- Lumberjacks/tools/companion/Start-WorkbenchHostRunner.ps1
 - Lumberjacks/tools/companion/latest-bootstrap.json
 
 Before copying Game.Companion, it removes only the prior remote
@@ -113,7 +114,8 @@ $plan = @(
         Path = @(
             (Join-Path $LumberjacksRoot 'tools\companion\docker-compose.yml'),
             (Join-Path $LumberjacksRoot 'tools\companion\docker-compose.valheim.yml'),
-            (Join-Path $LumberjacksRoot 'tools\companion\latest-bootstrap.json')
+            (Join-Path $LumberjacksRoot 'tools\companion\latest-bootstrap.json'),
+            (Join-Path $LumberjacksRoot 'tools\companion\Start-WorkbenchHostRunner.ps1')
         )
         Dest = "$remoteRootSlash/tools/companion"
     }

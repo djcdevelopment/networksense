@@ -4,11 +4,12 @@ using System.Threading;
 
 /// <summary>
 /// Process-local, restart-reset alpha fault switches. These are intentionally volatile controls,
-/// not durable configuration: a crashed or restarted client always comes back with transport on.
+/// not durable configuration. Gameplay transports restart on; the development-only MCP side
+/// channel restarts from its explicit configuration and defaults off.
 /// </summary>
 public static class AlphaTransportSwitches {
   static int _lumberjacksHttpEnabled = 1;
-  static int _mcpEnabled = 1;
+  static int _mcpEnabled;
   static int _lumberjacksWebSocketEnabled = 1;
   static int _lumberjacksUdpEnabled = 1;
   static int _motionApplyEnabled;
@@ -44,9 +45,9 @@ public static class AlphaTransportSwitches {
     return enabled;
   }
 
-  public static void Reset(bool motionApplyEnabled = false) {
+  public static void Reset(bool motionApplyEnabled = false, bool mcpEnabled = false) {
     SetLumberjacksHttpEnabled(true);
-    SetMcpEnabled(true);
+    SetMcpEnabled(mcpEnabled);
     SetLumberjacksWebSocketEnabled(true);
     SetLumberjacksUdpEnabled(true);
     SetMotionApplyEnabled(motionApplyEnabled);

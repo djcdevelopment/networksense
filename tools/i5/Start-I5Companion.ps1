@@ -22,7 +22,11 @@ The Windows Valheim install path on the i5.
 [CmdletBinding()]
 param(
     [string]$RemoteRoot = 'C:\deploy\baseline\i5-companion',
-    [string]$ValheimPath = 'C:\Program Files (x86)\Steam\steamapps\common\Valheim'
+    [string]$ValheimPath = 'C:\Program Files (x86)\Steam\steamapps\common\Valheim',
+    [ValidateSet('Explore','Admin','Dev','Lab','Production')]
+    [string]$Profile = 'Explore',
+    [ValidateRange(1024,65535)]
+    [int]$McpPort = 8721
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,12 +38,24 @@ $remote = @'
 $ErrorActionPreference = 'Stop'
 $remoteRoot = '__REMOTE_ROOT__'
 $valheim = '__VALHEIM_PATH__'
+$profile = '__PROFILE__'
+$mcpPort = __MCP_PORT__
 if (-not (Test-Path -LiteralPath $remoteRoot)) { throw "Companion staging root not found: $remoteRoot" }
 if (-not (Test-Path -LiteralPath $valheim)) { throw "Valheim path not found: $valheim" }
 
 Set-Location $remoteRoot
 $envFile = Join-Path $remoteRoot 'tools\companion\.env'
 $latestBootstrapFile = Join-Path $remoteRoot 'tools\companion\latest-bootstrap.json'
+$workbenchData = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Lumberjacks\Workbench'
+New-Item -ItemType Directory -Force -Path $workbenchData | Out-Null
+$runnerTokenPath = Join-Path $workbenchData 'runner-token'
+if (-not (Test-Path -LiteralPath $runnerTokenPath -PathType Leaf)) {
+    $runnerBytes = New-Object byte[] 32
+    $runnerRng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $runnerRng.GetBytes($runnerBytes) } finally { $runnerRng.Dispose() }
+    $runnerToken = [Convert]::ToBase64String($runnerBytes).Replace('+','-').Replace('/','_').TrimEnd('=')
+    [IO.File]::WriteAllText($runnerTokenPath, $runnerToken + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+}
 $bootstrapRelease = 'unknown'
 if (Test-Path -LiteralPath $latestBootstrapFile) {
     try {
@@ -55,7 +71,11 @@ Set-Content -LiteralPath $envFile -Value @(
     'LUMBERJACKS_COMPANION_SOURCE_REVISION=bundle:' + $bootstrapRelease
     'LUMBERJACKS_COMPANION_SOURCE_BRANCH=release-bundle'
     'LUMBERJACKS_COMPANION_SOURCE_DIRTY=false'
-    'LUMBERJACKS_COMPANION_IMAGE=lumberjacks-companion:' + $bootstrapRelease
+    'LUMBERJACKS_COMPANION_IMAGE=lumberjacks-companion-companion:' + $bootstrapRelease
+    'LUMBERJACKS_WORKBENCH_PROFILE=' + $profile
+    'COMFY_WORKBENCH_MCP_PORT=' + $mcpPort
+    'LUMBERJACKS_WORKBENCH_REPO_ROOT=' + $remoteRoot
+    'LUMBERJACKS_WORKBENCH_RUNNER_TOKEN_PATH=' + $runnerTokenPath
 ) -Encoding ascii
 
 function Test-DockerServer {
@@ -137,8 +157,20 @@ $composeArgs = @(
     '--env-file', $envFile,
     '-f', '.\tools\companion\docker-compose.yml',
     '-f', '.\tools\companion\docker-compose.valheim.yml',
+
     'up', '-d', '--build', '--force-recreate'
 )
+if ($profile -in @('Dev', 'Lab')) { $composeArgs = $composeArgs[0..6] + @('--profile', $profile.ToLowerInvariant()) + $composeArgs[7..($composeArgs.Count - 1)] }
+$downArgs = @('compose', '-p', 'lumberjacks-companion', '--env-file', $envFile, '-f', '.\tools\companion\docker-compose.yml', '-f', '.\tools\companion\docker-compose.valheim.yml', '--profile', 'dev', '--profile', 'lab', 'down')
+& docker @downArgs
+if ($LASTEXITCODE -ne 0) { throw 'i5 Companion profile convergence failed' }
+if ($profile -in @('Dev', 'Lab')) {
+    $listeners = @(Get-NetTCPConnection -LocalPort $mcpPort -State Listen -ErrorAction SilentlyContinue)
+    if ($listeners.Count -gt 0) {
+        $owners = @($listeners | ForEach-Object { "PID $($_.OwningProcess)" } | Sort-Object -Unique)
+        throw "Dev MCP loopback port $mcpPort is already listening ($($owners -join ', ')). Stop the existing Dev MCP or rerun with -McpPort <free-port>."
+    }
+}
 & docker @composeArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -159,11 +191,27 @@ if (-not $ready) {
 
 $status = Invoke-RestMethod -TimeoutSec 15 http://127.0.0.1:8080/api/v0/companion/status
 $status | ConvertTo-Json -Depth 8
+$runner = Join-Path $remoteRoot 'tools\companion\Start-WorkbenchHostRunner.ps1'
+if (Test-Path -LiteralPath $runner) {
+    Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runner,
+        '-CompanionUrl', 'http://127.0.0.1:8080',
+        '-ContainerName', 'lumberjacks-companion-companion-1',
+        '-ProjectName', 'lumberjacks-companion',
+        '-Profile', $profile,
+        '-ComposeFile', ('"{0}"' -f (Join-Path $remoteRoot 'tools\companion\docker-compose.yml')),
+        '-RepoRoot', ('"{0}"' -f $remoteRoot),
+        '-ValheimPath', ('"{0}"' -f $valheim)
+    ) | Out-Null
+    Write-Output ('Workbench host runner started for profile {0}' -f $profile)
+}
 '@
 
 $escaped = $remote.
     Replace('__REMOTE_ROOT__', $RemoteRoot.Replace("'", "''")).
-    Replace('__VALHEIM_PATH__', $ValheimPath.Replace("'", "''"))
+    Replace('__VALHEIM_PATH__', $ValheimPath.Replace("'", "''")).
+    Replace('__PROFILE__', $Profile).
+    Replace('__MCP_PORT__', [string]$McpPort)
 
 $remoteScriptDir = 'C:/deploy/baseline'
 $remoteScript = "$remoteScriptDir/Start-I5Companion.remote.ps1"

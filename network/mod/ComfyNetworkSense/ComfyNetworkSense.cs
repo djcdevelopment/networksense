@@ -98,7 +98,9 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _logger = Logger;
 
     PluginConfig.Bind(Config);
-    AlphaTransportSwitches.Reset(PluginConfig.LumberjacksMotionApplyEnabled.Value);
+    AlphaTransportSwitches.Reset(
+        PluginConfig.LumberjacksMotionApplyEnabled.Value,
+        PluginConfig.McpEnabled.Value);
     _nativeNetworkLedger = new();
     _directControlCutoverRunner = new();
 
@@ -870,7 +872,15 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   }
 
   void ToggleMcp() {
-    bool enabled = AlphaTransportSwitches.SetMcpEnabled(!AlphaTransportSwitches.McpEnabled);
+    bool requestedEnabled = !AlphaTransportSwitches.McpEnabled;
+    if (requestedEnabled && !PluginConfig.McpEnabled.Value) {
+      const string blocked = "local_mcp remains OFF; set [MCP] mcpEnabled=true for Dev/Lab first";
+      MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, blocked);
+      LogInfo("Alpha transport control: " + blocked);
+      return;
+    }
+
+    bool enabled = AlphaTransportSwitches.SetMcpEnabled(requestedEnabled);
     if (!enabled) _mcpReachable = false;
     else _nextMcpProbeAt = 0.0f;
     RecordTransportControl("local_mcp", enabled, "process_local");
@@ -931,11 +941,16 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       _mcpReachable = false;
       return;
     }
+    if (!McpGatewayEndpoint.TryCreate(
+        PluginConfig.McpGatewayUrl.Value, "/healthz", out Uri endpoint, out _)) {
+      _mcpReachable = false;
+      return;
+    }
     if (now < _nextMcpProbeAt || Interlocked.CompareExchange(ref _mcpProbeInFlight, 1, 0) != 0) return;
     _nextMcpProbeAt = now + 5.0f;
     _ = Task.Run(async () => {
       try {
-        HttpWebRequest request = (HttpWebRequest) WebRequest.Create("http://127.0.0.1:8720/healthz");
+        HttpWebRequest request = (HttpWebRequest) WebRequest.Create(endpoint);
         request.Method = "GET";
         request.Timeout = 1500;
         request.ReadWriteTimeout = 1500;
@@ -1213,10 +1228,17 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
   object ReloadPluginConfig() {
     Config.Reload();
+    ApplyMcpConfiguration();
     string message = "NetworkSense config reloaded.";
     MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
     LogInfo(message);
     return message;
+  }
+
+  internal void ApplyMcpConfiguration() {
+    bool enabled = AlphaTransportSwitches.SetMcpEnabled(PluginConfig.McpEnabled.Value);
+    _mcpReachable = false;
+    _nextMcpProbeAt = enabled ? 0.0f : float.MaxValue;
   }
 
   object CheckMcpGateway() {
@@ -1224,7 +1246,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
       return "Comfy MCP is switched off by the alpha transport control.";
     }
 
-    const string endpoint = "http://127.0.0.1:8720/healthz";
+    if (!McpGatewayEndpoint.TryCreate(
+        PluginConfig.McpGatewayUrl.Value, "/healthz", out Uri endpoint, out string endpointError)) {
+      return "Comfy MCP configuration rejected: " + endpointError;
+    }
     _ = Task.Run(async () => {
       string message;
       try {

@@ -40,6 +40,8 @@ public static class PluginConfig {
   public static ConfigEntry<bool> AutoPortOnJoinEnabled { get; private set; }
   public static ConfigEntry<float> AutoPortDelaySeconds { get; private set; }
   public static ConfigEntry<float> AutoPortHeightMeters { get; private set; }
+  public static ConfigEntry<bool> McpEnabled { get; private set; }
+  public static ConfigEntry<string> McpGatewayUrl { get; private set; }
   public static ConfigEntry<string> LumberjacksGatewayUrl { get; private set; }
   public static ConfigEntry<string> LumberjacksCutoverMode { get; private set; }
   public static ConfigEntry<string> LumberjacksEnrollmentManifestId { get; private set; }
@@ -444,6 +446,20 @@ public static class PluginConfig {
             40.0f,
             "Height in meters above the densest region's ground the auto-port drops you at "
             + "(autoPortOnJoinEnabled) — airborne with debug-fly so you don't land stuck in trees/builds.");
+
+    McpEnabled =
+        config.Bind(
+            "MCP",
+            "mcpEnabled",
+            false,
+            "Explicitly enable the local MCP/Raven development side channel. Off by default for normal gameplay.");
+
+    McpGatewayUrl =
+        config.Bind(
+            "MCP",
+            "mcpGatewayUrl",
+            "http://127.0.0.1:8721",
+            "Loopback-only HTTP(S) base URL for explicit MCP/Raven actions and, while enabled, health checks.");
 
     LumberjacksGatewayUrl =
         config.Bind(

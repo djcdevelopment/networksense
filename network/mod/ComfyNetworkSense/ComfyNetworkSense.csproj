@@ -67,6 +67,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="Tests\**\*.cs" />
     <None Include="CHANGELOG.md" />
     <None Include="manifest.json" />
     <None Include="README.md" />

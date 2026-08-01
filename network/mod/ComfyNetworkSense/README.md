@@ -145,10 +145,29 @@ C:\work\baseline\network\mcp\etc\start-comfy-gateway.cmd
 Default endpoints:
 
 ```text
-MCP:     http://127.0.0.1:8720/mcp
-Health:  http://127.0.0.1:8720/healthz
-Report:  http://127.0.0.1:8720/valheim/report
+MCP:     http://127.0.0.1:8721/mcp
+Health:  http://127.0.0.1:8721/healthz
+Report:  http://127.0.0.1:8721/valheim/report
 ```
+
+The current direct-launch examples use the explicit project port `8721`. The
+legacy `:8720` listener is retired and remains outside the accepted Baseline
+path. The Workbench Dev/Lab container uses the same explicit port; verify its
+authenticated `/identity` response before using MCP-sensitive evidence.
+
+The mod's MCP/Raven side channel is off by default and performs no background
+health probes in normal gameplay. Enable it only in an explicit Dev/Lab config;
+the gateway URL must be an HTTP(S) loopback origin:
+
+```ini
+[MCP]
+mcpEnabled = true
+mcpGatewayUrl = http://127.0.0.1:8721
+```
+
+The transport-strip toggle cannot enable MCP unless `mcpEnabled` is already
+true. Raven, profile, status, and periodic health requests all share the
+configured URL and reject non-loopback destinations.
 
 The in-game mod uses:
 
@@ -159,7 +178,7 @@ X-Comfy-Key: valheim-mod-local
 Manual health check:
 
 ```powershell
-Invoke-WebRequest http://127.0.0.1:8720/healthz -Headers @{ "X-Comfy-Key" = "valheim-mod-local" }
+Invoke-WebRequest http://127.0.0.1:8721/healthz -Headers @{ "X-Comfy-Key" = "valheim-mod-local" }
 ```
 
 ## Testing
@@ -169,6 +188,12 @@ Build the plugin:
 ```powershell
 cd C:\work\baseline\network\mod\ComfyNetworkSense
 dotnet build .\ComfyNetworkSense.csproj -c Release
+```
+
+Run the focused mod-side MCP boundary tests:
+
+```powershell
+dotnet run --project .\Tests\McpGatewayEndpoint.Tests.csproj -c Release
 ```
 
 Run MCP tests:
@@ -316,20 +341,11 @@ off the main thread and is marshaled back, mirroring the existing MCP calls.
 It is off by default. Enable it per lab client with the `COMFY_MATRIX_CHECKIN`
 environment variable, or via config:
 
-```ini
-[Matrix]
-matrixCheckinEnabled = true
-matrixGatewayUrl = http://127.0.0.1:8720
-matrixPollIntervalSeconds = 5
-matrixClientId =
-```
-
-The gateway URL is `http://127.0.0.1:8720` on the desktop but
-`http://comfy-gateway:8720` inside the swarm compose network; override it with
-`matrixGatewayUrl` or the `COMFY_GATEWAY_URL` environment variable. The client id
-defaults to the machine hostname (`Environment.MachineName`) so a swarm sharing
-one config still reports as distinct clients; `matrixClientId` overrides it. The
-auth header is `X-Comfy-Key: valheim-mod-local`, matching the rest of the mod.
+The former Matrix check-in client and its `matrixGatewayUrl` configuration were
+retired with the swarm harness. Do not restore its legacy `:8720` examples as a
+normal-gameplay path. Development MCP access uses the default-off `[MCP]`
+configuration described above and the identity-attested loopback endpoint on
+`:8721`.
 
 ## Outputs And Files
 
@@ -398,8 +414,9 @@ Useful HUD config keys:
 
 - Start `C:\work\baseline\network\mcp\etc\start-comfy-gateway.cmd`.
 - Run `network_sense_mcp_status`.
-- Check `http://127.0.0.1:8720/healthz`.
-- Confirm the gateway is on port `8720`, not an older process on another port.
+- Check `http://127.0.0.1:8721/healthz`.
+- Confirm the gateway identity on explicit port `8721`; do not fall back to the
+  legacy `8720` listener or infer ownership from a green health response.
 - Check `network/mcp/README.md` for auth and endpoint details.
 
 ### Multiplayer Test Checklist

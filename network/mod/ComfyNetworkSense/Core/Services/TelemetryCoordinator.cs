@@ -327,6 +327,7 @@ public sealed class TelemetryCoordinator : IDisposable {
 
   public string ReloadConfig() {
     ComfyNetworkSense.Instance.Config.Reload();
+    ComfyNetworkSense.Instance.ApplyMcpConfiguration();
     string message = "NetworkSense config reloaded.";
     WriteEvent("config_reload", message);
     MessageHud.instance?.ShowMessage(MessageHud.MessageType.TopLeft, message);
@@ -607,7 +608,14 @@ public sealed class TelemetryCoordinator : IDisposable {
     _ravenState.LastUpdatedUtc = DateTime.UtcNow.ToString("o");
 
     _ = Task.Run(async () => {
-      string endpoint = RequestEndpoint(requestKind);
+      if (!McpGatewayEndpoint.TryCreate(
+          PluginConfig.McpGatewayUrl.Value,
+          RequestPath(requestKind),
+          out Uri endpoint,
+          out string endpointError)) {
+        ApplyRavenResponse(requestKind, string.Empty, endpointError);
+        return;
+      }
       string responseText = string.Empty;
       string error = string.Empty;
 
@@ -656,7 +664,13 @@ public sealed class TelemetryCoordinator : IDisposable {
         // the server's stripped Mono. The X-Comfy-Key header is local plugin state, so the head is
         // built here and only the socket + bounded read are shared — the caller-builds-head split the
         // consumer runner uses. SendBounded throws on connect timeout, over-size, or too-slow body.
-        Uri uri = new("http://127.0.0.1:8720/valheim/apply-profile");
+        if (!McpGatewayEndpoint.TryCreate(
+            PluginConfig.McpGatewayUrl.Value,
+            "/valheim/apply-profile",
+            out Uri uri,
+            out string endpointError)) {
+          throw new InvalidOperationException(endpointError);
+        }
         byte[] body = Encoding.UTF8.GetBytes($"{{\"profile\":\"{profile}\"}}");
         string head = "POST " + uri.PathAndQuery + " HTTP/1.1\r\n"
             + "Host: " + uri.Host + ":" + uri.Port.ToString(CultureInfo.InvariantCulture) + "\r\n"
@@ -730,12 +744,12 @@ public sealed class TelemetryCoordinator : IDisposable {
                 row.TryGetValue("effective_value", out object effective) ? effective : string.Empty));
   }
 
-  static string RequestEndpoint(string requestKind) {
+  static string RequestPath(string requestKind) {
     return requestKind switch {
-      "health" => "http://127.0.0.1:8720/healthz",
-      "next-test" => "http://127.0.0.1:8720/valheim/next-test?sample_count=30",
-      "config-suggestion" => "http://127.0.0.1:8720/valheim/config-suggestion?sample_count=30",
-      _ => "http://127.0.0.1:8720/valheim/report?sample_count=30"
+      "health" => "/healthz",
+      "next-test" => "/valheim/next-test?sample_count=30",
+      "config-suggestion" => "/valheim/config-suggestion?sample_count=30",
+      _ => "/valheim/report?sample_count=30"
     };
   }
 

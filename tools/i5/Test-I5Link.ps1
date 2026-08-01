@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-Preflight for the i5 deploy lane: tailnet presence, ssh reachability, key auth,
-remote layout. Run this (or rely on Deploy-ToI5's inline preflight) before any
-deploy.
+Preflight for the i5 deploy lane: SSH alias resolution, reachability, key auth,
+and remote layout. Run this (or rely on Deploy-ToI5's inline preflight) before
+any deploy.
 
 .DESCRIPTION
 Exit 0 = lane up. Exit 1 = lane down. The i5 is a roaming laptop marked
@@ -13,16 +13,16 @@ error to retry in a loop. Report and stop.
 .\Test-I5Link.ps1
 #>
 [CmdletBinding()]
-param()
+param(
+    [string]$SshAlias = 'i5'
+)
 
-# Probe semantics: native ssh/tailscale stderr noise (e.g. the OpenSSH post-quantum
+# Probe semantics: native ssh stderr noise (e.g. the OpenSSH post-quantum
 # KEX warning, first seen 2026-07-31) must stay non-terminating even when a caller
 # invokes this script in-process under -ErrorAction Stop. Lane health is decided by
 # the explicit [PASS]/[FAIL] checks and the exit code, never by stderr chatter.
 $ErrorActionPreference = 'Continue'
 
-$SshAlias = 'i5'
-$Fqdn     = 'i5-laptop.tail8e749c.ts.net'
 $script:AnyFail = $false
 
 function Write-Step {
@@ -35,25 +35,37 @@ function Write-Step {
     if (-not $Ok) { $script:AnyFail = $true }
 }
 
-# 1. Is the i5 on the tailnet right now?
-$tsOk = $false
-$tsDetail = ''
+# 1. Resolve the operator-owned SSH alias without embedding a machine address in
+#    the public tool. The alias may point at a tailnet, LAN, VPN, or other
+#    operator-selected transport.
+$sshConfigOk = $false
+$sshHost = $SshAlias
+$sshConfigDetail = ''
 try {
-    $tsLine = tailscale status 2>$null | Select-String 'i5-laptop' | Select-Object -First 1
-    if ($tsLine) {
-        $tsDetail = ($tsLine.Line -replace '\s+', ' ').Trim()
-        $tsOk = ($tsDetail -notmatch 'offline')
+    $sshConfig = @(ssh -G $SshAlias 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $hostLine = $sshConfig | Where-Object { $_ -match '^hostname\s+' } | Select-Object -First 1
+        if ($hostLine) {
+            $sshHost = ($hostLine -replace '^hostname\s+', '').Trim()
+            $sshConfigOk = -not [string]::IsNullOrWhiteSpace($sshHost)
+        }
+    }
+    if ($sshConfigOk) {
+        $sshConfigDetail = "resolved host: $sshHost"
     } else {
-        $tsDetail = 'i5-laptop not present in tailscale status'
+        $sshConfigDetail = "could not resolve SSH alias '$SshAlias'"
     }
 } catch {
-    $tsDetail = "tailscale CLI unavailable: $($_.Exception.Message)"
+    $sshConfigDetail = "ssh configuration unavailable: $($_.Exception.Message)"
 }
-Write-Step 'tailnet peer online' $tsOk $tsDetail
+Write-Step "ssh alias '$SshAlias' resolves" $sshConfigOk $sshConfigDetail
 
 # 2. Does ssh answer?
-$tcpOk = Test-NetConnection $Fqdn -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue
-Write-Step 'ssh port 22 reachable' $tcpOk $Fqdn
+$tcpOk = $false
+if ($sshConfigOk) {
+    $tcpOk = Test-NetConnection $sshHost -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue
+}
+Write-Step 'ssh port 22 reachable' $tcpOk $sshHost
 
 # 3. Does OMEN's key authenticate? (BatchMode: never falls back to a password prompt)
 $who = ssh -o BatchMode=yes -o ConnectTimeout=8 $SshAlias "whoami" 2>$null
@@ -126,7 +138,7 @@ if ($cli) {
             Write-Host "[WARN] Deploy lane can still copy files; Start-I5Companion.ps1 will fail until Docker Desktop is ready."
         }
     } else {
-        Write-Host '[WARN] Companion Docker runtime probe failed; deploy lane verdict is still based on tailnet/ssh.'
+        Write-Host '[WARN] Companion Docker runtime probe failed; deploy lane verdict is still based on SSH.'
     }
 }
 
