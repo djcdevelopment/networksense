@@ -1166,9 +1166,18 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     ComfyNetworkSense.LogInfo(receiptLog);
   }
 
-  bool TryQueue(string frame) {
+  bool TryQueue(string frame) => TryQueue(frame, force: false);
+
+  // MaxOutboundFrames is a BULK-DATA cap, not a control-plane cap. Ownership lease
+  // frames are rare, small, and load-bearing: full40's reissue grant was rejected at
+  // queue_depth=256 while a post-resume interest re-publish flooded the queue
+  // (sequences 877->2639 in ~3s), starving the holder probe to its deadline — a
+  // priority inversion between zone content and the lease control plane. Control
+  // frames therefore always enqueue; the transient overshoot is bounded by the
+  // probes' own attempt budgets. Ordering stays intact because there is one queue.
+  bool TryQueue(string frame, bool force) {
     int depth = Interlocked.Increment(ref _outboundCount);
-    if (depth > MaxOutboundFrames) {
+    if (!force && depth > MaxOutboundFrames) {
       Interlocked.Decrement(ref _outboundCount);
       return false;
     }
@@ -1216,7 +1225,9 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     string connectionId = ConnectionId;
     lock (_outboundGate) {
       sequence = NextClientSequence();
-      bool queued = TryQueue(BuildEnvelope(type, sequence, payloadFactory(sequence)));
+      bool queued = TryQueue(
+          BuildEnvelope(type, sequence, payloadFactory(sequence)),
+          IsOwnershipType(type));
       if (IsOwnershipType(type)) {
         _events.Enqueue(new SessionEvent(
             queued ? "ownership_frame_queued" : "ownership_frame_queue_rejected",
