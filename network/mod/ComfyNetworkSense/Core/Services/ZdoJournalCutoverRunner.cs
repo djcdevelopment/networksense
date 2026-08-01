@@ -555,18 +555,32 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       }
       JournalObject current = Snapshot(_drive.Zdo, tombstone: false);
       current.receipt_required = true;
+      // The negative controls must not satisfy the receipt-arrival check.
       JournalObject stale = Clone(current);
       stale.delivery_only = true;
+      stale.receipt_required = false;
       stale.source_seq = Interlocked.Increment(ref _sourceSequence);
       stale.object_revision = Math.Max(1, current.object_revision - 1);
       _serverOutbound.Enqueue(stale);
 
       JournalObject malformed = Clone(current);
       malformed.delivery_only = true;
+      malformed.receipt_required = false;
       malformed.source_seq = Interlocked.Increment(ref _sourceSequence);
       malformed.object_revision = current.object_revision + 1;
       malformed.body_b64 = "%%%C3-MALFORMED%%%";
       _serverOutbound.Enqueue(malformed);
+
+      // The valid receipt-required full-body delivery was constructed but never enqueued —
+      // the observe verdict historically passed on Gateway interest-snapshot replay of an
+      // area the bank happened to hold (bank WARMTH, not the drive protocol). A cold bank
+      // (routine since the wall-11 restart-wipe rule) made that structurally unsatisfiable
+      // (full38: snapshot=0 receipt_snapshot_arrivals=0). Deliver it explicitly; it rides
+      // the mutation lane as kind=delta and the client counts its validated arrival on
+      // whatever branch it lands in.
+      current.delivery_only = true;
+      current.source_seq = Interlocked.Increment(ref _sourceSequence);
+      _serverOutbound.Enqueue(current);
 
       _drive.Zdo.Set(ProbeValueHash, 2);
       _drive.Phase = "waiting_to_destroy";
@@ -972,6 +986,11 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         try { body = Convert.FromBase64String(value.body_b64 ?? string.Empty); }
         catch { throw new InvalidDataException("body_base64_invalid"); }
         ValidateBody(body, value.prefab);
+        // A validated receipt-required delivery counts as arrival on ANY branch below —
+        // applied, superseded, or stale-rejected are all legal idempotent outcomes; the
+        // observe verdict needs proof of delivery, not of first-arrival ordering.
+        if (value.receipt_required)
+          Interlocked.Increment(ref _receiptSnapshotArrivals);
       }
 
       long previous;
@@ -983,13 +1002,6 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       long current = Math.Max(previous, actualRevision);
       if (value.object_revision <= current) {
         if (delivery.kind == "snapshot") {
-          // A receipt-required snapshot that arrives after an equivalent delta is a
-          // legal idempotent duplicate: the canonical path DID deliver it, and the
-          // client state already matches. The observe probe accepts this arrival —
-          // full37's post-WAL-rebuild flood made delta-before-snapshot the norm and
-          // superseded every snapshot, deadlining an otherwise healthy observe.
-          if (value.receipt_required)
-            Interlocked.Increment(ref _receiptSnapshotArrivals);
           long superseded = Interlocked.Increment(ref _superseded);
           if (value.receipt_required ||
               superseded % BulkProgressInterval == 0)
@@ -1045,13 +1057,10 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
           target.GetOwner() != value.owner)
         throw new InvalidOperationException("typed_apply_readback_mismatch");
       lock (_gate) _appliedRevisions[key] = value.object_revision;
-      if (delivery.kind == "snapshot") {
+      if (delivery.kind == "snapshot")
         Interlocked.Increment(ref _snapshotsApplied);
-        if (value.receipt_required)
-          Interlocked.Increment(ref _receiptSnapshotArrivals);
-      } else {
+      else
         Interlocked.Increment(ref _deltasApplied);
-      }
       Ack(delivery);
       long applied =
           Interlocked.Read(ref _snapshotsApplied) +
