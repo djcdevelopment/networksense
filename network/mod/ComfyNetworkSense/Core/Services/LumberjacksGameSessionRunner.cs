@@ -65,6 +65,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   bool _disposed;
   string _localRole = "client";
   long _localPeerUid;
+  long _localCharacterZdoUserId;
+  uint _localCharacterZdoId;
 
   public bool IsRunning => _cts != null && !_cts.IsCancellationRequested;
   public bool WebSocketConnected { get { lock (_gate) return _webSocketConnected; } }
@@ -437,9 +439,21 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     try {
       _localRole = ZNet.instance != null && ZNet.instance.IsServer() ? "server" : "client";
       _localPeerUid = ZNet.instance != null ? ZNet.GetUID() : 0;
+      _localCharacterZdoUserId = 0;
+      _localCharacterZdoId = 0;
+      if (_localRole == "client") {
+        ZDO localCharacter = Player.m_localPlayer?
+            .GetComponent<ZNetView>()?.GetZDO();
+        if (localCharacter != null) {
+          _localCharacterZdoUserId = localCharacter.m_uid.UserID;
+          _localCharacterZdoId = localCharacter.m_uid.ID;
+        }
+      }
     } catch {
       _localRole = "client";
       _localPeerUid = 0;
+      _localCharacterZdoUserId = 0;
+      _localCharacterZdoId = 0;
     }
     _nextConnectAt = now + 2.0f;
     _nextHeartbeatAt = now + HeartbeatIntervalSeconds;
@@ -809,17 +823,32 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         + " server_instance_id=" + serverInstance
         + " world_id=" + world
         + " udp_ready=" + (_udp != null ? "true" : "false")));
+    string peerBinding =
+        "\"role\":\"" + _localRole
+        + "\",\"peer_uid\":"
+        + _localPeerUid.ToString(CultureInfo.InvariantCulture);
+    if (_localRole == "client" &&
+        _localCharacterZdoUserId != 0 && _localCharacterZdoId != 0) {
+      peerBinding +=
+          ",\"character_zdo_user_id\":"
+          + _localCharacterZdoUserId.ToString(CultureInfo.InvariantCulture)
+          + ",\"character_zdo_id\":"
+          + _localCharacterZdoId.ToString(CultureInfo.InvariantCulture);
+    }
     if (_localPeerUid == 0 || !TryQueueEnvelope(
-            "valheim_peer_bind",
-            "\"role\":\"" + _localRole
-            + "\",\"peer_uid\":"
-            + _localPeerUid.ToString(CultureInfo.InvariantCulture))) {
+            "valheim_peer_bind", peerBinding)) {
       throw new InvalidDataException("failed to queue Valheim peer binding");
     }
     _events.Enqueue(new SessionEvent(
         "peer_bind_queued", 0, connection,
         "role=" + _localRole
-        + " peer_uid=" + _localPeerUid.ToString(CultureInfo.InvariantCulture)));
+        + " peer_uid=" + _localPeerUid.ToString(CultureInfo.InvariantCulture)
+        + (_localCharacterZdoId == 0
+            ? string.Empty
+            : " character_id="
+              + _localCharacterZdoUserId.ToString(CultureInfo.InvariantCulture)
+              + ":"
+              + _localCharacterZdoId.ToString(CultureInfo.InvariantCulture))));
     if (_localRole == "client" &&
         NativeAutotestRequest.ActiveMotionAuthorityCutover) {
       if (!TryQueueEnvelope(
