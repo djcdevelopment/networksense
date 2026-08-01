@@ -29,6 +29,10 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   const float InterframeDisplacementThresholdMeters = 0.05f;
   const string AuthorityReceiptFileName = "motion-authority-cutover.jsonl";
   const int GapFrameCount = 20;
+  // Shared by the observer's ordinary-lane rejection bound and the mover's
+  // teleport detector: a jump past this is either refused (ordinary lane) or
+  // announced (reliable resync lane) - never silently applied.
+  const float ImplausibleTargetMeters = 30.0f;
   static readonly MethodInfo CreateNewZdoMethod =
       AccessTools.Method(
           typeof(ZDOMan), "CreateNewZDO",
@@ -127,6 +131,8 @@ public sealed class LumberjacksMotionRunner : IDisposable {
   long _reliableResyncReceipts;
   long _authorityFailures;
   MotionProbe _probe;
+  Vector3 _lastQueuedPosition;
+  bool _hasLastQueuedPosition;
   string _lastResyncActionId = string.Empty;
   string _rendezvousActionId = string.Empty;
   bool _rendezvousMoved;
@@ -301,7 +307,9 @@ public sealed class LumberjacksMotionRunner : IDisposable {
 
         // Legacy observe/apply mode yields to native for an implausible correction. C6 authority
         // mode fails closed and holds; hidden native correction is never re-enabled.
-        if (targetError > 30.0f) {
+        // A legitimate remote teleport arrives on the reliable resync lane instead
+        // (QueueTeleportResync), so this ordinary-lane bound stays strict.
+        if (targetError > ImplausibleTargetMeters) {
           if (AuthorityEnabled()) {
             HoldRemote(remote, "implausible_target");
             Interlocked.Increment(ref _authorityFailures);
@@ -591,6 +599,19 @@ public sealed class LumberjacksMotionRunner : IDisposable {
           "uid=" + snapshot.ZdoUserId + ":" + snapshot.ZdoId
           + " position=" + PositionDetail(snapshot));
     }
+    // A legitimate local teleport is a >30m jump the observer's implausible-target
+    // guard MUST refuse on the ordinary lane (fail-closed authority; full41 held the
+    // remote at 87m for the whole drive after the mover's safe-origin teleport landed
+    // mid-observation). Announce it on the reliable resync lane instead, so observers
+    // re-anchor legally. Fires on the frame after the jump, before that frame queues.
+    if (_hasLastQueuedPosition &&
+        Vector3.Distance(position, _lastQueuedPosition) >
+            ImplausibleTargetMeters &&
+        CanonicalSessionEnabled())
+      QueueTeleportResync(
+          outbound, Vector3.Distance(position, _lastQueuedPosition));
+    _lastQueuedPosition = position;
+    _hasLastQueuedPosition = true;
     if (CanonicalSessionEnabled()) {
       if (_probe != null && !_probe.Terminal &&
           _probe.Mode == "drive_gap" &&
@@ -998,6 +1019,49 @@ public sealed class LumberjacksMotionRunner : IDisposable {
     probe.Detail = detail;
     Interlocked.Increment(ref _authorityFailures);
     WriteAuthority("probe_failed", probe.ActionId, detail);
+  }
+
+  // Probe-independent teleport announcement on the reliable resync lane. Degenerate
+  // gap fields (start == end == the post-teleport frame) satisfy both the Gateway's
+  // and the observer's gap validation; the observer's ApplyReliableResync re-anchors
+  // the remote and acks, exactly as for gap recovery.
+  void QueueTeleportResync(OutboundMotion outbound, float jumpMeters) {
+    string actionId =
+        _probe != null && !_probe.Terminal && SafeToken(_probe.CorrelationId, 80)
+            ? _probe.CorrelationId
+            : "local-teleport";
+    string fields =
+        "\"run_id\":\"" + JsonEscape(NativeAutotestRequest.ActiveRunId)
+        + "\",\"action_id\":\"" + JsonEscape(actionId)
+        + "\",\"source_motion_sequence\":" + outbound.Sequence
+        + ",\"gap_start_sequence\":" + outbound.Sequence
+        + ",\"gap_end_sequence\":" + outbound.Sequence
+        + ",\"zdo_user_id\":"
+        + outbound.Snapshot.ZdoUserId.ToString(CultureInfo.InvariantCulture)
+        + ",\"zdo_id\":"
+        + outbound.Snapshot.ZdoId.ToString(CultureInfo.InvariantCulture)
+        + ",\"x\":" + Float(outbound.Snapshot.X)
+        + ",\"y\":" + Float(outbound.Snapshot.Y)
+        + ",\"z\":" + Float(outbound.Snapshot.Z)
+        + ",\"velocity_x\":" + Float(outbound.Snapshot.VelocityX)
+        + ",\"velocity_y\":" + Float(outbound.Snapshot.VelocityY)
+        + ",\"velocity_z\":" + Float(outbound.Snapshot.VelocityZ)
+        + ",\"yaw\":" + Float(outbound.Snapshot.Yaw)
+        + ",\"sent_milliseconds\":"
+        + outbound.Snapshot.SentMilliseconds
+            .ToString(CultureInfo.InvariantCulture)
+        + ",\"reason\":\"local_teleport\"";
+    if (_gameSession?.TryQueueMotionResync(fields) != true) {
+      WriteAuthority(
+          "teleport_resync_queue_failed", actionId,
+          "motion_sequence=" + outbound.Sequence);
+      return;
+    }
+    Interlocked.Increment(ref _reliableResyncQueued);
+    WriteAuthority(
+        "teleport_resync_queued", actionId,
+        "motion_sequence=" + outbound.Sequence
+        + " jump_m=" + jumpMeters.ToString("0.#", CultureInfo.InvariantCulture));
   }
 
   void QueueReliableResync(MotionProbe probe, OutboundMotion outbound) {
