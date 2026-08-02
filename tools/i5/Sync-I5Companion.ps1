@@ -29,6 +29,13 @@ The baseline staging checkout on the i5.
 .PARAMETER NoStart
 Copy and verify files, but do not restart the i5 Companion.
 
+.PARAMETER Profile
+Workbench profile used when restarting the i5 Companion.
+
+.PARAMETER GatewayUrl
+Gateway origin passed to Start-I5Companion.ps1. When omitted, the launcher uses
+its profile-aware default.
+
 .PARAMETER DryRun
 Print the deploy operations without copying, cleanup, or starting.
 
@@ -38,6 +45,11 @@ Print the deploy operations without copying, cleanup, or starting.
 [CmdletBinding()]
 param(
     [string]$RemoteRoot = 'C:\deploy\baseline\i5-companion',
+    [ValidateSet('Explore','Admin','Dev','Lab','Production')]
+    [string]$Profile = 'Explore',
+    [ValidateRange(1024,65535)]
+    [int]$McpPort = 8721,
+    [string]$GatewayUrl = '',
     [switch]$NoStart,
     [switch]$DryRun
 )
@@ -141,5 +153,5 @@ if ($DryRun) {
     exit 0
 }
 
-& $StartScript -RemoteRoot $RemoteRoot
+& $StartScript -RemoteRoot $RemoteRoot -Profile $Profile -McpPort $McpPort -GatewayUrl $GatewayUrl
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -16,6 +16,11 @@ The baseline staging checkout on the i5.
 .PARAMETER ValheimPath
 The Windows Valheim install path on the i5.
 
+.PARAMETER GatewayUrl
+Gateway origin used by Companion. Lab defaults to the OMEN Lab Gateway over the
+tailnet; other profiles retain the public release Gateway default. An explicit
+value overrides the profile default.
+
 .EXAMPLE
 .\tools\i5\Start-I5Companion.ps1
 #>
@@ -26,7 +31,8 @@ param(
     [ValidateSet('Explore','Admin','Dev','Lab','Production')]
     [string]$Profile = 'Explore',
     [ValidateRange(1024,65535)]
-    [int]$McpPort = 8721
+    [int]$McpPort = 8721,
+    [string]$GatewayUrl = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,12 +40,31 @@ $sshOptions = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8')
 $sshAlias = 'i5'
 $sshArgs = $sshOptions + $sshAlias
 
+$selectedGatewayUrl = $GatewayUrl
+if ([string]::IsNullOrWhiteSpace($selectedGatewayUrl)) {
+    $selectedGatewayUrl = if ($Profile -eq 'Lab') {
+        'http://100.124.12.37:4000'
+    } else {
+        'https://comfy-p7.duckdns.org'
+    }
+}
+$parsedGatewayUrl = $null
+if (-not [Uri]::TryCreate($selectedGatewayUrl, [UriKind]::Absolute, [ref]$parsedGatewayUrl) -or
+    $parsedGatewayUrl.Scheme -notin @('http','https') -or
+    -not [string]::IsNullOrWhiteSpace($parsedGatewayUrl.UserInfo) -or
+    -not [string]::IsNullOrWhiteSpace($parsedGatewayUrl.Query) -or
+    -not [string]::IsNullOrWhiteSpace($parsedGatewayUrl.Fragment)) {
+    throw "GatewayUrl must be an absolute http(s) origin without credentials, query, or fragment: $selectedGatewayUrl"
+}
+$selectedGatewayUrl = $selectedGatewayUrl.TrimEnd('/')
+
 $remote = @'
 $ErrorActionPreference = 'Stop'
 $remoteRoot = '__REMOTE_ROOT__'
 $valheim = '__VALHEIM_PATH__'
 $profile = '__PROFILE__'
 $mcpPort = __MCP_PORT__
+$gatewayUrl = '__GATEWAY_URL__'
 if (-not (Test-Path -LiteralPath $remoteRoot)) { throw "Companion staging root not found: $remoteRoot" }
 if (-not (Test-Path -LiteralPath $valheim)) { throw "Valheim path not found: $valheim" }
 
@@ -72,6 +97,7 @@ Set-Content -LiteralPath $envFile -Value @(
     'LUMBERJACKS_COMPANION_SOURCE_BRANCH=release-bundle'
     'LUMBERJACKS_COMPANION_SOURCE_DIRTY=false'
     'LUMBERJACKS_COMPANION_IMAGE=lumberjacks-companion-companion:' + $bootstrapRelease
+    'LUMBERJACKS_COMPANION_GATEWAY_URL=' + $gatewayUrl
     'LUMBERJACKS_WORKBENCH_PROFILE=' + $profile
     'COMFY_WORKBENCH_MCP_PORT=' + $mcpPort
     'LUMBERJACKS_WORKBENCH_REPO_ROOT=' + $remoteRoot
@@ -150,6 +176,7 @@ if (-not $dockerState.Ok) {
     throw "Docker Desktop Linux engine is not ready on i5: $($dockerState.Detail). Log into i5 once and confirm Docker Desktop is running, then rerun Start-I5Companion.ps1. Do not start the Companion with the base compose file only."
 }
 Write-Output ("Docker ready: {0}" -f $dockerState.Detail)
+Write-Output ("Workbench Gateway: {0} ({1} profile)" -f $gatewayUrl, $profile)
 
 $composeArgs = @(
     'compose',
@@ -212,7 +239,8 @@ $escaped = $remote.
     Replace('__REMOTE_ROOT__', $RemoteRoot.Replace("'", "''")).
     Replace('__VALHEIM_PATH__', $ValheimPath.Replace("'", "''")).
     Replace('__PROFILE__', $Profile).
-    Replace('__MCP_PORT__', [string]$McpPort)
+    Replace('__MCP_PORT__', [string]$McpPort).
+    Replace('__GATEWAY_URL__', $selectedGatewayUrl.Replace("'", "''"))
 
 $remoteScriptDir = 'C:/deploy/baseline'
 $remoteScript = "$remoteScriptDir/Start-I5Companion.remote.ps1"

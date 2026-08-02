@@ -65,6 +65,9 @@ Host i5
 # Sync the current Companion source/runtime inputs, then start/rebuild it
 .\Sync-I5Companion.ps1
 
+# Keep the client-only i5 Companion lane on Explore while using OMEN's local-Lab Gateway
+.\Sync-I5Companion.ps1 -GatewayUrl http://100.124.12.37:4000
+
 # Recover Docker Desktop and recreate i5 Companion if Docker CLI/engine gets stuck
 .\Repair-I5DockerDesktop.ps1
 
@@ -168,7 +171,9 @@ the receipt and stop instead of retry-looping.
 For Companion development, prefer `Sync-I5Companion.ps1`. It uses the verified deploy lane for the
 minimal Docker build context, clears only the stale remote `src\Game.Companion` staging directory,
 then calls `Start-I5Companion.ps1`. Use `-DryRun` to inspect the copy plan or `-NoStart` when only
-staging files is desired.
+staging files is desired. Profile and Gateway selection flow through to the launcher. In `Lab`, the
+i5 launcher defaults to OMEN's canonical tailnet Gateway (`http://100.124.12.37:4000`); pass
+`-GatewayUrl` explicitly when validating a different bounded Lab origin.
 
 For two-client transport evidence, use `Start-TwoClientCapture.ps1`. Start both Valheim clients,
 begin the capture, move both characters during the window, then compare the `omen` and `i5`
