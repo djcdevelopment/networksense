@@ -339,6 +339,8 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       string runId,
       string worldEpoch,
       string logicalPeerId,
+      bool accepted,
+      string result,
       long snapshots,
       long pending) {
     ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
@@ -351,7 +353,8 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         LogicalPeerId = logicalPeerId,
         Count = snapshots,
         Pending = pending,
-        Accepted = true
+        Accepted = accepted,
+        Result = result
     });
   }
 
@@ -427,6 +430,20 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     active.Write("reincarnation_interest_rearm_requested", "client",
         "last_zone=" + active._registeredInterestZoneX
         + "," + active._registeredInterestZoneY);
+  }
+
+  public static void NotifyWorldEpochChanged(
+      string previousWorldEpoch, string currentWorldEpoch) {
+    ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || IsServer() ||
+        string.Equals(previousWorldEpoch, currentWorldEpoch,
+            StringComparison.Ordinal)) return;
+    active.ResetClientEpochState();
+    active._worldEpoch = currentWorldEpoch ?? string.Empty;
+    active.Write("world_session_epoch_changed", "client",
+        "previous=" + previousWorldEpoch
+        + " current=" + currentWorldEpoch
+        + " stale_deliveries_discarded=true");
   }
 
   public static void CaptureTombstone(ZDOID uid) {
@@ -834,8 +851,12 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
                 "logical_peer_mismatch");
             continue;
           }
-          Write("interest_registered", "client",
+          Write(item.Accepted
+                  ? "interest_registered"
+                  : "interest_rejected",
+              "client",
               "transport=canonical_session logical_peer_id=" + item.LogicalPeerId
+              + " result=" + item.Result
               + " snapshot_count=" + item.Count
               + " pending=" + item.Pending);
           break;
@@ -1266,12 +1287,32 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     if (!string.IsNullOrWhiteSpace(configured))
       _endpoint = configured.Trim().TrimEnd('/')
           .Replace("ws://", "http://").Replace("wss://", "https://");
-    try {
-      if (ZNet.instance != null)
-        _worldEpoch =
-            "world-" + unchecked((ulong) ZNet.instance.GetWorldUID())
-                .ToString("x16", CultureInfo.InvariantCulture);
-    } catch { }
+    string previousWorldEpoch = _worldEpoch;
+    string currentWorldEpoch = WorldZoneCutoverRunner.TryGetCurrentWorldEpoch(
+        out string acceptedWorldEpoch)
+        ? acceptedWorldEpoch : string.Empty;
+    if (!string.Equals(previousWorldEpoch, currentWorldEpoch,
+            StringComparison.Ordinal)) {
+      if (!server && !string.IsNullOrEmpty(previousWorldEpoch))
+        ResetClientEpochState();
+      _worldEpoch = currentWorldEpoch;
+      if (!string.IsNullOrEmpty(previousWorldEpoch) &&
+          !string.IsNullOrEmpty(currentWorldEpoch))
+        Write("world_session_epoch_changed", _role,
+            "previous=" + previousWorldEpoch
+            + " current=" + currentWorldEpoch);
+    }
+  }
+
+  void ResetClientEpochState() {
+    while (_clientInbound.TryDequeue(out _)) { }
+    while (_clientAcks.TryDequeue(out _)) { }
+    while (_canonicalAcks.TryDequeue(out _)) { }
+    while (_canonicalEvents.TryDequeue(out _)) { }
+    lock (_gate) _appliedRevisions.Clear();
+    _hasRegisteredInterest = false;
+    _hasPrefetchInterest = false;
+    _nextInterest = 0.0f;
   }
 
   static bool Enabled() =>

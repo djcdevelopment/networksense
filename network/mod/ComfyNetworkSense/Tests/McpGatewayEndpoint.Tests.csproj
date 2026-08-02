@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="..\Core\Services\McpGatewayEndpoint.cs" Link="McpGatewayEndpoint.cs" />
     <Compile Include="..\Core\Services\AlphaTransportSwitches.cs" Link="AlphaTransportSwitches.cs" />
+    <Compile Include="..\Core\Services\WorldSessionEpoch.cs" Link="WorldSessionEpoch.cs" />
   </ItemGroup>
 </Project>

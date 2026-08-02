@@ -5,6 +5,7 @@ using System;
 static class Program {
   static int Main() {
     ExpectMcpSwitchDefaultsOff();
+    ExpectSessionScopedWorldEpoch();
 
     ExpectAccepted("http://127.0.0.1:8721", "/healthz", "http://127.0.0.1:8721/healthz");
     ExpectAccepted("https://localhost:9443/", "/valheim/report?sample_count=30",
@@ -20,6 +21,23 @@ static class Program {
 
     Console.WriteLine("MCP boundary tests passed.");
     return 0;
+  }
+
+  static void ExpectSessionScopedWorldEpoch() {
+    const long worldUid = 0x1234;
+    const long firstSession = 0x5678;
+    const long secondSession = 0x5679;
+    string stable = WorldSessionEpoch.StableWorld(worldUid);
+    string first = WorldSessionEpoch.Compose(worldUid, firstSession);
+    string second = WorldSessionEpoch.Compose(worldUid, secondSession);
+
+    if (stable != "world-0000000000001234" || first == second ||
+        !WorldSessionEpoch.IsConsistent(
+            first, stable, WorldSessionEpoch.ServerSession(firstSession), worldUid) ||
+        WorldSessionEpoch.IsConsistent(
+            first, stable, WorldSessionEpoch.ServerSession(secondSession), worldUid)) {
+      throw new Exception("World epoch must bind stable world identity to one server session.");
+    }
   }
 
   static void ExpectMcpSwitchDefaultsOff() {

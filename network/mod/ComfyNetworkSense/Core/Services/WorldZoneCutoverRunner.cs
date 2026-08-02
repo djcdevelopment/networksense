@@ -24,7 +24,7 @@ using UnityEngine;
 /// </summary>
 public sealed class WorldZoneCutoverRunner : IDisposable {
   const string ReceiptFileName = "world-zone-cutover.jsonl";
-  const int DescriptorProtocolVersion = 1;
+  const int DescriptorProtocolVersion = 2;
   // assembly_valheim 0.221.12 Version.m_worldGenVersion. Version is internal in the
   // non-publicized compile reference, so the cutover contract names the verified wire value.
   const int ValheimWorldGenerationVersion = 2;
@@ -49,6 +49,8 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
   static readonly AccessTools.FieldRef<ZDOMan, Dictionary<ZDOID, ZDO>>
       ObjectsById = AccessTools.FieldRefAccess<ZDOMan, Dictionary<ZDOID, ZDO>>(
           "m_objectsByID");
+  static readonly AccessTools.FieldRef<ZDOMan, long> SessionId =
+      AccessTools.FieldRefAccess<ZDOMan, long>("m_sessionID");
   static readonly FieldInfo LocationIconsField =
       AccessTools.Field(typeof(ZoneSystem), "m_locationIcons");
   static readonly MethodInfo ClearGlobalKeysMethod =
@@ -76,12 +78,15 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
   byte[] _pendingPeerInfo;
   string _publishedRunId = string.Empty;
   string _publishedConnectionId = string.Empty;
+  string _publishedWorldEpoch = string.Empty;
   float _nextPublishAt;
   float _nextRequestAt;
   bool _descriptorRejected;
   bool _worldBootstrapApplied;
   bool _worldBootstrapApplyFailed;
   bool _bootstrapTerminalWritten;
+  ZNet _observedClientZNet;
+  bool _observedClientSession;
   float _respawnObservedAt;
   float _nextBootstrapProgressAt;
   MembershipProbe _membership;
@@ -103,6 +108,34 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
   public static bool Selected =>
       PluginConfig.WorldZoneCutoverEnabled?.Value == true ||
       NativeAutotestRequest.ActiveWorldZoneCutover;
+
+  /// <summary>
+  /// Returns the authoritative server-session epoch. Servers derive it from the ZDOMan session
+  /// that owns their ZDO ids; clients use only the descriptor accepted from that server and never
+  /// substitute their own local ZDOMan session.
+  /// </summary>
+  public static bool TryGetCurrentWorldEpoch(out string worldEpoch) {
+    worldEpoch = string.Empty;
+    try {
+      if (ZNet.instance == null) return false;
+      if (ZNet.instance.IsServer()) {
+        if (ZDOMan.instance == null) return false;
+        long worldUid = ZNet.instance.GetWorldUID();
+        long sessionId = SessionId(ZDOMan.instance);
+        if (worldUid == 0 || sessionId == 0) return false;
+        worldEpoch = WorldSessionEpoch.Compose(worldUid, sessionId);
+        return true;
+      }
+      WorldZoneCutoverRunner active = Volatile.Read(ref _active);
+      if (active?._descriptor == null || active._descriptorRejected)
+        return false;
+      worldEpoch = active._descriptor.world_epoch;
+      return !string.IsNullOrWhiteSpace(worldEpoch);
+    } catch {
+      worldEpoch = string.Empty;
+      return false;
+    }
+  }
 
   public bool DescriptorAccepted => _descriptor != null && !_descriptorRejected;
   public bool DescriptorRejected => _descriptorRejected;
@@ -144,6 +177,7 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
       }
       active._publishedRunId = string.Empty;
       active._publishedConnectionId = string.Empty;
+      active._publishedWorldEpoch = string.Empty;
       active._nextPublishAt = 0f;
       detail = previous == effective ? "unchanged" : "runtime_only";
       active.Write(
@@ -212,6 +246,7 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
 
   public void Update(float now) {
     if (_disposed) return;
+    ObserveClientSession();
     DrainFrames();
     if (!Selected || ZNet.instance == null) {
       if (ZNet.instance != null && ZNet.instance.IsServer())
@@ -256,20 +291,60 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     WorldZoneCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || ZNet.instance == null || ZNet.instance.IsServer())
       return;
-    active._descriptor = null;
-    active._descriptorRejected = false;
-    active._nextRequestAt = 0f;
-    active.Write("reincarnation_descriptor_rearm_requested", "client", string.Empty);
+    active.ResetClientDescriptor(
+        "gateway_reincarnated", preservePendingPeerInfo: true);
+  }
+
+  void ObserveClientSession() {
+    ZNet current = ZNet.instance;
+    if (current == null) {
+      if (_observedClientSession)
+        ResetClientDescriptor("client_znet_ended");
+      _observedClientZNet = null;
+      _observedClientSession = false;
+      return;
+    }
+    if (current.IsServer()) {
+      _observedClientZNet = null;
+      _observedClientSession = false;
+      return;
+    }
+    if (_observedClientSession &&
+        !ReferenceEquals(_observedClientZNet, current))
+      ResetClientDescriptor("client_znet_replaced");
+    _observedClientZNet = current;
+    _observedClientSession = true;
+  }
+
+  void ResetClientDescriptor(
+      string reason, bool preservePendingPeerInfo = false) {
+    string previousWorldEpoch = _descriptor?.world_epoch ?? string.Empty;
+    _descriptor = null;
+    _descriptorRejected = false;
+    _worldBootstrapApplied = false;
+    _worldBootstrapApplyFailed = false;
+    _bootstrapTerminalWritten = false;
+    if (!preservePendingPeerInfo) {
+      _pendingRpc = null;
+      _pendingPeerInfo = null;
+    }
+    _clientObjects.Clear();
+    _membership = null;
+    _nextRequestAt = 0f;
+    if (!string.IsNullOrEmpty(previousWorldEpoch)) {
+      ZdoJournalCutoverRunner.NotifyWorldEpochChanged(
+          previousWorldEpoch, string.Empty);
+      OwnershipLeaseCutoverRunner.NotifyWorldEpochChanged(
+          previousWorldEpoch, string.Empty);
+    }
+    Write("descriptor_rearm_requested", "client", "reason=" + reason);
   }
 
   void PublishDescriptor(float now) {
     if (!_gameSession.WebSocketConnected || now < _nextPublishAt) return;
     string runId = PluginConfig.NativeNetworkEvidenceRunId?.Value ?? string.Empty;
     string connectionId = _gameSession.ConnectionId;
-    if (!SafeToken(runId, 80) || string.IsNullOrEmpty(connectionId) ||
-        (string.Equals(runId, _publishedRunId, StringComparison.Ordinal) &&
-         string.Equals(connectionId, _publishedConnectionId, StringComparison.Ordinal)))
-      return;
+    if (!SafeToken(runId, 80) || string.IsNullOrEmpty(connectionId)) return;
     World world = ZNet.GetWorldIfIsHost();
     if (world == null || world.m_uid == 0 || string.IsNullOrWhiteSpace(world.m_name) ||
         string.IsNullOrWhiteSpace(world.m_seedName)) return;
@@ -303,14 +378,26 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     if (orderedIcons.Count != locationIcons.Count) return;
 
     Vector2i zone = ZoneSystem.GetZone(startLocation);
-    string worldEpoch = "world-" + unchecked((ulong)world.m_uid)
-        .ToString("x16", CultureInfo.InvariantCulture);
+    if (ZDOMan.instance == null) return;
+    long serverSessionId;
+    try { serverSessionId = SessionId(ZDOMan.instance); }
+    catch { return; }
+    if (serverSessionId == 0) return;
+    string stableWorldEpoch = WorldSessionEpoch.StableWorld(world.m_uid);
+    string serverSessionEpoch = WorldSessionEpoch.ServerSession(serverSessionId);
+    string worldEpoch = WorldSessionEpoch.Compose(world.m_uid, serverSessionId);
+    if (string.Equals(runId, _publishedRunId, StringComparison.Ordinal) &&
+        string.Equals(connectionId, _publishedConnectionId, StringComparison.Ordinal) &&
+        string.Equals(worldEpoch, _publishedWorldEpoch, StringComparison.Ordinal))
+      return;
     string fields =
         "\"schema_version\":1"
         + ",\"protocol_version\":" + DescriptorProtocolVersion
         + ",\"release_id\":\"" + Escape(ComfyNetworkSense.ReleaseId) + "\""
         + ",\"run_id\":\"" + Escape(runId) + "\""
         + ",\"world_epoch\":\"" + worldEpoch + "\""
+        + ",\"world_stable_epoch\":\"" + stableWorldEpoch + "\""
+        + ",\"server_session_epoch\":\"" + serverSessionEpoch + "\""
         + ",\"world_name\":\"" + Escape(world.m_name) + "\""
         + ",\"seed\":" + world.m_seed.ToString(CultureInfo.InvariantCulture)
         + ",\"seed_name\":\"" + Escape(world.m_seedName) + "\""
@@ -328,9 +415,12 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     if (!_gameSession.TryQueueWorldDescriptorPublish(fields)) return;
     _publishedRunId = runId;
     _publishedConnectionId = connectionId;
+    _publishedWorldEpoch = worldEpoch;
     _nextPublishAt = now + 2.0f;
     Write("descriptor_published", "server",
         "world_epoch=" + worldEpoch
+        + " world_stable_epoch=" + stableWorldEpoch
+        + " server_session_epoch=" + serverSessionEpoch
         + " world_generation_version=" + world.m_worldGenVersion
         + " initial_zone=" + zone.x + "," + zone.y
         + " global_keys=" + globalKeys.Count
@@ -355,7 +445,24 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
           Acknowledge(reliableSequence);
           continue;
         }
+        string previousWorldEpoch = _descriptor?.world_epoch ?? string.Empty;
         _descriptor = descriptor;
+        if (!string.IsNullOrEmpty(previousWorldEpoch) &&
+            !string.Equals(previousWorldEpoch, descriptor.world_epoch,
+                StringComparison.Ordinal)) {
+          _worldBootstrapApplied = false;
+          _worldBootstrapApplyFailed = false;
+          _bootstrapTerminalWritten = false;
+          _clientObjects.Clear();
+          _membership = null;
+          ZdoJournalCutoverRunner.NotifyWorldEpochChanged(
+              previousWorldEpoch, descriptor.world_epoch);
+          OwnershipLeaseCutoverRunner.NotifyWorldEpochChanged(
+              previousWorldEpoch, descriptor.world_epoch);
+          Write("world_session_epoch_changed", "client",
+              "previous=" + previousWorldEpoch
+              + " current=" + descriptor.world_epoch);
+        }
         Write("descriptor_accepted", "client",
             "world_epoch=" + _descriptor.world_epoch
             + " world_generation_version=" + _descriptor.world_generation_version
@@ -829,13 +936,8 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
   }
 
   static string CurrentWorldEpoch() {
-    try {
-      return ZNet.instance == null ? string.Empty :
-          "world-" + unchecked((ulong)ZNet.instance.GetWorldUID())
-              .ToString("x16", CultureInfo.InvariantCulture);
-    } catch {
-      return string.Empty;
-    }
+    return TryGetCurrentWorldEpoch(out string worldEpoch)
+        ? worldEpoch : string.Empty;
   }
 
   public static void FilterNativeSync(List<ZDO> toSync) {
@@ -899,6 +1001,13 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
             StringComparison.Ordinal))
       return "descriptor_run_mismatch";
     if (!SafeToken(value.world_epoch, 96) ||
+        !SafeToken(value.world_stable_epoch, 96) ||
+        !SafeToken(value.server_session_epoch, 96) ||
+        !WorldSessionEpoch.IsConsistent(
+            value.world_epoch,
+            value.world_stable_epoch,
+            value.server_session_epoch,
+            value.world_uid) ||
         string.IsNullOrWhiteSpace(value.world_name) || value.world_name.Length > 80 ||
         string.IsNullOrWhiteSpace(value.seed_name) || value.seed_name.Length > 128 ||
         value.world_uid == 0 || value.save_epoch <= 0)
@@ -1342,6 +1451,10 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
     public string run_id = string.Empty;
     [DataMember(Name = "world_epoch")]
     public string world_epoch = string.Empty;
+    [DataMember(Name = "world_stable_epoch")]
+    public string world_stable_epoch = string.Empty;
+    [DataMember(Name = "server_session_epoch")]
+    public string server_session_epoch = string.Empty;
     [DataMember(Name = "world_name")]
     public string world_name = string.Empty;
     [DataMember(Name = "seed")]

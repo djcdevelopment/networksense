@@ -166,6 +166,20 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
     active._frames.Enqueue(new CanonicalFrame(type, json));
   }
 
+  public static void NotifyWorldEpochChanged(
+      string previousWorldEpoch, string currentWorldEpoch) {
+    OwnershipLeaseCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || IsServer() ||
+        string.Equals(previousWorldEpoch, currentWorldEpoch,
+            StringComparison.Ordinal)) return;
+    active.ClearEpochState();
+    active._worldEpoch = currentWorldEpoch ?? string.Empty;
+    active.Write("world_session_epoch_changed", "client",
+        "previous=" + previousWorldEpoch
+        + " current=" + currentWorldEpoch
+        + " stale_leases_discarded=true");
+  }
+
   public static void FilterNativeSync(object peer, List<ZDO> toSync) {
     OwnershipLeaseCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || !Enabled() || !IsServer()) return;
@@ -782,12 +796,20 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
             " stale_targets_destroyed=" + staleTargetsDestroyed);
       }
     }
-    try {
-      if (ZNet.instance != null)
-        _worldEpoch =
-            "world-" + unchecked((ulong) ZNet.instance.GetWorldUID())
-                .ToString("x16", CultureInfo.InvariantCulture);
-    } catch { }
+    string previousWorldEpoch = _worldEpoch;
+    string currentWorldEpoch = WorldZoneCutoverRunner.TryGetCurrentWorldEpoch(
+        out string acceptedWorldEpoch)
+        ? acceptedWorldEpoch : string.Empty;
+    if (!string.Equals(previousWorldEpoch, currentWorldEpoch,
+            StringComparison.Ordinal)) {
+      if (!string.IsNullOrEmpty(previousWorldEpoch)) ClearEpochState();
+      _worldEpoch = currentWorldEpoch;
+      if (!string.IsNullOrEmpty(previousWorldEpoch) &&
+          !string.IsNullOrEmpty(currentWorldEpoch))
+        Write("world_session_epoch_changed", IsServer() ? "server" : "client",
+            "previous=" + previousWorldEpoch
+            + " current=" + currentWorldEpoch);
+    }
   }
 
   int ResetRunState() {
@@ -809,6 +831,11 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
         staleTargetsDestroyed++;
       }
     }
+    ClearEpochState();
+    return staleTargetsDestroyed;
+  }
+
+  void ClearEpochState() {
     while (_frames.TryDequeue(out _)) { }
     _serverTargets.Clear();
     _selectedTargets.Clear();
@@ -819,7 +846,6 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
     Interlocked.Exchange(ref _nativeRequestOwnSuppressed, 0);
     Interlocked.Exchange(ref _nativePickupSuppressed, 0);
     Interlocked.Exchange(ref _nativeDestroySuppressed, 0);
-    return staleTargetsDestroyed;
   }
 
   void Fail(string detail) {

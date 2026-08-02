@@ -1032,14 +1032,18 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     string runId = ExtractJsonString(text, "run_id");
     string worldEpoch = ExtractJsonString(text, "world_epoch");
     string logicalPeer = ExtractJsonString(text, "logical_peer_id");
+    bool accepted = ExtractJsonBool(text, "accepted");
+    string result = ExtractJsonString(text, "result");
     long snapshots = ExtractJsonLong(text, "snapshot_count");
     long pending = ExtractJsonLong(text, "pending");
     if (sequence <= 0 || !SafeToken(runId, 80) ||
         !SafeToken(worldEpoch, 96) || !SafeToken(logicalPeer, 80) ||
+        !SafeToken(result, 80) ||
         !string.Equals(logicalPeer, _logicalPeerId, StringComparison.Ordinal))
       throw new InvalidDataException("invalid canonical ZDO interest receipt");
     ZdoJournalCutoverRunner.EnqueueCanonicalInterestReceipt(
-        sequence, runId, worldEpoch, logicalPeer, snapshots, pending);
+        sequence, runId, worldEpoch, logicalPeer,
+        accepted, result, snapshots, pending);
   }
 
   void HandleZdoInterestStatusWorker(string text) {
