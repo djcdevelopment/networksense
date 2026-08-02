@@ -38,7 +38,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m7-c10a-20260802-r5";
+  public const string ReleaseId = "m7-c10a-20260802-r6";
 
   public static ComfyNetworkSense Instance { get; private set; }
 

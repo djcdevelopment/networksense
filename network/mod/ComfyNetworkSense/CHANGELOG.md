@@ -6,6 +6,11 @@
   Lumberjacks contract for legitimate cross-owner harpoon and fishing paths,
   and add a bounded two-physical-client probe that requires the owning client
   to receipt the exact before/requested/after stamina debit.
+- Reject saved or aliased player-shaped ZDOs when that probe selects the other
+  physical player. The live player invariant requires the ZDO user component
+  to equal its current owner, then selects the nearest matching player; this
+  retains r5's asymmetric `1:2860948` target as a falsifier instead of letting
+  a stamina debit on the wrong object count as success.
 
 - Add an opt-in-by-perf-probe worker watchdog that writes one
   `perf-watchdog.jsonl` row when the Unity main-thread heartbeat stops

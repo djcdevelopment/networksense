@@ -529,6 +529,15 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     if (view == null || !view.IsValid() || view.IsOwner()
         || view.GetZDO() == null || view.GetZDO().GetOwner() == 0)
       return false;
+    ZDOID targetId = remotePlayer.GetZDOID();
+    long targetOwner = view.GetZDO().GetOwner();
+    if (!LivePlayerTargetPolicy.MatchesCurrentOwner(
+            targetId.UserID, targetOwner))
+      return false;
+    Write(
+        "remote_stamina_target_selected", probe.RunId, probe.ActionId,
+        RemoteStaminaMethod, 0, 0, targetOwner, targetId,
+        "live_player_user_matches_owner");
     return InvokeWithContext(
         probe.ActionId,
         "deliver",
@@ -549,6 +558,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     remotePlayer = null;
     Player localPlayer = Player.m_localPlayer;
     if (localPlayer == null) return false;
+    float nearestDistance = float.PositiveInfinity;
     foreach (Player candidate in Player.GetAllPlayers()) {
       if (candidate == null || ReferenceEquals(candidate, localPlayer))
         continue;
@@ -556,10 +566,18 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
       if (view == null || !view.IsValid() || view.IsOwner()
           || view.GetZDO() == null || view.GetZDO().GetOwner() == 0)
         continue;
+      ZDOID candidateId = candidate.GetZDOID();
+      if (!LivePlayerTargetPolicy.MatchesCurrentOwner(
+              candidateId.UserID, view.GetZDO().GetOwner()))
+        continue;
+      float distance =
+          (candidate.transform.position - localPlayer.transform.position)
+              .sqrMagnitude;
+      if (distance >= nearestDistance) continue;
+      nearestDistance = distance;
       remotePlayer = candidate;
-      return true;
     }
-    return false;
+    return remotePlayer != null;
   }
 
   static bool IsRemoteStaminaProbe(InboundRoute item) =>
