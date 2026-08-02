@@ -2,6 +2,11 @@
 
 ### Unreleased
 
+- Route the pinned `UseStamina(Single)` instance RPC through the shared
+  Lumberjacks contract for legitimate cross-owner harpoon and fishing paths,
+  and add a bounded two-physical-client probe that requires the owning client
+  to receipt the exact before/requested/after stamina debit.
+
 - Add an opt-in-by-perf-probe worker watchdog that writes one
   `perf-watchdog.jsonl` row when the Unity main-thread heartbeat stops
   advancing. It is diagnostic-only, does not alter gameplay, and is collected

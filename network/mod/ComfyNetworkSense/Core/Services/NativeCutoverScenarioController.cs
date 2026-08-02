@@ -241,6 +241,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "routed_request":
         case "routed_broadcast":
         case "routed_target_zdo":
+        case "routed_remote_stamina":
         case "routed_withhold":
         case "zdo_journal_drive":
         case "zdo_journal_observe":
@@ -447,12 +448,14 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       case "routed_request":
       case "routed_broadcast":
       case "routed_target_zdo":
+      case "routed_remote_stamina":
       case "routed_withhold": {
         if (!_sessionProbeStarted) {
           string mode = kind switch {
               "routed_request" => "request",
               "routed_broadcast" => "broadcast",
               "routed_target_zdo" => "target_zdo",
+              "routed_remote_stamina" => "remote_stamina",
               _ => "withhold"
           };
           if (!_routedRpc.BeginProbe(
@@ -460,7 +463,8 @@ public sealed class NativeCutoverScenarioController : IDisposable {
                   Mathf.Max(1.0f, _active.deadline_seconds - 1.0f),
                   out string startDetail)) {
             if (startDetail is "lumberjacks_session_not_connected"
-                or "routed_probe_client_not_ready") return;
+                or "routed_probe_client_not_ready"
+                or "routed_remote_player_not_ready") return;
             FailActive(startDetail);
             return;
           }

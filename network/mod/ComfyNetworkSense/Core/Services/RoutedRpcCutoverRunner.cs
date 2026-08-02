@@ -26,11 +26,13 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
   public const string TargetReceiptMethod =
       ValheimRoutedRpcAdmissions.CutoverTargetReceipt;
   public const string ResetClothMethod = ValheimRoutedRpcAdmissions.CutoverResetCloth;
+  public const string RemoteStaminaMethod = "UseStamina";
   public const string JournalRequestMethod =
       ValheimRoutedRpcAdmissions.CutoverZdoJournalRequest;
 
   const string ReceiptFileName = "routed-rpc-cutover.jsonl";
   const int MaxSeenRoutes = 1024;
+  const float RemoteStaminaProbeAmount = 1.25f;
 
   static readonly MethodInfo HandleRoutedRpcMethod =
       AccessTools.Method(typeof(ZRoutedRpc), "HandleRoutedRPC");
@@ -67,7 +69,9 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
       out string detail) {
     detail = string.Empty;
     if (!SafeToken(actionId, 80)
-        || mode is not ("request" or "broadcast" or "target_zdo" or "withhold")) {
+        || mode is not (
+            "request" or "broadcast" or "target_zdo" or "remote_stamina"
+            or "withhold")) {
       detail = "routed_probe_parameters_invalid";
       return false;
     }
@@ -94,6 +98,13 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
       return false;
     }
 
+    Player remoteStaminaTarget = null;
+    if (mode == "remote_stamina"
+        && !TryFindRemotePlayer(out remoteStaminaTarget)) {
+      detail = "routed_remote_player_not_ready";
+      return false;
+    }
+
     _probe = new RoutedProbe {
         RunId = runId,
         ActionId = actionId,
@@ -110,6 +121,9 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         break;
       case "target_zdo":
         queued = SendResetCloth(_probe);
+        break;
+      case "remote_stamina":
+        queued = SendRemoteStamina(_probe, remoteStaminaTarget);
         break;
       default:
         queued = SendRequest(_probe, "withhold_response");
@@ -344,16 +358,43 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
             m_methodHash = item.MethodHash,
             m_parameters = new ZPackage(parameters)
         };
+        bool remoteStaminaProbe = IsRemoteStaminaProbe(item);
+        float staminaBefore = 0.0f;
+        float requestedStamina = 0.0f;
+        if (remoteStaminaProbe
+            && !TryBeginRemoteStaminaObservation(
+                item, parameters, out staminaBefore, out requestedStamina))
+          throw new InvalidOperationException(
+              "remote_stamina_probe_target_or_payload_invalid");
+
         HandleRoutedRpcMethod.Invoke(ZRoutedRpc.instance, new object[] { data });
         Write(
             "lumberjacks_handler_dispatched", item.RunId, item.ActionId, item.MethodName,
             item.MessageId, item.SenderPeerId, item.TargetPeerId, item.TargetZdo,
             "unity_update");
+
+        if (remoteStaminaProbe) {
+          float staminaAfter = Player.m_localPlayer.GetStamina();
+          float expectedAfter = Mathf.Max(0.0f, staminaBefore - requestedStamina);
+          if (Mathf.Abs(staminaAfter - expectedAfter) > 0.001f)
+            throw new InvalidOperationException(
+                "remote_stamina_probe_debit_mismatch");
+          Write(
+              "remote_stamina_debit_applied", item.RunId, item.ActionId,
+              item.MethodName, item.MessageId, item.SenderPeerId,
+              item.TargetPeerId, item.TargetZdo,
+              "before=" + staminaBefore.ToString("R", CultureInfo.InvariantCulture)
+                  + ";requested="
+                  + requestedStamina.ToString("R", CultureInfo.InvariantCulture)
+                  + ";after="
+                  + staminaAfter.ToString("R", CultureInfo.InvariantCulture));
+        }
         if (!_gameSession.QueueReliableAck(item.ReliableSequence))
           throw new InvalidOperationException("reliable_ack_queue_full");
-
-        if (IsServer() && item.MethodName == ResetClothMethod)
-          SendTargetReceipt(item);
+        if (remoteStaminaProbe)
+          SendTargetReceipt(item, "remote_stamina_receipt");
+        else if (IsServer() && item.MethodName == ResetClothMethod)
+          SendTargetReceipt(item, "target_receipt");
       } catch (Exception exception) {
         Exception cause = exception.InnerException ?? exception;
         Write(
@@ -428,10 +469,27 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
   static void HandleTargetReceipt(long senderPeerId, ZPackage package) {
     RoutedRpcCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || IsServer()) return;
-    if (!ReadProbePackage(package, out string runId, out string actionId, out _))
+    if (!ReadProbePackage(
+            package, out string runId, out string actionId,
+            out string receiptMode))
       throw new InvalidOperationException("routed_target_receipt_payload_invalid");
+    string expectedMode;
+    string detail;
+    switch (receiptMode) {
+      case "target_receipt":
+        expectedMode = "target_zdo";
+        detail = "reset_cloth_dispatched_on_server";
+        break;
+      case "remote_stamina_receipt":
+        expectedMode = "remote_stamina";
+        detail = "remote_player_stamina_debit_applied";
+        break;
+      default:
+        throw new InvalidOperationException(
+            "routed_target_receipt_mode_invalid");
+    }
     active.CompleteProbe(
-        runId, actionId, "target_zdo", "reset_cloth_dispatched_on_server");
+        runId, actionId, expectedMode, detail);
   }
 
   bool SendRequest(RoutedProbe probe, string mode) {
@@ -465,13 +523,76 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         () => view.InvokeRPC(ZNetView.Everybody, ResetClothMethod));
   }
 
-  void SendTargetReceipt(InboundRoute item) {
-    ZPackage receipt = BuildProbePackage(item.RunId, item.ActionId, "target_receipt");
+  bool SendRemoteStamina(RoutedProbe probe, Player remotePlayer) {
+    if (remotePlayer == null) return false;
+    ZNetView view = ((Component)remotePlayer).GetComponent<ZNetView>();
+    if (view == null || !view.IsValid() || view.IsOwner()
+        || view.GetZDO() == null || view.GetZDO().GetOwner() == 0)
+      return false;
+    return InvokeWithContext(
+        probe.ActionId,
+        "deliver",
+        () => remotePlayer.UseStamina(RemoteStaminaProbeAmount));
+  }
+
+  void SendTargetReceipt(InboundRoute item, string receiptMode) {
+    ZPackage receipt = BuildProbePackage(
+        item.RunId, item.ActionId, receiptMode);
     InvokeWithContext(
         item.ActionId,
         "deliver",
         () => ZRoutedRpc.instance.InvokeRoutedRPC(
             item.SenderPeerId, TargetReceiptMethod, new object[] { receipt }));
+  }
+
+  static bool TryFindRemotePlayer(out Player remotePlayer) {
+    remotePlayer = null;
+    Player localPlayer = Player.m_localPlayer;
+    if (localPlayer == null) return false;
+    foreach (Player candidate in Player.GetAllPlayers()) {
+      if (candidate == null || ReferenceEquals(candidate, localPlayer))
+        continue;
+      ZNetView view = ((Component)candidate).GetComponent<ZNetView>();
+      if (view == null || !view.IsValid() || view.IsOwner()
+          || view.GetZDO() == null || view.GetZDO().GetOwner() == 0)
+        continue;
+      remotePlayer = candidate;
+      return true;
+    }
+    return false;
+  }
+
+  static bool IsRemoteStaminaProbe(InboundRoute item) =>
+      !IsServer()
+      && string.Equals(
+          item.MethodName, RemoteStaminaMethod, StringComparison.Ordinal)
+      && (item.ActionId?.EndsWith(
+              "-remote-stamina", StringComparison.Ordinal) ?? false);
+
+  static bool TryBeginRemoteStaminaObservation(
+      InboundRoute item,
+      byte[] parameters,
+      out float staminaBefore,
+      out float requestedStamina) {
+    staminaBefore = 0.0f;
+    requestedStamina = 0.0f;
+    Player localPlayer = Player.m_localPlayer;
+    if (localPlayer == null || parameters == null) return false;
+    ZDOID localId = localPlayer.GetZDOID();
+    if (localId.UserID != item.TargetZdo.UserID
+        || localId.ID != item.TargetZdo.ID)
+      return false;
+    try {
+      ZPackage package = new(parameters);
+      requestedStamina = package.ReadSingle();
+      staminaBefore = localPlayer.GetStamina();
+      return requestedStamina > 0.0f
+          && !float.IsNaN(requestedStamina)
+          && !float.IsInfinity(requestedStamina)
+          && staminaBefore >= requestedStamina;
+    } catch {
+      return false;
+    }
   }
 
   bool InvokeWithContext(string actionId, string deliveryMode, Action invoke) {

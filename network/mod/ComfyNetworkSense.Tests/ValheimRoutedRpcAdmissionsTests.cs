@@ -12,7 +12,7 @@ namespace ComfyNetworkSense.Tests;
 public sealed class ValheimRoutedRpcAdmissionsTests
 {
   [Fact]
-  public void Catalog_ContainsP1RuntimeObservedP2AndReplacementOwnedAdmissions() {
+  public void Catalog_ContainsP1RuntimeObservedP2P3AndReplacementOwnedAdmissions() {
     ValheimRoutedRpcAdmission[] harness =
         ValheimRoutedRpcAdmissions.Entries
             .Where(entry => entry.Priority == ValheimRoutedRpcPriority.Harness)
@@ -28,6 +28,10 @@ public sealed class ValheimRoutedRpcAdmissionsTests
     ValheimRoutedRpcAdmission[] p2 =
         ValheimRoutedRpcAdmissions.Entries
             .Where(entry => entry.Priority == ValheimRoutedRpcPriority.P2)
+            .ToArray();
+    ValheimRoutedRpcAdmission[] p3 =
+        ValheimRoutedRpcAdmissions.Entries
+            .Where(entry => entry.Priority == ValheimRoutedRpcPriority.P3)
             .ToArray();
     ValheimRoutedRpcAdmission[] superseded =
         ValheimRoutedRpcAdmissions.Entries
@@ -54,6 +58,10 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         },
         p2.Select(entry => entry.Name)
             .OrderBy(name => name, StringComparer.Ordinal));
+    Assert.Equal(
+        new[] { "UseStamina" },
+        p3.Select(entry => entry.Name)
+            .OrderBy(name => name, StringComparer.Ordinal));
     Assert.Equal(8, superseded.Length);
     Assert.All(
         superseded,
@@ -72,7 +80,7 @@ public sealed class ValheimRoutedRpcAdmissionsTests
     Assert.Equal("zdo_journal", Find("RequestZDO").ReplacementLane);
     Assert.Equal("world_zone_descriptor", Find("SetGlobalKey").ReplacementLane);
     Assert.All(
-        harness.Concat(runtime).Concat(p2).Concat(p1),
+        harness.Concat(runtime).Concat(p2).Concat(p3).Concat(p1),
         entry => {
           Assert.Equal(ValheimRoutedRpcDisposition.Route, entry.Disposition);
           Assert.Equal(string.Empty, entry.ReplacementLane);
@@ -103,6 +111,8 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         ValheimRoutedRpcAdmissions.StableHash("RPC_HealthChanged"));
     Assert.Equal(500148310,
         ValheimRoutedRpcAdmissions.StableHash("RPC_UpdateMaterial"));
+    Assert.Equal(505680894,
+        ValheimRoutedRpcAdmissions.StableHash("UseStamina"));
     Assert.Equal(617879363,
         ValheimRoutedRpcAdmissions.StableHash(
             ValheimRoutedRpcAdmissions.ModServerPulse));
@@ -131,6 +141,7 @@ public sealed class ValheimRoutedRpcAdmissionsTests
              ValheimRoutedRpcAdmissions.Entries.Where(
                  entry => entry.Priority == ValheimRoutedRpcPriority.P1
                      || entry.Priority == ValheimRoutedRpcPriority.P2
+                     || entry.Priority == ValheimRoutedRpcPriority.P3
                      || entry.Priority == ValheimRoutedRpcPriority.Superseded)) {
       string sectionName = admission.Scope == ValheimRoutedRpcScope.Instance
           ? "InstanceRPCs"
