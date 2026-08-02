@@ -200,6 +200,23 @@ public sealed class ValheimRoutedRpcAdmissionsTests
   }
 
   [Fact]
+  public void AdminRecallTeleportRpc_RemainsDeferredAndPoisonGuarded() {
+    const string method = "RPC_TeleportPlayer";
+    int hash = ValheimRoutedRpcAdmissions.StableHash(method);
+    byte[] extractedPayload = BuildPayload("Vector3,Quaternion,Boolean");
+
+    Assert.False(ValheimRoutedRpcAdmissions.TryGet(
+        method, hash, out _));
+    Assert.DoesNotContain(
+        ValheimRoutedRpcAdmissions.Entries,
+        entry => string.Equals(entry.Name, method, StringComparison.Ordinal));
+    Assert.False(ValheimRoutedRpcAdmissions.AllowsEnvelope(
+        method, hash, 0, 0, extractedPayload));
+    Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+        method, hash, 0, 0, extractedPayload));
+  }
+
+  [Fact]
   public void PayloadGate_AcceptsEveryExtractedShapeAndRejectsMalformedBounds() {
     foreach (ValheimRoutedRpcAdmission admission in
              ValheimRoutedRpcAdmissions.Entries) {
