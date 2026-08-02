@@ -183,6 +183,23 @@ public sealed class ValheimRoutedRpcAdmissionsTests
   }
 
   [Fact]
+  public void PortalConnectionRpc_RemainsUnadmittedAsAPoisonTripwire() {
+    const string method = "RPC_SetConnection";
+    int hash = ValheimRoutedRpcAdmissions.StableHash(method);
+    byte[] extractedPayload = BuildPayload("ZDOID,ZDOID");
+
+    Assert.False(ValheimRoutedRpcAdmissions.TryGet(
+        method, hash, out _));
+    Assert.DoesNotContain(
+        ValheimRoutedRpcAdmissions.Entries,
+        entry => string.Equals(entry.Name, method, StringComparison.Ordinal));
+    Assert.False(ValheimRoutedRpcAdmissions.AllowsEnvelope(
+        method, hash, 0, 0, extractedPayload));
+    Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+        method, hash, 0, 0, extractedPayload));
+  }
+
+  [Fact]
   public void PayloadGate_AcceptsEveryExtractedShapeAndRejectsMalformedBounds() {
     foreach (ValheimRoutedRpcAdmission admission in
              ValheimRoutedRpcAdmissions.Entries) {
