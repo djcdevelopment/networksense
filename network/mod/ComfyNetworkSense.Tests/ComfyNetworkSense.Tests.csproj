@@ -21,6 +21,7 @@
        with no Valheim, no BepInEx, no net48 targeting pack. If this ever needs a second linked file,
        that file must be Unity-free too - otherwise fix the design, not this csproj. -->
   <ItemGroup>
+    <Compile Include="..\..\..\Lumberjacks\src\Game.Contracts\Valheim\ValheimRoutedRpcAdmissions.cs" Link="ValheimRoutedRpcAdmissions.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Parsing\WireParsers.cs" Link="WireParsers.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\BoundedRawHttp.cs" Link="BoundedRawHttp.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\AlphaTransportSwitches.cs" Link="AlphaTransportSwitches.cs" />
@@ -32,6 +33,12 @@
     <Compile Include="..\ComfyNetworkSense\Core\Models\TrackedQuest.cs" Link="TrackedQuest.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestViewLoader.cs" Link="QuestViewLoader.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestTriggerEvaluator.cs" Link="QuestTriggerEvaluator.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\tools\synthetic-baseline-extractor\synthetic_baseline_v2.json"
+          Link="synthetic_baseline_v2.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

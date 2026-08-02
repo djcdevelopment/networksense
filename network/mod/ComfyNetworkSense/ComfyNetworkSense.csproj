@@ -68,6 +68,8 @@
 
   <ItemGroup>
     <Compile Remove="Tests\**\*.cs" />
+    <Compile Include="..\..\..\Lumberjacks\src\Game.Contracts\Valheim\ValheimRoutedRpcAdmissions.cs"
+             Link="Core\Contracts\ValheimRoutedRpcAdmissions.cs" />
     <None Include="CHANGELOG.md" />
     <None Include="manifest.json" />
     <None Include="README.md" />

@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Threading;
 
 using HarmonyLib;
+using Lumberjacks.Contracts.Valheim;
 
 using UnityEngine;
 
@@ -17,21 +18,20 @@ using UnityEngine;
 /// ZRoutedRpc.HandleRoutedRPC only from Unity Update. A selected enqueue failure fails closed.
 /// </summary>
 public sealed class RoutedRpcCutoverRunner : IDisposable {
-  public const string RequestMethod = "ComfyNetworkSense_CutoverRoutedRequest";
-  public const string ResponseMethod = "ComfyNetworkSense_CutoverRoutedResponse";
+  public const string RequestMethod = ValheimRoutedRpcAdmissions.CutoverRequest;
+  public const string ResponseMethod = ValheimRoutedRpcAdmissions.CutoverResponse;
   public const string BroadcastRequestMethod =
-      "ComfyNetworkSense_CutoverRoutedBroadcastRequest";
-  public const string BroadcastMethod = "ComfyNetworkSense_CutoverRoutedBroadcast";
+      ValheimRoutedRpcAdmissions.CutoverBroadcastRequest;
+  public const string BroadcastMethod = ValheimRoutedRpcAdmissions.CutoverBroadcast;
   public const string TargetReceiptMethod =
-      "ComfyNetworkSense_CutoverRoutedTargetReceipt";
-  public const string ResetClothMethod = "RPC_ResetCloth";
+      ValheimRoutedRpcAdmissions.CutoverTargetReceipt;
+  public const string ResetClothMethod = ValheimRoutedRpcAdmissions.CutoverResetCloth;
   public const string JournalRequestMethod =
-      "ComfyNetworkSense_CutoverZdoJournalRequest";
+      ValheimRoutedRpcAdmissions.CutoverZdoJournalRequest;
 
   const string ReceiptFileName = "routed-rpc-cutover.jsonl";
   const int MaxSeenRoutes = 1024;
 
-  static readonly Dictionary<int, string> Methods = BuildMethods();
   static readonly MethodInfo HandleRoutedRpcMethod =
       AccessTools.Method(typeof(ZRoutedRpc), "HandleRoutedRPC");
   static RoutedRpcCutoverRunner _active;
@@ -148,11 +148,42 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
   }
 
   public static bool AllowNativeRoute(ZRoutedRpc.RoutedRPCData data) {
-    if (!CutoverEnabled()
-        || data == null || !Methods.TryGetValue(data.m_methodHash, out string methodName))
+    if (!CutoverEnabled() || data == null)
       return true;
 
     RoutedRpcCutoverRunner active = Volatile.Read(ref _active);
+    if (!ValheimRoutedRpcAdmissions.TryGetByHash(
+            data.m_methodHash, out ValheimRoutedRpcAdmission admission)) {
+      bool blocked = NativeNetworkLedger.Observe(
+          "routed_rpc_unadmitted_send", "outbound", "RoutedRPC");
+      active?.Write(
+          blocked ? "unadmitted_native_route_blocked" : "unadmitted_native_route_observed",
+          CurrentRunId(), "unscoped", string.Empty,
+          data.m_msgID, data.m_senderPeerID, data.m_targetPeerID, data.m_targetZDO,
+          "method_hash="
+              + data.m_methodHash.ToString(CultureInfo.InvariantCulture));
+      return !blocked;
+    }
+
+    string methodName = admission.Name;
+    byte[] parameters = data.m_parameters?.GetArray();
+    if (parameters == null
+        || !ValheimRoutedRpcAdmissions.AllowsEnvelope(
+            methodName,
+            data.m_methodHash,
+            data.m_targetZDO.UserID,
+            data.m_targetZDO.ID,
+            parameters)) {
+      active?.Write(
+          "route_contract_rejected", CurrentRunId(), "unscoped", methodName,
+          data.m_msgID, data.m_senderPeerID, data.m_targetPeerID, data.m_targetZDO,
+          parameters == null
+              ? "parameters_missing"
+              : "scope_size_or_payload_invalid;bytes="
+                  + parameters.Length.ToString(CultureInfo.InvariantCulture));
+      return false;
+    }
+
     if (active == null) return false;
     OutboundContext context = _outboundContext;
     string runId = CurrentRunId();
@@ -180,7 +211,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         targetZdo.ID,
         methodName,
         data.m_methodHash,
-        data.m_parameters.GetBase64(),
+        Convert.ToBase64String(parameters),
         deliveryMode,
         out string queueDetail);
     if (context != null) context.Queued = queued;
@@ -202,8 +233,25 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     try {
       ZRoutedRpc.RoutedRPCData data = new();
       data.Deserialize(new ZPackage(package.GetArray()));
-      if (!Methods.TryGetValue(data.m_methodHash, out string methodName)) return false;
+      if (!ValheimRoutedRpcAdmissions.TryGetByHash(
+              data.m_methodHash, out ValheimRoutedRpcAdmission admission))
+        return false;
+      string methodName = admission.Name;
+      byte[] parameters = data.m_parameters?.GetArray();
       RoutedRpcCutoverRunner active = Volatile.Read(ref _active);
+      if (parameters == null
+          || !ValheimRoutedRpcAdmissions.AllowsEnvelope(
+              methodName,
+              data.m_methodHash,
+              data.m_targetZDO.UserID,
+              data.m_targetZDO.ID,
+              parameters)) {
+        active?.Write(
+            "native_route_contract_rejected", CurrentRunId(), "unscoped", methodName,
+            data.m_msgID, data.m_senderPeerID, data.m_targetPeerID, data.m_targetZDO,
+            "admitted_hash_with_invalid_scope_size_or_payload");
+        return true;
+      }
       if (active != null) {
         active.Write(
             "native_route_received", CurrentRunId(),
@@ -270,13 +318,15 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         _seenRoutes.Remove(_seenOrder.Dequeue());
 
       try {
-        if (!Methods.TryGetValue(item.MethodHash, out string expected)
-            || !string.Equals(expected, item.MethodName, StringComparison.Ordinal)
+        byte[] parameters = Convert.FromBase64String(item.ParametersBase64);
+        if (!ValheimRoutedRpcAdmissions.AllowsEnvelope(
+                item.MethodName,
+                item.MethodHash,
+                item.TargetZdo.UserID,
+                item.TargetZdo.ID,
+                parameters)
             || HandleRoutedRpcMethod == null || ZRoutedRpc.instance == null)
           throw new InvalidOperationException("routed_dispatch_contract_invalid");
-        byte[] parameters = Convert.FromBase64String(item.ParametersBase64);
-        if (parameters.Length > 32768)
-          throw new InvalidOperationException("routed_parameters_too_large");
 
         ZRoutedRpc.RoutedRPCData data = new() {
             m_msgID = item.MessageId,
@@ -521,20 +571,6 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
             ["target_zdo"] = targetZdo.ToString(),
             ["detail"] = detail ?? string.Empty
         });
-  }
-
-  static Dictionary<int, string> BuildMethods() {
-    Dictionary<int, string> result = new();
-    foreach (string method in new[] {
-        RequestMethod,
-        ResponseMethod,
-        BroadcastRequestMethod,
-        BroadcastMethod,
-        TargetReceiptMethod,
-        ResetClothMethod,
-        JournalRequestMethod
-    }) result[method.GetStableHashCode()] = method;
-    return result;
   }
 
   static string CurrentRunId() {
