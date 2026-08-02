@@ -36,6 +36,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly LumberjacksGameSessionRunner _gameSession;
   readonly RoutedRpcCutoverRunner _routedRpc;
   readonly ShipCutoverRunner _ship;
+  readonly SaddleCutoverRunner _saddle;
   readonly ZdoJournalCutoverRunner _zdoJournal;
   readonly OwnershipLeaseCutoverRunner _ownershipLease;
   readonly WorldZoneCutoverRunner _worldZone;
@@ -66,6 +67,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       LumberjacksGameSessionRunner gameSession,
       RoutedRpcCutoverRunner routedRpc,
       ShipCutoverRunner ship,
+      SaddleCutoverRunner saddle,
       ZdoJournalCutoverRunner zdoJournal,
       OwnershipLeaseCutoverRunner ownershipLease,
       WorldZoneCutoverRunner worldZone,
@@ -74,6 +76,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
     _gameSession = gameSession;
     _routedRpc = routedRpc;
     _ship = ship;
+    _saddle = saddle;
     _zdoJournal = zdoJournal;
     _ownershipLease = ownershipLease;
     _worldZone = worldZone;
@@ -261,6 +264,21 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "ship_observe":
           if (action.duration_seconds is < 3.0f or > 20.0f)
             return "manifest_ship_duration_invalid";
+          break;
+        case "saddle_spawn":
+        case "saddle_wait":
+        case "saddle_rendezvous":
+        case "saddle_wait_released":
+        case "saddle_observe_reclaim":
+          break;
+        case "saddle_disconnect_reclaim":
+          if (action.duration_seconds is < 3.0f or > 15.0f)
+            return "manifest_saddle_reclaim_hold_invalid";
+          break;
+        case "saddle_drive":
+        case "saddle_observe":
+          if (action.duration_seconds is < 3.0f or > 20.0f)
+            return "manifest_saddle_duration_invalid";
           break;
         case "ownership_lease_pickup":
         case "ownership_contention":
@@ -551,6 +569,48 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           _sessionProbeStarted = true;
         }
         if (!_ship.TryGetProbeResult(
+                _active.id,
+                out bool terminal,
+                out bool success,
+                out string probeDetail) || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "saddle_spawn":
+      case "saddle_wait":
+      case "saddle_rendezvous":
+      case "saddle_drive":
+      case "saddle_observe":
+      case "saddle_wait_released":
+      case "saddle_disconnect_reclaim":
+      case "saddle_observe_reclaim": {
+        if (!_sessionProbeStarted) {
+          string mode = kind switch {
+              "saddle_spawn" => "spawn",
+              "saddle_wait" => "wait_mount",
+              "saddle_rendezvous" => "rendezvous",
+              "saddle_drive" => "drive",
+              "saddle_observe" => "observe",
+              "saddle_wait_released" => "wait_released",
+              "saddle_disconnect_reclaim" => "disconnect_reclaim",
+              _ => "observe_reclaim"
+          };
+          if (!_saddle.BeginProbe(
+                  _active.id,
+                  mode,
+                  _active.duration_seconds,
+                  Mathf.Max(5.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail is
+                "saddle_probe_client_not_ready" or
+                "saddle_cutover_not_enabled") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_saddle.TryGetProbeResult(
                 _active.id,
                 out bool terminal,
                 out bool success,

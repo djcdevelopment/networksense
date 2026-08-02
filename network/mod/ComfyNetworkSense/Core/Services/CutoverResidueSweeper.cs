@@ -30,6 +30,7 @@ public static class CutoverResidueSweeper {
       "Karve".GetStableHashCode(),
       "VikingShip".GetStableHashCode()
   };
+  static readonly int MountPrefabHash = "Lox".GetStableHashCode();
   static readonly int TerrainCompilerPrefabHash =
       "_TerrainCompiler".GetStableHashCode();
   static readonly int C3TagHash =
@@ -102,6 +103,7 @@ public static class CutoverResidueSweeper {
     int c5ZoneProbe = 0;
     int ownershipItem = 0;
     int vehicle = 0;
+    int mount = 0;
     int skippedLiveOwner = 0;
     foreach (ZDO zdo in objects.Values) {
       scanned++;
@@ -113,11 +115,13 @@ public static class CutoverResidueSweeper {
       bool isItem = !isC3 && !isC5 && prefab == RaspberryPrefabHash;
       bool isVehicle = !isC3 && !isC5 && !isItem &&
           VehiclePrefabHashes.Contains(prefab);
+      bool isMount = !isC3 && !isC5 && !isItem && !isVehicle &&
+          prefab == MountPrefabHash;
       if (isC3) {
         tag = zdo.GetString(C3TagHash, string.Empty);
       } else if (isC5) {
         tag = zdo.GetString(C5TagHash, string.Empty);
-      } else if (isItem || isVehicle) {
+      } else if (isItem || isVehicle || isMount) {
         tag = zdo.GetString(C3TagHash, string.Empty);
         if (string.IsNullOrEmpty(tag)) continue;
       } else {
@@ -131,7 +135,8 @@ public static class CutoverResidueSweeper {
       if (isC3) c3Probe++;
       else if (isC5) c5ZoneProbe++;
       else if (isItem) ownershipItem++;
-      else vehicle++;
+      else if (isVehicle) vehicle++;
+      else mount++;
       if (!string.IsNullOrEmpty(tag)) tags.Add(tag);
       Vector2i sector = zdo.GetSector();
       string zoneKey = sector.x + "," + sector.y;
@@ -199,6 +204,7 @@ public static class CutoverResidueSweeper {
         .Append(" c5_zone_probe=").Append(c5ZoneProbe)
         .Append(" ownership_item=").Append(ownershipItem)
         .Append(" vehicle=").Append(vehicle)
+        .Append(" mount=").Append(mount)
         .Append(" tags=").Append(tags.Count == 0 ? "none" : string.Join("|", tags))
         .Append(" zones=");
     if (matchedZones.Count == 0) {

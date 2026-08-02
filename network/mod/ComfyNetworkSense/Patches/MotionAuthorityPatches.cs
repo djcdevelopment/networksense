@@ -13,6 +13,7 @@ static class MotionAuthorityTransformPatch {
   [HarmonyPrefix]
   [HarmonyPriority(Priority.First)]
   static bool Prefix(ZSyncTransform __instance) =>
+      SaddleCutoverRunner.AllowCanonicalParentSync(__instance) ||
       !LumberjacksMotionRunner.SuppressNativeTransform(__instance);
 }
 

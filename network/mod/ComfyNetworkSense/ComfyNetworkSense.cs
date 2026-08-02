@@ -23,7 +23,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.54";
+  public const string PluginVersion = "0.5.67";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -38,7 +38,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m7-c10a-20260802-r15";
+  public const string ReleaseId = "m7-c10a-20260802-r28";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -65,6 +65,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   DirectControlCutoverRunner _directControlCutoverRunner;
   RoutedRpcCutoverRunner _routedRpcCutoverRunner;
   ShipCutoverRunner _shipCutoverRunner;
+  SaddleCutoverRunner _saddleCutoverRunner;
   ZdoJournalCutoverRunner _zdoJournalCutoverRunner;
   OwnershipLeaseCutoverRunner _ownershipLeaseCutoverRunner;
   WorldZoneCutoverRunner _worldZoneCutoverRunner;
@@ -118,6 +119,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _lumberjacksGameSessionRunner = new();
     _routedRpcCutoverRunner = new(_lumberjacksGameSessionRunner);
     _shipCutoverRunner = new(_routedRpcCutoverRunner);
+    _saddleCutoverRunner = new(
+        _lumberjacksGameSessionRunner, _routedRpcCutoverRunner);
     _zdoJournalCutoverRunner = new(_lumberjacksGameSessionRunner);
     _ownershipLeaseCutoverRunner =
         new(_lumberjacksGameSessionRunner);
@@ -133,6 +136,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             _lumberjacksGameSessionRunner,
             _routedRpcCutoverRunner,
             _shipCutoverRunner,
+            _saddleCutoverRunner,
             _zdoJournalCutoverRunner,
             _ownershipLeaseCutoverRunner,
             _worldZoneCutoverRunner,
@@ -320,6 +324,22 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         _lumberjacksGameSessionRunner?.Update(now);
       }
 
+      // Apply world descriptors, authenticated logical-peer controls, and
+      // canonical reference motion before any routed gameplay semantic tries
+      // to resolve a sender. Dedicated servers intentionally have no remote
+      // Player presentation object; this peer state is their authority input.
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.WorldZoneCutoverRunner.Update")) {
+        _worldZoneCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LogicalPeerCutoverRunner.Update")) {
+        _logicalPeerCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
+        _lumberjacksMotionRunner?.Update(now);
+      }
+
       // Register the typed C3 handler before the routed adapter drains a just-arrived request.
       using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ZdoJournalCutoverRunner.Update")) {
         _zdoJournalCutoverRunner?.Update(now);
@@ -331,6 +351,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         _shipCutoverRunner?.Update(now);
       }
 
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.SaddleCutoverRunner.Update")) {
+        _saddleCutoverRunner?.Update(now);
+      }
+
       using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.RoutedRpcCutoverRunner.Update")) {
         _routedRpcCutoverRunner?.Update(now);
       }
@@ -339,20 +363,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
         _ownershipLeaseCutoverRunner?.Update(now);
       }
 
-      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.WorldZoneCutoverRunner.Update")) {
-        _worldZoneCutoverRunner?.Update(now);
-      }
-
-      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LogicalPeerCutoverRunner.Update")) {
-        _logicalPeerCutoverRunner?.Update(now);
-      }
-
       using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.SocketQuarantineCutoverRunner.Update")) {
         _socketQuarantineCutoverRunner?.Update(now);
-      }
-
-      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.LumberjacksMotionRunner.Update")) {
-        _lumberjacksMotionRunner?.Update(now);
       }
     }
 
@@ -383,6 +395,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   void LateUpdate() {
     if (!PluginConfig.IsModEnabled.Value) return;
     _lumberjacksMotionRunner?.LateUpdate(Time.unscaledDeltaTime);
+    _saddleCutoverRunner?.LateUpdate(Time.unscaledDeltaTime);
   }
 
   // Arms the outbound ZDO redirect for lumberjacks-primary: server-side, once peers are
@@ -994,6 +1007,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _routedRpcCutoverRunner = null;
     _shipCutoverRunner?.Dispose();
     _shipCutoverRunner = null;
+    _saddleCutoverRunner?.Dispose();
+    _saddleCutoverRunner = null;
     _zdoJournalCutoverRunner?.Dispose();
     _zdoJournalCutoverRunner = null;
     _ownershipLeaseCutoverRunner?.Dispose();

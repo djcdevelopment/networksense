@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -18,6 +19,7 @@ using UnityEngine;
 /// </summary>
 public sealed class LogicalPeerCutoverRunner : IDisposable {
   const string ReceiptFileName = "logical-peer-cutover.jsonl";
+  static readonly TimeSpan CharacterResumeGrace = TimeSpan.FromSeconds(15);
   static readonly FieldInfo PeersField = AccessTools.Field(typeof(ZNet), "m_peers");
   static readonly FieldInfo WorldField = AccessTools.Field(typeof(ZNet), "m_world");
   static readonly FieldInfo NetTimeField = AccessTools.Field(typeof(ZNet), "m_netTime");
@@ -33,6 +35,8 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   readonly ConcurrentQueue<CanonicalMotion> _motion = new();
   readonly Dictionary<ZRpc, LogicalPeer> _byRpc = new();
   readonly Dictionary<string, LogicalPeer> _byLogical =
+      new(StringComparer.Ordinal);
+  readonly Dictionary<string, ResumableCharacter> _resumableCharacters =
       new(StringComparer.Ordinal);
   readonly TelemetryLogWriter _writer = new();
 
@@ -71,6 +75,32 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   public static void EnqueueCanonicalMotion(
       ushort sequence, ValheimMotionSnapshot snapshot) =>
       Volatile.Read(ref _active)?._motion.Enqueue(new(sequence, snapshot));
+
+  /// <summary>
+  /// Returns the authenticated character generation and world reference that
+  /// the canonical motion lane has bound to a logical peer. Dedicated servers
+  /// intentionally do not construct a remote Player presentation object, so
+  /// authority checks must use this peer state instead of requiring a player
+  /// ZDO to exist in the server scene.
+  /// </summary>
+  internal static bool TryGetCanonicalPeerReference(
+      long peerId, out ZDOID characterId, out Vector3 position) {
+    characterId = ZDOID.None;
+    position = Vector3.zero;
+    LogicalPeerCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || peerId == 0) return false;
+    foreach (LogicalPeer logical in active._byLogical.Values) {
+      ZNetPeer peer = logical.Peer;
+      if (peer == null || peer.m_uid != peerId || !logical.RefPosWritten ||
+          peer.m_characterID.IsNone() ||
+          peer.m_characterID.UserID != peerId ||
+          !Finite(peer.m_refPos)) continue;
+      characterId = peer.m_characterID;
+      position = peer.m_refPos;
+      return true;
+    }
+    return false;
+  }
 
   public void Update(float now) {
     if (_disposed) return;
@@ -225,6 +255,14 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
         m_playerName = playerName ?? string.Empty,
         m_refPos = Vector3.zero
     };
+    bool characterResumed = false;
+    if (ZNet.instance.IsServer() &&
+        string.Equals(role, "client", StringComparison.Ordinal) &&
+        TryTakeResumableCharacter(
+            logicalPeerId, peerUid, out ZDOID resumedCharacter)) {
+      peer.m_characterID = resumedCharacter;
+      characterResumed = true;
+    }
     LogicalPeer logical = new(logicalPeerId, role, peer, socket);
     _byLogical[logicalPeerId] = logical;
     _byRpc[peer.m_rpc] = logical;
@@ -245,6 +283,13 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
         + " peer_uid=" + peerUid
         + " logical_peer_id=" + logicalPeerId
         + " socket_type=LogicalSocket native_socket=false");
+    if (characterResumed)
+      Write(
+          "character_id_resumed",
+          "logical_peer_id=" + logicalPeerId
+          + " peer_uid=" + peerUid
+          + " character_id=" + peer.m_characterID
+          + " refpos_pending=true");
     return true;
   }
 
@@ -268,7 +313,12 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
         Write("logical_control_rejected", "reason=character_id_invalid");
         return;
       }
-      peer.Peer.m_characterID = new ZDOID(user, id);
+      ZDOID nextCharacterId = new(user, id);
+      if (peer.Peer.m_characterID != nextCharacterId) {
+        peer.RefPosWritten = false;
+        peer.Peer.m_refPos = Vector3.zero;
+      }
+      peer.Peer.m_characterID = nextCharacterId;
       ZLog.Log(
           "Got character ZDOID from " + peer.Peer.m_playerName
           + " : " + peer.Peer.m_characterID);
@@ -287,9 +337,30 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
 
   void RemovePeer(string logicalPeerId, string reason) {
     if (!_byLogical.TryGetValue(logicalPeerId, out LogicalPeer logical)) return;
+    bool server = ZNet.instance != null && ZNet.instance.IsServer();
+    ZDOID characterId = logical.Peer.m_characterID;
+    if (server &&
+        string.Equals(reason, "gateway_detached", StringComparison.Ordinal) &&
+        !characterId.IsNone() &&
+        characterId.UserID == logical.Peer.m_uid) {
+      _resumableCharacters[logicalPeerId] = new ResumableCharacter(
+          logical.Peer.m_uid,
+          characterId,
+          DateTime.UtcNow + CharacterResumeGrace);
+      Write(
+          "character_id_resume_armed",
+          "logical_peer_id=" + logicalPeerId
+          + " peer_uid=" + logical.Peer.m_uid
+          + " character_id=" + characterId
+          + " grace_seconds=" + CharacterResumeGrace.TotalSeconds.ToString(
+              "0", CultureInfo.InvariantCulture));
+    } else {
+      _resumableCharacters.Remove(logicalPeerId);
+    }
     _byLogical.Remove(logicalPeerId);
     _byRpc.Remove(logical.Peer.m_rpc);
     logical.Socket.Close();
+    SaddleCutoverRunner.NotifyPeerDetached(logical.Peer.m_uid);
     try { ZDOMan.instance?.RemovePeer(logical.Peer); } catch { }
     try { ZRoutedRpc.instance?.RemovePeer(logical.Peer); } catch { }
     List<ZNetPeer> peers = PeersField?.GetValue(ZNet.instance) as List<ZNetPeer>;
@@ -310,6 +381,28 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
     _byLogical.Keys.CopyTo(logicalPeerIds, 0);
     foreach (string logicalPeerId in logicalPeerIds)
       RemovePeer(logicalPeerId, reason);
+    _resumableCharacters.Clear();
+  }
+
+  bool TryTakeResumableCharacter(
+      string logicalPeerId,
+      long peerUid,
+      out ZDOID characterId) {
+    characterId = ZDOID.None;
+    DateTime now = DateTime.UtcNow;
+    foreach (string expired in _resumableCharacters
+                 .Where(pair => pair.Value.ExpiresUtc <= now)
+                 .Select(pair => pair.Key)
+                 .ToArray())
+      _resumableCharacters.Remove(expired);
+    if (!_resumableCharacters.TryGetValue(
+            logicalPeerId, out ResumableCharacter value)) return false;
+    _resumableCharacters.Remove(logicalPeerId);
+    if (value.PeerUid != peerUid ||
+        value.CharacterId.IsNone() ||
+        value.CharacterId.UserID != peerUid) return false;
+    characterId = value.CharacterId;
+    return true;
   }
 
   public static bool SuppressClientConnect() {
@@ -461,6 +554,11 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
   static bool IsPowerOfTwo(long value) =>
       value > 0 && (value & (value - 1)) == 0;
 
+  static bool Finite(Vector3 value) =>
+      !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
+      !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
+      !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+
   public void Dispose() {
     if (_disposed) return;
     _disposed = true;
@@ -484,6 +582,18 @@ public sealed class LogicalPeerCutoverRunner : IDisposable {
         ushort sequence, ValheimMotionSnapshot snapshot) {
       Sequence = sequence;
       Snapshot = snapshot;
+    }
+  }
+
+  readonly struct ResumableCharacter {
+    public readonly long PeerUid;
+    public readonly ZDOID CharacterId;
+    public readonly DateTime ExpiresUtc;
+    public ResumableCharacter(
+        long peerUid, ZDOID characterId, DateTime expiresUtc) {
+      PeerUid = peerUid;
+      CharacterId = characterId;
+      ExpiresUtc = expiresUtc;
     }
   }
 

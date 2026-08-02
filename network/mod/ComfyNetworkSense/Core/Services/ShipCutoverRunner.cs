@@ -768,6 +768,7 @@ public sealed class ShipCutoverRunner : IDisposable {
     string actionId = string.Empty;
     ZDOID uid = ZDOID.None;
     long newOwner = 0;
+    long canonicalHelmUser = 0;
     bool accepted = false;
     string result;
     try {
@@ -783,13 +784,25 @@ public sealed class ShipCutoverRunner : IDisposable {
           !IsShipPrefab(zdo.GetPrefab()) ||
           !(ZNet.instance?.GetPeers()?.Any(peer => peer.m_uid == newOwner) ?? false))
         throw new InvalidOperationException("ship_transfer_authority_invalid");
+      canonicalHelmUser = zdo.GetLong(ZDOVars.s_user, 0L);
+      if (!ShipCutoverModePolicy.AllowsAuthorityHandoff(canonicalHelmUser))
+        throw new InvalidOperationException(
+            "ship_transfer_helm_not_released user=" + canonicalHelmUser);
       ZdoJournalCutoverRunner.ApplyCanonicalMutation(
-          zdo, () => zdo.SetOwner(newOwner));
+          zdo, () => {
+            // Keep the released helm and the new simulation owner in the same
+            // canonical mutation.  The response below repeats s_user=0 so the
+            // future owner cannot start publishing snapshots from a stale
+            // pre-transfer replica before the journal catches up.
+            zdo.Set(ZDOVars.s_user, canonicalHelmUser);
+            zdo.SetOwner(newOwner);
+          });
       accepted = true;
       result = "transferred";
       active.Write("ship_owner_transferred", actionId,
           "uid=" + uid + " old_owner=" + senderPeerId +
-          " new_owner=" + newOwner);
+          " new_owner=" + newOwner +
+          " canonical_helm_user=" + canonicalHelmUser);
     } catch (Exception exception) {
       result = exception.Message;
       active.Write("ship_transfer_rejected", actionId,
@@ -803,6 +816,7 @@ public sealed class ShipCutoverRunner : IDisposable {
     response.Write(actionId);
     response.Write(uid);
     response.Write(newOwner);
+    response.Write(canonicalHelmUser);
     response.Write(accepted);
     response.Write(result);
     response.SetPos(0);
@@ -823,12 +837,15 @@ public sealed class ShipCutoverRunner : IDisposable {
     string actionId = package.ReadString();
     ZDOID uid = package.ReadZDOID();
     long newOwner = package.ReadLong();
+    long canonicalHelmUser = package.ReadLong();
     bool accepted = package.ReadBool();
     string result = package.ReadString();
     if (package.GetPos() != package.Size() ||
         senderPeerId != ZNet.instance.GetServerPeer()?.m_uid ||
         !SafeToken(runId, 80) || !SafeToken(actionId, 80) ||
-        uid.IsNone() || newOwner == 0) {
+        uid.IsNone() || newOwner == 0 ||
+        (accepted && !ShipCutoverModePolicy.AllowsAuthorityHandoff(
+            canonicalHelmUser))) {
       active.FailMatchingTransferProbe(
           runId, actionId, newOwner,
           "ship_transfer_response_invalid result=" + result);
@@ -855,10 +872,12 @@ public sealed class ShipCutoverRunner : IDisposable {
     }
 
     long previousOwner = zdo.GetOwner();
+    zdo.Set(ZDOVars.s_user, canonicalHelmUser);
     zdo.SetOwner(newOwner);
     active.Write("ship_owner_applied", actionId,
         "uid=" + uid + " previous_owner=" + previousOwner +
-        " new_owner=" + newOwner);
+        " new_owner=" + newOwner +
+        " canonical_helm_user=" + canonicalHelmUser);
 
     ShipProbe probe = active._probe;
     if (probe == null || probe.Terminal || probe.Mode != "transfer" ||

@@ -39,11 +39,12 @@ public sealed class ValheimRoutedRpcAdmissionsTests
                 entry.Priority == ValheimRoutedRpcPriority.Superseded)
             .ToArray();
 
-    Assert.Equal(11, harness.Length);
+    Assert.Equal(15, harness.Length);
     Assert.Equal(
         new[] {
             ValheimRoutedRpcAdmissions.ModAutoPort,
             ValheimRoutedRpcAdmissions.ModGameplayEvent,
+            ValheimRoutedRpcAdmissions.ModSaddleSnapshot,
             ValheimRoutedRpcAdmissions.ModServerPulse,
             ValheimRoutedRpcAdmissions.ModShipSnapshot
         },
@@ -52,11 +53,14 @@ public sealed class ValheimRoutedRpcAdmissionsTests
     Assert.Equal(
         new[] {
             "Backward",
+            "Controls",
+            "FlashShield",
             "Forward",
             "RPC_DamageText",
             "RPC_HealthChanged",
             "RPC_UpdateMaterial",
             "ReleaseControl",
+            "RemoveSaddle",
             "RequestControl",
             "RequestRespons",
             "Rudder",
@@ -115,6 +119,8 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         ValheimRoutedRpcAdmissions.StableHash("SleepStop"));
     Assert.Equal(-461013576,
         ValheimRoutedRpcAdmissions.StableHash("Step"));
+    Assert.Equal(-1054534305,
+        ValheimRoutedRpcAdmissions.StableHash("FlashShield"));
     Assert.Equal(-257317232,
         ValheimRoutedRpcAdmissions.StableHash("RPC_HealthChanged"));
     Assert.Equal(500148310,
@@ -262,11 +268,28 @@ public sealed class ValheimRoutedRpcAdmissionsTests
 
       int hash = ValheimRoutedRpcAdmissions.StableHash(name);
       byte[] payload = BuildPayload(signature);
+      Assert.False(ValheimRoutedRpcAdmissions.TryGet(
+          name, hash, out _));
+      Assert.True(ValheimRoutedRpcAdmissions.TryGetByHash(
+          hash, out ValheimRoutedRpcAdmission byHash));
       Assert.True(ValheimRoutedRpcAdmissions.TryGet(
-          name, hash, out ValheimRoutedRpcAdmission admission));
-      Assert.Equal(
+          name,
+          hash,
           ValheimRoutedRpcAdmissions.ShipTargetKind,
-          admission.RequiredTargetKind);
+          out ValheimRoutedRpcAdmission admission));
+      Assert.Equal(
+          new[] {
+              ValheimRoutedRpcAdmissions.ShipTargetKind,
+              ValheimRoutedRpcAdmissions.SaddleTargetKind
+          },
+          admission.TargetKinds);
+      Assert.True(ValheimRoutedRpcAdmissions.TryGet(
+          name,
+          hash,
+          ValheimRoutedRpcAdmissions.SaddleTargetKind,
+          out ValheimRoutedRpcAdmission saddleAdmission));
+      Assert.Same(byHash, admission);
+      Assert.Same(admission, saddleAdmission);
       Assert.False(ValheimRoutedRpcAdmissions.AllowsEnvelope(
           name, hash, 10, 2, payload));
       Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
@@ -278,8 +301,46 @@ public sealed class ValheimRoutedRpcAdmissionsTests
           2,
           ValheimRoutedRpcAdmissions.ShipTargetKind,
           payload));
+      Assert.True(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+          name,
+          hash,
+          10,
+          2,
+          ValheimRoutedRpcAdmissions.SaddleTargetKind,
+          payload));
       Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
-          name, hash, 10, 2, "saddle", payload));
+          name, hash, 10, 2, "unknown", payload));
+    }
+  }
+
+  [Fact]
+  public void SaddleOnlyMethods_RequireResolvedSaddleTarget()
+  {
+    (string Name, string Signature)[] methods = {
+        ("Controls", "Vector3,Int32,Single"),
+        ("RemoveSaddle", "Vector3")
+    };
+
+    foreach ((string name, string signature) in methods)
+    {
+      int hash = ValheimRoutedRpcAdmissions.StableHash(name);
+      byte[] payload = BuildPayload(signature);
+      Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+          name, hash, 10, 2, payload));
+      Assert.True(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+          name,
+          hash,
+          10,
+          2,
+          ValheimRoutedRpcAdmissions.SaddleTargetKind,
+          payload));
+      Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+          name,
+          hash,
+          10,
+          2,
+          ValheimRoutedRpcAdmissions.ShipTargetKind,
+          payload));
     }
   }
 
@@ -289,7 +350,10 @@ public sealed class ValheimRoutedRpcAdmissionsTests
              ValheimRoutedRpcAdmissions.Entries) {
       long targetUser = admission.Scope == ValheimRoutedRpcScope.Instance ? 10 : 0;
       uint targetId = admission.Scope == ValheimRoutedRpcScope.Instance ? 2U : 0U;
-      string targetKind = admission.RequiredTargetKind;
+      string[] targetKinds = admission.TargetKinds.Count == 0
+          ? new[] { string.Empty }
+          : admission.TargetKinds.ToArray();
+      foreach (string targetKind in targetKinds)
       foreach (string signature in admission.PayloadSignatures) {
         byte[] payload = BuildPayload(signature);
         Assert.True(

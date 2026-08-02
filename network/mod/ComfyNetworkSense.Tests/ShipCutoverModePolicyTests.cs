@@ -23,4 +23,11 @@ public class ShipCutoverModePolicyTests {
   [InlineData("wait-release")]
   public void Rejects_unknown_modes(string mode) =>
       Assert.False(ShipCutoverModePolicy.Allows(mode));
+
+  [Fact]
+  public void Authority_handoff_requires_canonical_helm_release() {
+    Assert.True(ShipCutoverModePolicy.AllowsAuthorityHandoff(0L));
+    Assert.False(ShipCutoverModePolicy.AllowsAuthorityHandoff(1L));
+    Assert.False(ShipCutoverModePolicy.AllowsAuthorityHandoff(long.MaxValue));
+  }
 }

@@ -38,6 +38,9 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
       AccessTools.Method(typeof(ZRoutedRpc), "HandleRoutedRPC");
   static RoutedRpcCutoverRunner _active;
   [ThreadStatic] static OutboundContext _outboundContext;
+  [ThreadStatic] static string _inboundActionId;
+
+  internal static string CurrentInboundActionId => _inboundActionId;
 
   readonly LumberjacksGameSessionRunner _gameSession;
   readonly ConcurrentQueue<InboundRoute> _inbound = new();
@@ -179,8 +182,20 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
       return !blocked;
     }
 
+    if (!TryResolveOutboundAdmission(
+            admission,
+            data.m_targetZDO,
+            out string targetKind)) {
+      active?.Write(
+          "route_contract_rejected", CurrentRunId(), "unscoped",
+          admission.Name,
+          data.m_msgID, data.m_senderPeerID, data.m_targetPeerID,
+          data.m_targetZDO,
+          "typed_target_component_not_resolved");
+      return false;
+    }
+
     string methodName = admission.Name;
-    string targetKind = ResolveOutboundTargetKind(admission, data.m_targetZDO);
     byte[] parameters = data.m_parameters?.GetArray();
     if (parameters == null
         || !ValheimRoutedRpcAdmissions.AllowsEnvelope(
@@ -263,6 +278,15 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         return false;
       string methodName = admission.Name;
       byte[] parameters = data.m_parameters?.GetArray();
+      if (admission.RequiresTypedTarget) {
+        Volatile.Read(ref _active)?.Write(
+            "native_typed_route_suppressed", CurrentRunId(), "unscoped",
+            methodName,
+            data.m_msgID, data.m_senderPeerID, data.m_targetPeerID,
+            data.m_targetZDO,
+            "typed_contract_requires_lumberjacks_target_resolution");
+        return true;
+      }
       RoutedRpcCutoverRunner active = Volatile.Read(ref _active);
       if (parameters == null
           || !ValheimRoutedRpcAdmissions.AllowsEnvelope(
@@ -332,7 +356,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
 
   void DrainInbound() {
     while (_inbound.TryDequeue(out InboundRoute item)) {
-      if (!_seenRoutes.Add(item.RouteId)) {
+      if (_seenRoutes.Contains(item.RouteId)) {
         _gameSession.QueueReliableAck(item.ReliableSequence);
         Write(
             "lumberjacks_route_duplicate", item.RunId, item.ActionId, item.MethodName,
@@ -340,10 +364,6 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
             "handler_not_repeated");
         continue;
       }
-      _seenOrder.Enqueue(item.RouteId);
-      while (_seenOrder.Count > MaxSeenRoutes)
-        _seenRoutes.Remove(_seenOrder.Dequeue());
-
       try {
         byte[] parameters = Convert.FromBase64String(item.ParametersBase64);
         if (!ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
@@ -374,7 +394,14 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
           throw new InvalidOperationException(
               "remote_stamina_probe_target_or_payload_invalid");
 
-        HandleRoutedRpcMethod.Invoke(ZRoutedRpc.instance, new object[] { data });
+        string previousInboundActionId = _inboundActionId;
+        _inboundActionId = item.ActionId;
+        try {
+          HandleRoutedRpcMethod.Invoke(
+              ZRoutedRpc.instance, new object[] { data });
+        } finally {
+          _inboundActionId = previousInboundActionId;
+        }
         Write(
             "lumberjacks_handler_dispatched", item.RunId, item.ActionId, item.MethodName,
             item.MessageId, item.SenderPeerId, item.TargetPeerId, item.TargetZdo,
@@ -396,6 +423,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
                   + ";after="
                   + staminaAfter.ToString("R", CultureInfo.InvariantCulture));
         }
+        RememberRoute(item.RouteId);
         if (!_gameSession.QueueReliableAck(item.ReliableSequence))
           throw new InvalidOperationException("reliable_ack_queue_full");
         if (remoteStaminaProbe)
@@ -415,6 +443,13 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         }
       }
     }
+  }
+
+  void RememberRoute(string routeId) {
+    if (!_seenRoutes.Add(routeId)) return;
+    _seenOrder.Enqueue(routeId);
+    while (_seenOrder.Count > MaxSeenRoutes)
+      _seenRoutes.Remove(_seenOrder.Dequeue());
   }
 
   void EnsureHandlers() {
@@ -620,26 +655,39 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     }
   }
 
-  static string ResolveOutboundTargetKind(
+  static bool TryResolveOutboundAdmission(
       ValheimRoutedRpcAdmission admission,
-      ZDOID targetZdo) {
-    if (admission == null || admission.RequiredTargetKind.Length == 0)
-      return string.Empty;
-    if (admission.RequiredTargetKind == ValheimRoutedRpcAdmissions.ShipTargetKind
-        && TryResolveShipTarget(targetZdo, admission.Name, out _, out _))
-      return ValheimRoutedRpcAdmissions.ShipTargetKind;
-    return string.Empty;
+      ZDOID targetZdo,
+      out string targetKind) {
+    targetKind = string.Empty;
+    if (admission == null) return false;
+    if (!admission.RequiresTypedTarget) return true;
+    if (admission.AcceptsTargetKind(
+            ValheimRoutedRpcAdmissions.ShipTargetKind)
+        && TryResolveShipTarget(targetZdo, admission.Name, out _, out _)) {
+      targetKind = ValheimRoutedRpcAdmissions.ShipTargetKind;
+      return true;
+    }
+    if (admission.AcceptsTargetKind(
+            ValheimRoutedRpcAdmissions.SaddleTargetKind)
+        && TryResolveSaddleTarget(targetZdo, out _, out _)) {
+      targetKind = ValheimRoutedRpcAdmissions.SaddleTargetKind;
+      return true;
+    }
+    return false;
   }
 
   static byte[] ValidateAndNormalizeTypedInbound(
       InboundRoute item,
       byte[] parameters) {
     if (string.IsNullOrEmpty(item.TargetKind)) return parameters;
+    if (item.TargetKind == ValheimRoutedRpcAdmissions.SaddleTargetKind)
+      return ValidateAndNormalizeSaddleInbound(item, parameters);
     if (item.TargetKind != ValheimRoutedRpcAdmissions.ShipTargetKind
         || !TryResolveShipTarget(
             item.TargetZdo, item.MethodName, out Ship ship,
             out ShipControlls controls))
-      throw new InvalidOperationException("typed_ship_target_not_resolved");
+      throw new InvalidOperationException("typed_target_not_resolved");
 
     ZDO zdo = ship.GetComponent<ZNetView>()?.GetZDO();
     if (zdo == null || zdo.m_uid != item.TargetZdo)
@@ -670,6 +718,127 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     return parameters;
   }
 
+  static byte[] ValidateAndNormalizeSaddleInbound(
+      InboundRoute item,
+      byte[] parameters) {
+    if (!TryResolveSaddleTarget(
+            item.TargetZdo, out Character character, out Sadle saddle))
+      throw new InvalidOperationException("typed_saddle_target_not_resolved");
+    ZDO zdo = character.GetComponent<ZNetView>()?.GetZDO();
+    if (zdo == null || zdo.m_uid != item.TargetZdo)
+      throw new InvalidOperationException("typed_saddle_zdo_mismatch");
+    Tameable tameable = character.GetComponent<Tameable>();
+    if (tameable == null || tameable.m_saddle != saddle ||
+        !character.IsTamed() || !zdo.GetBool(ZDOVars.s_haveSaddleHash) ||
+        !saddle.gameObject.activeInHierarchy)
+      throw new InvalidOperationException("typed_saddle_not_rideable");
+
+    if (item.MethodName == "RequestRespons") {
+      if (zdo.GetOwner() != item.SenderPeerId)
+        throw new InvalidOperationException(
+            "typed_saddle_response_not_from_owner");
+      return parameters;
+    }
+
+    Player sender = FindPlayerByPeer(item.SenderPeerId);
+    long riderSessionId = 0;
+    Vector3 senderPosition = Vector3.zero;
+    if (sender != null) {
+      riderSessionId = sender.GetZDOID().UserID;
+      // The Lumberjacks motion lane writes canonical truth to the synthetic
+      // remote Player ZDO before smoothing its presentation transform. Range
+      // admission is a network-authority decision, so using the rendered
+      // transform here can reject an authenticated rider merely because the
+      // visual proxy is still interpolating toward the rendezvous point.
+      ZDO senderZdo = sender.GetComponent<ZNetView>()?.GetZDO();
+      senderPosition = senderZdo != null && Finite(senderZdo.GetPosition())
+          ? senderZdo.GetPosition()
+          : sender.transform.position;
+    } else if (IsServer() &&
+        LogicalPeerCutoverRunner.TryGetCanonicalPeerReference(
+            item.SenderPeerId, out ZDOID characterId,
+            out Vector3 canonicalPosition)) {
+      riderSessionId = characterId.UserID;
+      senderPosition = canonicalPosition;
+    }
+    if (riderSessionId == 0 || riderSessionId != item.SenderPeerId)
+      throw new InvalidOperationException("typed_saddle_sender_session_invalid");
+
+    if (item.MethodName == "RequestControl") {
+      Transform attachPoint = saddle.m_attachPoint;
+      Vector3 attachPosition =
+          attachPoint == null ? Vector3.zero : attachPoint.position;
+      float distance = attachPoint == null || !Finite(senderPosition) ||
+              !Finite(attachPosition)
+          ? float.PositiveInfinity
+          : Vector3.Distance(senderPosition, attachPosition);
+      if (attachPoint == null || !Finite(distance) ||
+          distance > saddle.m_maxUseRange)
+        throw new InvalidOperationException(
+            "typed_saddle_request_out_of_range distance=" +
+            distance.ToString("0.###", CultureInfo.InvariantCulture) +
+            " sender=" + Format(senderPosition) +
+            " attach=" + Format(attachPosition) +
+            " max=" + saddle.m_maxUseRange.ToString(
+                "0.###", CultureInfo.InvariantCulture));
+      ZPackage normalized = new();
+      normalized.Write(riderSessionId);
+      return normalized.GetArray();
+    }
+
+    if (item.MethodName == "ReleaseControl") {
+      if (zdo.GetLong(ZDOVars.s_user, 0L) != riderSessionId)
+        throw new InvalidOperationException(
+            "typed_saddle_release_not_from_rider");
+      ZPackage normalized = new();
+      normalized.Write(riderSessionId);
+      return normalized.GetArray();
+    }
+
+    if (item.MethodName == "Controls") {
+      if (zdo.GetOwner() != item.SenderPeerId ||
+          zdo.GetLong(ZDOVars.s_user, 0L) != riderSessionId)
+        throw new InvalidOperationException(
+            "typed_saddle_controls_not_from_rider");
+      if (!ValidSaddleControls(parameters))
+        throw new InvalidOperationException(
+            "typed_saddle_controls_invalid");
+      return parameters;
+    }
+
+    if (item.MethodName == "RemoveSaddle") {
+      ZPackage normalized = new();
+      normalized.Write(senderPosition);
+      return normalized.GetArray();
+    }
+
+    throw new InvalidOperationException("typed_saddle_method_invalid");
+  }
+
+  static bool ValidSaddleControls(byte[] parameters) {
+    if (parameters == null || parameters.Length != 20) return false;
+    float x = BitConverter.ToSingle(parameters, 0);
+    float y = BitConverter.ToSingle(parameters, 4);
+    float z = BitConverter.ToSingle(parameters, 8);
+    int speed = BitConverter.ToInt32(parameters, 12);
+    float skill = BitConverter.ToSingle(parameters, 16);
+    if (!Finite(x) || !Finite(y) || !Finite(z) || !Finite(skill) ||
+        speed is < 0 or > 4 || skill is < 0.0f or > 1.0f)
+      return false;
+    return x * x + y * y + z * z <= 1.01f;
+  }
+
+  static bool Finite(float value) =>
+      !float.IsNaN(value) && !float.IsInfinity(value);
+
+  static bool Finite(Vector3 value) =>
+      Finite(value.x) && Finite(value.y) && Finite(value.z);
+
+  static string Format(Vector3 value) =>
+      value.x.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+      value.y.ToString("0.###", CultureInfo.InvariantCulture) + "," +
+      value.z.ToString("0.###", CultureInfo.InvariantCulture);
+
   static bool TryResolveShipTarget(
       ZDOID targetZdo,
       string methodName,
@@ -688,6 +857,23 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     return methodName is not (
         "RequestControl" or "ReleaseControl" or "RequestRespons")
         || controls != null;
+  }
+
+  static bool TryResolveSaddleTarget(
+      ZDOID targetZdo,
+      out Character character,
+      out Sadle saddle) {
+    character = null;
+    saddle = null;
+    if (targetZdo.IsNone() || ZNetScene.instance == null) return false;
+    GameObject target = ZNetScene.instance.FindInstance(targetZdo);
+    if (target == null) return false;
+    character = target.GetComponent<Character>()
+        ?? target.GetComponentInChildren<Character>(includeInactive: true);
+    if (character == null) return false;
+    saddle = target.GetComponent<Sadle>()
+        ?? target.GetComponentInChildren<Sadle>(includeInactive: true);
+    return saddle != null;
   }
 
   static Player FindPlayerByPeer(long peerId) {
