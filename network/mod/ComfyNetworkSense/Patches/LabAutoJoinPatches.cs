@@ -22,6 +22,7 @@ public static class LabAutoJoinPatches
     private static bool _completed;
     private static bool _joined;
     private static bool _bootstrapFailed;
+    private static bool _backgroundExecutionReasserted;
     private static NativeAutotestRequest _nativeRequest;
 
     private static FieldInfo _profilesField;
@@ -230,6 +231,14 @@ public static class LabAutoJoinPatches
         if (NativeAutotestRequest.TryLoad(out NativeAutotestRequest request, out string detail))
         {
             nativeRequest = request;
+            // Rendered Lab clients are launched by the bounded harness and may
+            // lose the foreground window while the other GPU client advances.
+            // Keep Unity's main loop ticking only for this explicit,
+            // short-lived native-autotest request; normal gameplay retains the
+            // user's foreground/background preference.
+            Application.runInBackground = true;
+            _backgroundExecutionReasserted = false;
+            ComfyNetworkSense.LogInfo("Native autotest background execution enabled.");
             return true;
         }
         if (!string.IsNullOrWhiteSpace(detail))
@@ -243,6 +252,16 @@ public static class LabAutoJoinPatches
     public static void PollJoined()
     {
         if (_nativeRequest == null || !_completed || _joined) return;
+        // Unity can restore its player-setting value while transitioning from
+        // the character scene into the loaded world. Reassert the explicit
+        // native-autotest setting at the first real peer boundary; ordinary
+        // gameplay never reaches this branch because it has no request.
+        if (!_backgroundExecutionReasserted)
+        {
+            Application.runInBackground = true;
+            _backgroundExecutionReasserted = true;
+            ComfyNetworkSense.LogInfo("Native autotest background execution reasserted after peer join.");
+        }
         ZNet znet = ZNet.instance;
         Player player = Player.m_localPlayer;
         if (znet == null || znet.IsServer() || player == null || (znet.GetPeers()?.Count ?? 0) == 0)

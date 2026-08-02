@@ -18,6 +18,9 @@ public static class PluginConfig {
   public static ConfigEntry<float> SceneScanIntervalSeconds { get; private set; }
   public static ConfigEntry<float> BenchmarkDurationSeconds { get; private set; }
   public static ConfigEntry<bool> PerfProbeEnabled { get; private set; }
+  public static ConfigEntry<bool> PerfWatchdogEnabled { get; private set; }
+  public static ConfigEntry<float> PerfWatchdogThresholdSeconds { get; private set; }
+  public static ConfigEntry<float> PerfWatchdogPollSeconds { get; private set; }
   public static ConfigEntry<float> PerfHitchThresholdMs { get; private set; }
   public static ConfigEntry<float> PerfSevereHitchThresholdMs { get; private set; }
   public static ConfigEntry<float> PerfSectionWarnThresholdMs { get; private set; }
@@ -312,6 +315,27 @@ public static class PluginConfig {
             "perfProbeEnabled",
             true,
             "Write perf-hitches.jsonl, perf-sections.jsonl, and perf-engine-log.jsonl for main-thread hitch investigation.");
+
+    PerfWatchdogEnabled =
+        config.Bind(
+            "Perf",
+            "perfWatchdogEnabled",
+            true,
+            "Write one worker-thread perf-watchdog.jsonl row when the Unity main thread stops advancing. No gameplay behavior is changed.");
+
+    PerfWatchdogThresholdSeconds =
+        config.Bind(
+            "Perf",
+            "perfWatchdogThresholdSeconds",
+            2.0f,
+            "Seconds without a main-thread heartbeat before the worker watchdog records a stall; clamped to 0.5..60.");
+
+    PerfWatchdogPollSeconds =
+        config.Bind(
+            "Perf",
+            "perfWatchdogPollSeconds",
+            0.5f,
+            "Worker watchdog polling interval in seconds; clamped to 0.1..5.");
 
     PerfHitchThresholdMs =
         config.Bind(

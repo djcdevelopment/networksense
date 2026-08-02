@@ -18,10 +18,16 @@ public sealed class NetworkSensePerfProbe : IDisposable {
   readonly object _engineLogSync = new();
   readonly Dictionary<string, PatchLoadStat> _patchLoadStats = [];
   readonly object _patchLoadSync = new();
+  readonly ManualResetEventSlim _watchdogStop = new(false);
+  readonly Thread _watchdogThread;
   float _lastPatchLoadFlushAt;
   long _lastPatchLoadFlushTicks;
 
   long _lastFrameTicks;
+  long _lastMainThreadHeartbeatTicks;
+  long _lastMainThreadHeartbeatUtcTicks;
+  long _mainThreadFrameCount;
+  long _lastWatchdogReportHeartbeatTicks;
   float _lastEngineLogSampleAt;
   long _lastFrameLogCount;
   long _lastFrameWarningCount;
@@ -43,6 +49,14 @@ public sealed class NetworkSensePerfProbe : IDisposable {
   public NetworkSensePerfProbe(string sessionId, TelemetryLogWriter writer) {
     _sessionId = sessionId;
     _writer = writer;
+    long nowTicks = Stopwatch.GetTimestamp();
+    Interlocked.Exchange(ref _lastMainThreadHeartbeatTicks, nowTicks);
+    Interlocked.Exchange(ref _lastMainThreadHeartbeatUtcTicks, DateTime.UtcNow.Ticks);
+    _watchdogThread = new Thread(WatchdogLoop) {
+        IsBackground = true,
+        Name = "ComfyNetworkSense.PerfWatchdog"
+    };
+    _watchdogThread.Start();
     Application.logMessageReceivedThreaded += HandleEngineLog;
   }
 
@@ -115,6 +129,11 @@ public sealed class NetworkSensePerfProbe : IDisposable {
   }
 
   public void UpdateFrame(float unscaledDeltaTime) {
+    long heartbeatTicks = Stopwatch.GetTimestamp();
+    Interlocked.Exchange(ref _lastMainThreadHeartbeatTicks, heartbeatTicks);
+    Interlocked.Exchange(ref _lastMainThreadHeartbeatUtcTicks, DateTime.UtcNow.Ticks);
+    Interlocked.Increment(ref _mainThreadFrameCount);
+
     if (!IsEnabled) {
       _lastFrameTicks = Stopwatch.GetTimestamp();
       return;
@@ -163,6 +182,17 @@ public sealed class NetworkSensePerfProbe : IDisposable {
     _disposed = true;
     Application.logMessageReceivedThreaded -= HandleEngineLog;
 
+    try {
+      _watchdogStop.Set();
+      if (_watchdogThread != null && _watchdogThread.IsAlive) {
+        _watchdogThread.Join(1000);
+      }
+    } catch {
+      // Best-effort shutdown during Unity teardown.
+    } finally {
+      _watchdogStop.Dispose();
+    }
+
     if (_active == this) {
       _active = null;
     }
@@ -200,6 +230,72 @@ public sealed class NetworkSensePerfProbe : IDisposable {
         ["writer_queue_depth"] = _writer?.QueueDepth ?? 0,
         ["writer_dropped_rows"] = _writer?.DroppedRows ?? 0
     });
+  }
+
+  void WatchdogLoop() {
+    while (!_disposed) {
+      float pollSeconds = PluginConfig.PerfWatchdogPollSeconds != null
+          ? Clamp(PluginConfig.PerfWatchdogPollSeconds.Value, 0.1f, 5.0f)
+          : 0.5f;
+      try {
+        if (_watchdogStop.Wait(TimeSpan.FromSeconds(pollSeconds))) {
+          return;
+        }
+      } catch (ObjectDisposedException) {
+        return;
+      }
+
+      if (_disposed || !IsEnabled || PluginConfig.PerfWatchdogEnabled == null
+          || !PluginConfig.PerfWatchdogEnabled.Value) {
+        continue;
+      }
+
+      long heartbeatTicks = Interlocked.Read(ref _lastMainThreadHeartbeatTicks);
+      if (heartbeatTicks <= 0) {
+        continue;
+      }
+
+      double stallMs = TicksToMilliseconds(Stopwatch.GetTimestamp() - heartbeatTicks);
+      double thresholdSeconds = PluginConfig.PerfWatchdogThresholdSeconds != null
+          ? Clamp(PluginConfig.PerfWatchdogThresholdSeconds.Value, 0.5f, 60.0f)
+          : 2.0;
+      if (stallMs < thresholdSeconds * 1000.0) {
+        continue;
+      }
+
+      long priorHeartbeat = Interlocked.Read(ref _lastWatchdogReportHeartbeatTicks);
+      if (priorHeartbeat == heartbeatTicks
+          || Interlocked.CompareExchange(
+              ref _lastWatchdogReportHeartbeatTicks,
+              heartbeatTicks,
+              priorHeartbeat) != priorHeartbeat) {
+        continue;
+      }
+
+      long heartbeatUtcTicks = Interlocked.Read(ref _lastMainThreadHeartbeatUtcTicks);
+      string heartbeatUtc = heartbeatUtcTicks > 0
+          ? new DateTime(heartbeatUtcTicks, DateTimeKind.Utc).ToString("o")
+          : string.Empty;
+      _writer?.Write("perf-watchdog.jsonl", new Dictionary<string, object> {
+          ["schema_version"] = 1,
+          ["receipt_type"] = "perf_watchdog",
+          ["timestamp_utc"] = DateTime.UtcNow.ToString("o"),
+          ["session_id"] = _sessionId,
+          ["build_version"] = ComfyNetworkSense.PluginVersion,
+          ["stall_ms"] = stallMs,
+          ["threshold_seconds"] = thresholdSeconds,
+          ["last_main_thread_heartbeat_utc"] = heartbeatUtc,
+          ["main_thread_frame_count"] = Interlocked.Read(ref _mainThreadFrameCount),
+          ["route_state"] = _routeState,
+          ["route_stop_id"] = _routeStopId,
+          ["route_phase"] = _routePhase,
+          ["region_id"] = _latestRegionId,
+          ["benchmark_running"] = _benchmarkRunning,
+          ["writer_queue_depth"] = _writer?.QueueDepth ?? 0,
+          ["writer_dropped_rows"] = _writer?.DroppedRows ?? 0,
+          ["writer_fault_count"] = _writer?.FaultCount ?? 0
+      });
+    }
   }
 
   void CompletePatchLoad(string patchName, long startedTicks) {
@@ -392,6 +488,9 @@ public sealed class NetworkSensePerfProbe : IDisposable {
 
   static double TicksToMilliseconds(long ticks) =>
       ticks * 1000.0 / Stopwatch.Frequency;
+
+  static float Clamp(float value, float minimum, float maximum) =>
+      Math.Max(minimum, Math.Min(maximum, value));
 
   static string TrimMessage(string value) {
     if (string.IsNullOrEmpty(value)) {

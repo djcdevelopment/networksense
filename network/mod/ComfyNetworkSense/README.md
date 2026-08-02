@@ -106,10 +106,19 @@ Main docs:
 
 ## Setup And Build
 
+The historical and supported `.NET Framework/net48` build workaround is the
+Docker Workbench image. It provides the reference assemblies, mounts the
+Valheim installation read-only, disables plugin copying, and emits a hashable
+build receipt. A host SDK MSB3644 is an expected boundary, not a reason to add
+another host build path. The raw command below is retained for local diagnostic
+context only; use the Workbench `build.mod.release` capability for canonical
+artifacts.
+
 Prerequisites:
 
 - Valheim installed with BepInEx.
-- .NET SDK capable of building `net48`.
+- Docker Workbench image with the .NET Framework reference assemblies for
+  `net48` compilation.
 - Project root at `C:\work\baseline`.
 
 Build from the mod project:
@@ -368,6 +377,12 @@ Main files:
 - `transport-controls.jsonl`: append-only switch changes with component, enabled
   state, and the path that carried the observation.
 - `benchmark-results.jsonl`: completed benchmark summaries.
+- `perf-hitches.jsonl` and `perf-sections.jsonl`: synchronous Unity frame and
+  runner timing warnings when `[Perf] perfProbeEnabled` is on.
+- `perf-watchdog.jsonl`: one worker-thread receipt when the Unity main-thread
+  heartbeat stops advancing beyond `[Perf] perfWatchdogThresholdSeconds`.
+  This is diagnostic-only and is collected by the native rendered-client
+  harness; it does not change gameplay behavior.
 - `exports\network-sense-session-*.json`: compact session export bundles.
 
 Config file:

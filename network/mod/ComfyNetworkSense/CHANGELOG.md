@@ -2,6 +2,11 @@
 
 ### Unreleased
 
+- Add an opt-in-by-perf-probe worker watchdog that writes one
+  `perf-watchdog.jsonl` row when the Unity main-thread heartbeat stops
+  advancing. It is diagnostic-only, does not alter gameplay, and is collected
+  by the native client harness for bounded rendered-client forensics.
+
 - Move C3 ZDO mutation, interest, delivery, and acknowledgement traffic onto the
   durable C1 game-session binding; retain HTTP only as the explicitly disabled
   rollback transport.
