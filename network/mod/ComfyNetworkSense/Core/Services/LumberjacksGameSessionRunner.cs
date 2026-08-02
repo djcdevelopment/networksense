@@ -21,6 +21,7 @@ using UnityEngine;
 /// </summary>
 public sealed class LumberjacksGameSessionRunner : IDisposable {
   const int ConnectTimeoutMs = 5000;
+  const int SendTimeoutMs = 5000;
   const int ReceiveBufferBytes = 8192;
   const int MaxOutboundFrames = 256;
   const int MaxMotionFrames = 64;
@@ -664,64 +665,116 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   }
 
   async Task RunOutgoing(ClientWebSocket socket, CancellationToken token) {
-    while (!token.IsCancellationRequested && socket.State == WebSocketState.Open) {
-      if (_outbound.TryDequeue(out string text)) {
-        Interlocked.Decrement(ref _outboundCount);
-        byte[] bytes = Encoding.UTF8.GetBytes(text);
-        await socket.SendAsync(
-            new ArraySegment<byte>(bytes),
-            WebSocketMessageType.Text,
-            true,
-            token).ConfigureAwait(false);
-        string type = ExtractJsonString(text, "type");
-        if (IsOwnershipType(type)) {
-          _events.Enqueue(new SessionEvent(
-              "ownership_frame_sent",
-              ExtractJsonLong(text, "seq"),
-              ConnectionId,
-              "type=" + type));
-        }
-        continue;
-      }
-
-      if (_motionOutbound.TryDequeue(out MotionOutbound motion)) {
-        Interlocked.Decrement(ref _motionOutboundCount);
-        bool sentUdp = false;
-        UdpClient udp = _udp;
-        ulong udpToken = _udpToken;
-        if (AlphaTransportSwitches.LumberjacksUdpEnabled &&
-            udp != null && udpToken != 0) {
-          try {
-            byte[] packet = ValheimMotionCodec.BuildUdpPacket(
-                udpToken, motion.Sequence, motion.Snapshot);
-            await udp.SendAsync(packet, packet.Length).ConfigureAwait(false);
-            Interlocked.Increment(ref _motionSentUdp);
-            sentUdp = true;
-          } catch (SocketException exception) when (!token.IsCancellationRequested) {
-            // A TCP-only gateway tunnel can advertise a UDP port that is unreachable from
-            // this client. Connected UDP reports that ICMP failure on a later send. Retain
-            // the numbered frame, retire UDP for this socket incarnation, and immediately
-            // use the canonical WebSocket binary lane instead of faulting the sender task.
-            RetireUdp(
-                udp, motion.Sequence, "send", exception.SocketErrorCode);
-          }
-        }
-        if (!sentUdp) {
-          byte[] frame = ValheimMotionCodec.BuildWebSocketFrame(
-              motion.Sequence, motion.Snapshot);
-          await socket.SendAsync(
-              new ArraySegment<byte>(frame),
-              WebSocketMessageType.Binary,
-              true,
+    try {
+      while (!token.IsCancellationRequested && socket.State == WebSocketState.Open) {
+        if (_outbound.TryDequeue(out string text)) {
+          Interlocked.Decrement(ref _outboundCount);
+          byte[] bytes = Encoding.UTF8.GetBytes(text);
+          string type = ExtractJsonString(text, "type");
+          long sequence = ExtractJsonLong(text, "seq");
+          await SendWebSocketFrame(
+              socket,
+              new ArraySegment<byte>(bytes),
+              WebSocketMessageType.Text,
+              type,
+              sequence,
               token).ConfigureAwait(false);
-          Interlocked.Increment(ref _motionSentWebSocket);
+          if (IsOwnershipType(type)) {
+            _events.Enqueue(new SessionEvent(
+                "ownership_frame_sent",
+                sequence,
+                ConnectionId,
+                "type=" + type));
+          }
+          continue;
         }
-        LumberjacksMotionRunner.NotifyCanonicalMotionSent(
-            motion.Sequence, sentUdp);
-        continue;
-      }
 
-      await Task.Delay(10, token).ConfigureAwait(false);
+        if (_motionOutbound.TryDequeue(out MotionOutbound motion)) {
+          Interlocked.Decrement(ref _motionOutboundCount);
+          bool sentUdp = false;
+          UdpClient udp = _udp;
+          ulong udpToken = _udpToken;
+          if (AlphaTransportSwitches.LumberjacksUdpEnabled &&
+              udp != null && udpToken != 0) {
+            try {
+              byte[] packet = ValheimMotionCodec.BuildUdpPacket(
+                  udpToken, motion.Sequence, motion.Snapshot);
+              await udp.SendAsync(packet, packet.Length).ConfigureAwait(false);
+              Interlocked.Increment(ref _motionSentUdp);
+              sentUdp = true;
+            } catch (SocketException exception) when (!token.IsCancellationRequested) {
+              // A TCP-only gateway tunnel can advertise a UDP port that is unreachable from
+              // this client. Connected UDP reports that ICMP failure on a later send. Retain
+              // the numbered frame, retire UDP for this socket incarnation, and immediately
+              // use the canonical WebSocket binary lane instead of faulting the sender task.
+              RetireUdp(
+                  udp, motion.Sequence, "send", exception.SocketErrorCode);
+            }
+          }
+          if (!sentUdp) {
+            byte[] frame = ValheimMotionCodec.BuildWebSocketFrame(
+                motion.Sequence, motion.Snapshot);
+            await SendWebSocketFrame(
+                socket,
+                new ArraySegment<byte>(frame),
+                WebSocketMessageType.Binary,
+                "valheim_motion_binary",
+                motion.Sequence,
+                token).ConfigureAwait(false);
+            Interlocked.Increment(ref _motionSentWebSocket);
+          }
+          LumberjacksMotionRunner.NotifyCanonicalMotionSent(
+              motion.Sequence, sentUdp);
+          continue;
+        }
+
+        await Task.Delay(10, token).ConfigureAwait(false);
+      }
+    } catch (OperationCanceledException) when (token.IsCancellationRequested) {
+      throw;
+    } catch (Exception exception) {
+      try { socket.Abort(); } catch { }
+      _events.Enqueue(new SessionEvent(
+          "outgoing_worker_fault",
+          0,
+          ConnectionId,
+          exception.GetType().Name + ":" + exception.Message
+          + " queue_depth=" + Volatile.Read(ref _outboundCount)
+              .ToString(CultureInfo.InvariantCulture)));
+      throw;
+    }
+  }
+
+  async Task SendWebSocketFrame(
+      ClientWebSocket socket,
+      ArraySegment<byte> payload,
+      WebSocketMessageType messageType,
+      string type,
+      long sequence,
+      CancellationToken token) {
+    try {
+      await SessionSendGuard.RunAsync(
+          sendToken => socket.SendAsync(
+              payload, messageType, true, sendToken),
+          () => {
+            try { socket.Abort(); } catch { }
+          },
+          TimeSpan.FromMilliseconds(SendTimeoutMs),
+          token).ConfigureAwait(false);
+    } catch (OperationCanceledException) when (token.IsCancellationRequested) {
+      throw;
+    } catch (Exception exception) {
+      _events.Enqueue(new SessionEvent(
+          exception is TimeoutException
+              ? "outgoing_send_timeout"
+              : "outgoing_send_failed",
+          sequence,
+          ConnectionId,
+          "type=" + type
+          + " queue_depth=" + Volatile.Read(ref _outboundCount)
+              .ToString(CultureInfo.InvariantCulture)
+          + " error=" + exception.GetType().Name + ":" + exception.Message));
+      throw;
     }
   }
 
