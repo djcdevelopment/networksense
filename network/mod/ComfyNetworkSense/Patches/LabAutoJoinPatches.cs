@@ -252,20 +252,23 @@ public static class LabAutoJoinPatches
     public static void PollJoined()
     {
         if (_nativeRequest == null || !_completed || _joined) return;
-        // Unity can restore its player-setting value while transitioning from
-        // the character scene into the loaded world. Reassert the explicit
-        // native-autotest setting at the first real peer boundary; ordinary
-        // gameplay never reaches this branch because it has no request.
-        if (!_backgroundExecutionReasserted)
-        {
-            Application.runInBackground = true;
-            _backgroundExecutionReasserted = true;
-            ComfyNetworkSense.LogInfo("Native autotest background execution reasserted after peer join.");
-        }
         ZNet znet = ZNet.instance;
         Player player = Player.m_localPlayer;
         if (znet == null || znet.IsServer() || player == null || (znet.GetPeers()?.Count ?? 0) == 0)
             return;
+
+        // Unity can restore its player-setting value while transitioning from
+        // the character scene into the loaded world. Do not consume this
+        // reassertion while the old scene merely has a ZNet/player singleton:
+        // wait for the actual client peer boundary so the setting survives the
+        // final scene transition. Ordinary gameplay never reaches this branch
+        // because it has no native-autotest request.
+        if (!_backgroundExecutionReasserted)
+        {
+            Application.runInBackground = true;
+            _backgroundExecutionReasserted = true;
+            ComfyNetworkSense.LogInfo("Native autotest background execution reasserted at joined peer boundary.");
+        }
 
         _joined = true;
         _nativeRequest.Record(

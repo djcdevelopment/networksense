@@ -777,6 +777,39 @@ public sealed class LumberjacksMotionRunner : IDisposable {
       return false;
     }
 
+    Player localPlayer = Player.m_localPlayer;
+    Vector3 probeOrigin = ((Component) localPlayer).transform.position;
+    if (mode.StartsWith("observe", StringComparison.Ordinal)) {
+      // C9 is a rendered observer verdict, so a physically correct probe with
+      // the remote avatar behind the persisted player camera is not useful
+      // evidence. Face the midpoint of the declared remote path only inside
+      // this bounded native-autotest probe. Normal gameplay never calls this
+      // seam, and the observer's position is not changed.
+      RemoteMotion selected = null;
+      foreach (RemoteMotion candidate in _remote.Values) {
+        if (selected == null || candidate.ArrivedAt > selected.ArrivedAt)
+          selected = candidate;
+      }
+      if (selected != null) {
+        Vector3 pathMidpoint = new(
+            selected.Snapshot.X,
+            selected.Snapshot.Y,
+            selected.Snapshot.Z);
+        pathMidpoint += Direction(direction) * (distanceMeters * 0.5f);
+        Vector3 lookDirection = pathMidpoint - probeOrigin;
+        lookDirection.y = 0.0f;
+        if (lookDirection.sqrMagnitude > 0.01f) {
+          localPlayer.SetLookDir(lookDirection);
+          localPlayer.FaceLookDirection();
+          WriteAuthority(
+              "observer_view_aligned", actionId,
+              "direction=" + direction
+              + " path_distance_m="
+              + distanceMeters.ToString("0.###", CultureInfo.InvariantCulture));
+        }
+      }
+    }
+
     float now = Time.unscaledTime;
     _probe = new MotionProbe {
         ActionId = actionId,
@@ -787,7 +820,7 @@ public sealed class LumberjacksMotionRunner : IDisposable {
         DurationSeconds = durationSeconds,
         DistanceMeters = distanceMeters,
         Direction = direction,
-        Origin = ((Component) Player.m_localPlayer).transform.position,
+        Origin = probeOrigin,
         GapStartsAt = now + Mathf.Min(durationSeconds * 0.30f, 1.5f),
         SentBefore = Interlocked.Read(ref _canonicalMotionSent),
         ReceivedBefore =
