@@ -4,11 +4,12 @@ using System;
 using System.Collections.Generic;
 
 using HarmonyLib;
+using Lumberjacks.Contracts.Valheim;
 
 using UnityEngine;
 
 public sealed class ServerPulseBroadcaster {
-  public const string ServerPulseRpc = "ComfyNetworkSense_ServerPulse";
+  public const string ServerPulseRpc = ValheimRoutedRpcAdmissions.ModServerPulse;
 
   const int MaxOverlapColliders = 4096;
 

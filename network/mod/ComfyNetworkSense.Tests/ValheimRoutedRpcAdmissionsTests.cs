@@ -12,7 +12,7 @@ namespace ComfyNetworkSense.Tests;
 public sealed class ValheimRoutedRpcAdmissionsTests
 {
   [Fact]
-  public void Catalog_ContainsSevenHarnessAndAllThirtyThreeP1Admissions() {
+  public void Catalog_ContainsP1RuntimeObservedP2AndReplacementOwnedAdmissions() {
     ValheimRoutedRpcAdmission[] harness =
         ValheimRoutedRpcAdmissions.Entries
             .Where(entry => entry.Priority == ValheimRoutedRpcPriority.Harness)
@@ -21,8 +21,56 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         ValheimRoutedRpcAdmissions.Entries
             .Where(entry => entry.Priority == ValheimRoutedRpcPriority.P1)
             .ToArray();
+    ValheimRoutedRpcAdmission[] runtime =
+        ValheimRoutedRpcAdmissions.Entries
+            .Where(entry => entry.Priority == ValheimRoutedRpcPriority.Runtime)
+            .ToArray();
+    ValheimRoutedRpcAdmission[] p2 =
+        ValheimRoutedRpcAdmissions.Entries
+            .Where(entry => entry.Priority == ValheimRoutedRpcPriority.P2)
+            .ToArray();
+    ValheimRoutedRpcAdmission[] superseded =
+        ValheimRoutedRpcAdmissions.Entries
+            .Where(entry =>
+                entry.Priority == ValheimRoutedRpcPriority.Superseded)
+            .ToArray();
 
     Assert.Equal(7, harness.Length);
+    Assert.Equal(
+        new[] {
+            ValheimRoutedRpcAdmissions.ModAutoPort,
+            ValheimRoutedRpcAdmissions.ModGameplayEvent,
+            ValheimRoutedRpcAdmissions.ModServerPulse
+        },
+        runtime.Select(entry => entry.Name)
+            .OrderBy(name => name, StringComparer.Ordinal));
+    Assert.Equal(
+        new[] { "RPC_DamageText", "SetEvent", "Step" },
+        p2.Select(entry => entry.Name)
+            .OrderBy(name => name, StringComparer.Ordinal));
+    Assert.Equal(8, superseded.Length);
+    Assert.All(
+        superseded,
+        entry => {
+          Assert.Equal(
+              ValheimRoutedRpcDisposition.Supersede,
+              entry.Disposition);
+          Assert.False(string.IsNullOrWhiteSpace(entry.ReplacementLane));
+        });
+    Assert.Equal("zdo_journal", Find("DestroyZDO").ReplacementLane);
+    Assert.Equal("world_zone_descriptor", Find("GlobalKeys").ReplacementLane);
+    Assert.Equal("world_zone_descriptor", Find("LocationIcons").ReplacementLane);
+    Assert.Equal("logical_peer_session", Find("Ping").ReplacementLane);
+    Assert.Equal("logical_peer_session", Find("Pong").ReplacementLane);
+    Assert.Equal("world_zone_descriptor", Find("RemoveGlobalKey").ReplacementLane);
+    Assert.Equal("zdo_journal", Find("RequestZDO").ReplacementLane);
+    Assert.Equal("world_zone_descriptor", Find("SetGlobalKey").ReplacementLane);
+    Assert.All(
+        harness.Concat(runtime).Concat(p2).Concat(p1),
+        entry => {
+          Assert.Equal(ValheimRoutedRpcDisposition.Route, entry.Disposition);
+          Assert.Equal(string.Empty, entry.ReplacementLane);
+        });
     Assert.Equal(33, p1.Length);
     Assert.Equal(29, p1.Count(entry => entry.Scope == ValheimRoutedRpcScope.Instance));
     Assert.Equal(4, p1.Count(entry => entry.Scope == ValheimRoutedRpcScope.Global));
@@ -43,6 +91,11 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         ValheimRoutedRpcAdmissions.StableHash("ChatMessage"));
     Assert.Equal(-543064489,
         ValheimRoutedRpcAdmissions.StableHash("SleepStop"));
+    Assert.Equal(-461013576,
+        ValheimRoutedRpcAdmissions.StableHash("Step"));
+    Assert.Equal(617879363,
+        ValheimRoutedRpcAdmissions.StableHash(
+            ValheimRoutedRpcAdmissions.ModServerPulse));
 
     Assert.Equal(
         ValheimRoutedRpcAdmissions.Entries.Count,
@@ -58,7 +111,7 @@ public sealed class ValheimRoutedRpcAdmissionsTests
   }
 
   [Fact]
-  public void P1PayloadSignatures_MatchPinnedExtractorV2Inventory() {
+  public void NativePayloadSignatures_MatchPinnedExtractorV2Inventory() {
     string path = Path.Combine(
         AppContext.BaseDirectory,
         "synthetic_baseline_v2.json");
@@ -66,7 +119,9 @@ public sealed class ValheimRoutedRpcAdmissionsTests
 
     foreach (ValheimRoutedRpcAdmission admission in
              ValheimRoutedRpcAdmissions.Entries.Where(
-                 entry => entry.Priority == ValheimRoutedRpcPriority.P1)) {
+                 entry => entry.Priority == ValheimRoutedRpcPriority.P1
+                     || entry.Priority == ValheimRoutedRpcPriority.P2
+                     || entry.Priority == ValheimRoutedRpcPriority.Superseded)) {
       string sectionName = admission.Scope == ValheimRoutedRpcScope.Instance
           ? "InstanceRPCs"
           : "RoutedRPCs";
@@ -133,6 +188,14 @@ public sealed class ValheimRoutedRpcAdmissionsTests
                 targetId,
                 payload),
             $"valid {admission.Name} payload {signature}");
+        Assert.Equal(
+            admission.Disposition == ValheimRoutedRpcDisposition.Route,
+            ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+                admission.Name,
+                admission.MethodHash,
+                targetUser,
+                targetId,
+                payload));
         Assert.False(
             ValheimRoutedRpcAdmissions.AllowsEnvelope(
                 admission.Name,
@@ -164,6 +227,13 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         10,
         2,
         new byte[] { 2, 0xc3, 0x28 }));
+    ValheimRoutedRpcAdmission globalKeys = Find("GlobalKeys");
+    Assert.False(ValheimRoutedRpcAdmissions.AllowsEnvelope(
+        globalKeys.Name,
+        globalKeys.MethodHash,
+        0,
+        0,
+        new byte[] { 0xff, 0xff, 0xff, 0xff }));
   }
 
   static ValheimRoutedRpcAdmission Find(string name) =>
@@ -208,6 +278,11 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         case "String":
           writer.Write("payload");
           break;
+        case "List`1":
+          writer.Write(2);
+          writer.Write("first");
+          writer.Write("second");
+          break;
         case "Vector3":
           writer.Write(1.0f);
           writer.Write(2.0f);
@@ -222,6 +297,10 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         case "ZPackage":
           writer.Write(3);
           writer.Write(new byte[] { 4, 5, 6 });
+          break;
+        case "ZDOID":
+          writer.Write(23L);
+          writer.Write(5U);
           break;
         case "UserInfo":
           writer.Write("character");

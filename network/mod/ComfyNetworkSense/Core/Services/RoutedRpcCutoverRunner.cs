@@ -184,6 +184,14 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
       return false;
     }
 
+    if (admission.Disposition == ValheimRoutedRpcDisposition.Supersede) {
+      active?.Write(
+          "superseded_native_route_suppressed", CurrentRunId(), "unscoped", methodName,
+          data.m_msgID, data.m_senderPeerID, data.m_targetPeerID, data.m_targetZDO,
+          "replacement_lane=" + admission.ReplacementLane);
+      return false;
+    }
+
     if (active == null) return false;
     OutboundContext context = _outboundContext;
     string runId = CurrentRunId();
@@ -319,7 +327,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
 
       try {
         byte[] parameters = Convert.FromBase64String(item.ParametersBase64);
-        if (!ValheimRoutedRpcAdmissions.AllowsEnvelope(
+        if (!ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
                 item.MethodName,
                 item.MethodHash,
                 item.TargetZdo.UserID,

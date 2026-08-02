@@ -3,6 +3,7 @@ namespace ComfyNetworkSense;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Lumberjacks.Contracts.Valheim;
 using UnityEngine;
 
 /// <summary>
@@ -24,7 +25,8 @@ using UnityEngine;
 /// (default false) — flip it on only when debugging why an event did or didn't emit.
 /// </summary>
 public sealed class GameplayEventProducer : IDisposable {
-  public const string GameplayEventRpc = "ComfyNetworkSense_GameplayEvent";
+  public const string GameplayEventRpc =
+      ValheimRoutedRpcAdmissions.ModGameplayEvent;
 
   /// <summary>Live while armed; the static client-side patch bodies reach the producer through this.</summary>
   public static GameplayEventProducer Active { get; private set; }

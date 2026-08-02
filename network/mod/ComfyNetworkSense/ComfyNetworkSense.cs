@@ -15,6 +15,7 @@ using BepInEx;
 using BepInEx.Logging;
 
 using HarmonyLib;
+using Lumberjacks.Contracts.Valheim;
 
 using UnityEngine;
 
@@ -37,7 +38,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m7-c10a-20260802-r1";
+  public const string ReleaseId = "m7-c10a-20260802-r2";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -80,7 +81,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Auto-port test harness (autoPortOnJoinEnabled). Server-side: push the densest-region coordinate
   // to each newly-joined peer once. Client-side: HandleAutoPort receives it and, if opted in, runs
   // the delayed god/fly + teleport coroutine.
-  public const string AutoPortRpc = "ComfyNetworkSense_AutoPort";
+  public const string AutoPortRpc = ValheimRoutedRpcAdmissions.ModAutoPort;
   ZRoutedRpc _autoPortRegisteredRpc;
   readonly System.Collections.Generic.HashSet<long> _autoPortPushedPeers = new();
 
