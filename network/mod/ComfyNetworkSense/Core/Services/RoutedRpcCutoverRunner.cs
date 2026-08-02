@@ -180,6 +180,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     }
 
     string methodName = admission.Name;
+    string targetKind = ResolveOutboundTargetKind(admission, data.m_targetZDO);
     byte[] parameters = data.m_parameters?.GetArray();
     if (parameters == null
         || !ValheimRoutedRpcAdmissions.AllowsEnvelope(
@@ -187,6 +188,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
             data.m_methodHash,
             data.m_targetZDO.UserID,
             data.m_targetZDO.ID,
+            targetKind,
             parameters)) {
       active?.Write(
           "route_contract_rejected", CurrentRunId(), "unscoped", methodName,
@@ -231,6 +233,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         data.m_targetPeerID,
         targetZdo.UserID,
         targetZdo.ID,
+        targetKind,
         methodName,
         data.m_methodHash,
         Convert.ToBase64String(parameters),
@@ -306,6 +309,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
       long targetPeerId,
       long targetZdoUserId,
       uint targetZdoId,
+      string targetKind,
       string methodName,
       int methodHash,
       string parametersBase64) {
@@ -319,6 +323,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
         SenderPeerId = senderPeerId,
         TargetPeerId = targetPeerId,
         TargetZdo = new ZDOID(targetZdoUserId, targetZdoId),
+        TargetKind = targetKind,
         MethodName = methodName,
         MethodHash = methodHash,
         ParametersBase64 = parametersBase64
@@ -346,10 +351,12 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
                 item.MethodHash,
                 item.TargetZdo.UserID,
                 item.TargetZdo.ID,
+                item.TargetKind,
                 parameters)
             || HandleRoutedRpcMethod == null || ZRoutedRpc.instance == null)
           throw new InvalidOperationException("routed_dispatch_contract_invalid");
 
+        parameters = ValidateAndNormalizeTypedInbound(item, parameters);
         ZRoutedRpc.RoutedRPCData data = new() {
             m_msgID = item.MessageId,
             m_senderPeerID = item.SenderPeerId,
@@ -613,6 +620,88 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     }
   }
 
+  static string ResolveOutboundTargetKind(
+      ValheimRoutedRpcAdmission admission,
+      ZDOID targetZdo) {
+    if (admission == null || admission.RequiredTargetKind.Length == 0)
+      return string.Empty;
+    if (admission.RequiredTargetKind == ValheimRoutedRpcAdmissions.ShipTargetKind
+        && TryResolveShipTarget(targetZdo, admission.Name, out _, out _))
+      return ValheimRoutedRpcAdmissions.ShipTargetKind;
+    return string.Empty;
+  }
+
+  static byte[] ValidateAndNormalizeTypedInbound(
+      InboundRoute item,
+      byte[] parameters) {
+    if (string.IsNullOrEmpty(item.TargetKind)) return parameters;
+    if (item.TargetKind != ValheimRoutedRpcAdmissions.ShipTargetKind
+        || !TryResolveShipTarget(
+            item.TargetZdo, item.MethodName, out Ship ship,
+            out ShipControlls controls))
+      throw new InvalidOperationException("typed_ship_target_not_resolved");
+
+    ZDO zdo = ship.GetComponent<ZNetView>()?.GetZDO();
+    if (zdo == null || zdo.m_uid != item.TargetZdo)
+      throw new InvalidOperationException("typed_ship_zdo_mismatch");
+
+    if (item.MethodName is "RequestControl" or "ReleaseControl") {
+      Player sender = FindPlayerByPeer(item.SenderPeerId);
+      if (sender == null)
+        throw new InvalidOperationException("typed_ship_sender_player_missing");
+      long playerId = sender.GetPlayerID();
+      if (playerId == 0)
+        throw new InvalidOperationException("typed_ship_sender_profile_missing");
+      ZPackage normalized = new();
+      normalized.Write(playerId);
+      return normalized.GetArray();
+    }
+
+    if (item.MethodName == "RequestRespons") {
+      if (zdo.GetOwner() != item.SenderPeerId)
+        throw new InvalidOperationException("typed_ship_response_not_from_owner");
+      return parameters;
+    }
+
+    Player controller = FindPlayerByPeer(item.SenderPeerId);
+    if (controller == null ||
+        zdo.GetLong(ZDOVars.s_user, 0L) != controller.GetPlayerID())
+      throw new InvalidOperationException("typed_ship_input_not_from_helm_user");
+    return parameters;
+  }
+
+  static bool TryResolveShipTarget(
+      ZDOID targetZdo,
+      string methodName,
+      out Ship ship,
+      out ShipControlls controls) {
+    ship = null;
+    controls = null;
+    if (targetZdo.IsNone() || ZNetScene.instance == null) return false;
+    GameObject target = ZNetScene.instance.FindInstance(targetZdo);
+    if (target == null) return false;
+    ship = target.GetComponent<Ship>()
+        ?? target.GetComponentInChildren<Ship>(includeInactive: true);
+    if (ship == null) return false;
+    controls = target.GetComponent<ShipControlls>()
+        ?? target.GetComponentInChildren<ShipControlls>(includeInactive: true);
+    return methodName is not (
+        "RequestControl" or "ReleaseControl" or "RequestRespons")
+        || controls != null;
+  }
+
+  static Player FindPlayerByPeer(long peerId) {
+    foreach (Player candidate in Player.GetAllPlayers()) {
+      if (candidate == null) continue;
+      ZNetView view = candidate.GetComponent<ZNetView>();
+      ZDO zdo = view?.GetZDO();
+      if (zdo != null &&
+          (zdo.GetOwner() == peerId || candidate.GetZDOID().UserID == peerId))
+        return candidate;
+    }
+    return null;
+  }
+
   bool InvokeWithContext(string actionId, string deliveryMode, Action invoke) {
     OutboundContext previous = _outboundContext;
     OutboundContext current = new() {
@@ -626,6 +715,16 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     } finally {
       _outboundContext = previous;
     }
+  }
+
+  public bool InvokeTyped(
+      string actionId,
+      Action invoke,
+      string deliveryMode = "deliver") {
+    if (!SafeToken(actionId, 80) || invoke == null
+        || deliveryMode is not ("deliver" or "withhold"))
+      return false;
+    return InvokeWithContext(actionId, deliveryMode, invoke);
   }
 
   void CompleteProbe(string runId, string actionId, string expectedMode, string detail) {
@@ -783,6 +882,7 @@ public sealed class RoutedRpcCutoverRunner : IDisposable {
     public long SenderPeerId;
     public long TargetPeerId;
     public ZDOID TargetZdo;
+    public string TargetKind;
     public string MethodName;
     public int MethodHash;
     public string ParametersBase64;

@@ -25,6 +25,11 @@ public static class CutoverResidueSweeper {
   static readonly int C5ZoneProbePrefabHash =
       "ComfyNetworkSense_C5ZoneProbe".GetStableHashCode();
   static readonly int RaspberryPrefabHash = "Raspberry".GetStableHashCode();
+  static readonly HashSet<int> VehiclePrefabHashes = new() {
+      "Raft".GetStableHashCode(),
+      "Karve".GetStableHashCode(),
+      "VikingShip".GetStableHashCode()
+  };
   static readonly int TerrainCompilerPrefabHash =
       "_TerrainCompiler".GetStableHashCode();
   static readonly int C3TagHash =
@@ -96,6 +101,7 @@ public static class CutoverResidueSweeper {
     int c3Probe = 0;
     int c5ZoneProbe = 0;
     int ownershipItem = 0;
+    int vehicle = 0;
     int skippedLiveOwner = 0;
     foreach (ZDO zdo in objects.Values) {
       scanned++;
@@ -105,11 +111,13 @@ public static class CutoverResidueSweeper {
       bool isC3 = prefab == C3ProbePrefabHash;
       bool isC5 = !isC3 && prefab == C5ZoneProbePrefabHash;
       bool isItem = !isC3 && !isC5 && prefab == RaspberryPrefabHash;
+      bool isVehicle = !isC3 && !isC5 && !isItem &&
+          VehiclePrefabHashes.Contains(prefab);
       if (isC3) {
         tag = zdo.GetString(C3TagHash, string.Empty);
       } else if (isC5) {
         tag = zdo.GetString(C5TagHash, string.Empty);
-      } else if (isItem) {
+      } else if (isItem || isVehicle) {
         tag = zdo.GetString(C3TagHash, string.Empty);
         if (string.IsNullOrEmpty(tag)) continue;
       } else {
@@ -122,7 +130,8 @@ public static class CutoverResidueSweeper {
       }
       if (isC3) c3Probe++;
       else if (isC5) c5ZoneProbe++;
-      else ownershipItem++;
+      else if (isItem) ownershipItem++;
+      else vehicle++;
       if (!string.IsNullOrEmpty(tag)) tags.Add(tag);
       Vector2i sector = zdo.GetSector();
       string zoneKey = sector.x + "," + sector.y;
@@ -189,6 +198,7 @@ public static class CutoverResidueSweeper {
         .Append(" c3_probe=").Append(c3Probe)
         .Append(" c5_zone_probe=").Append(c5ZoneProbe)
         .Append(" ownership_item=").Append(ownershipItem)
+        .Append(" vehicle=").Append(vehicle)
         .Append(" tags=").Append(tags.Count == 0 ? "none" : string.Join("|", tags))
         .Append(" zones=");
     if (matchedZones.Count == 0) {

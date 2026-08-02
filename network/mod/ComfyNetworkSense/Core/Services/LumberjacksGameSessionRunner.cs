@@ -191,6 +191,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       long targetPeerId,
       long targetZdoUserId,
       uint targetZdoId,
+      string targetKind,
       string methodName,
       int methodHash,
       string parametersBase64,
@@ -205,25 +206,26 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     }
     if (!SafeToken(runId, 80) || !SafeToken(actionId, 80)
         || !SafeToken(routeId, 192) || !SafeToken(methodName, 96)
+        || (targetKind.Length > 0 && !SafeToken(targetKind, 32))
         || deliveryMode is not ("deliver" or "withhold")
         || parametersBase64 == null || parametersBase64.Length > 48000) {
       detail = "routed_rpc_parameters_invalid";
       return false;
     }
-    string fields =
-        "\"run_id\":\"" + Escape(runId)
-        + "\",\"action_id\":\"" + Escape(actionId)
-        + "\",\"route_id\":\"" + Escape(routeId)
-        + "\",\"message_id\":" + messageId.ToString(CultureInfo.InvariantCulture)
-        + ",\"sender_peer_id\":" + senderPeerId.ToString(CultureInfo.InvariantCulture)
-        + ",\"target_peer_id\":" + targetPeerId.ToString(CultureInfo.InvariantCulture)
-        + ",\"target_zdo_user_id\":"
-        + targetZdoUserId.ToString(CultureInfo.InvariantCulture)
-        + ",\"target_zdo_id\":" + targetZdoId.ToString(CultureInfo.InvariantCulture)
-        + ",\"method_name\":\"" + Escape(methodName)
-        + "\",\"method_hash\":" + methodHash.ToString(CultureInfo.InvariantCulture)
-        + ",\"parameters_base64\":\"" + Escape(parametersBase64)
-        + "\",\"delivery_mode\":\"" + deliveryMode + "\"";
+    string fields = RoutedRpcWireFields.Build(
+        runId,
+        actionId,
+        routeId,
+        messageId,
+        senderPeerId,
+        targetPeerId,
+        targetZdoUserId,
+        targetZdoId,
+        targetKind,
+        methodName,
+        methodHash,
+        parametersBase64,
+        deliveryMode);
     if (!TryQueueEnvelope("valheim_routed_rpc_send", fields)) {
       detail = "client_send_queue_full";
       return false;
@@ -1070,6 +1072,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     string actionId = ExtractJsonString(text, "action_id");
     string routeId = ExtractJsonString(text, "route_id");
     string methodName = ExtractJsonString(text, "method_name");
+    string targetKind = ExtractJsonString(text, "target_kind");
     string parameters = ExtractJsonString(text, "parameters_base64");
     long reliableSequence = ExtractJsonLong(text, "seq");
     long messageId = ExtractJsonLong(text, "message_id");
@@ -1080,6 +1083,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     long methodHash = ExtractJsonLong(text, "method_hash");
     if (!SafeToken(runId, 80) || !SafeToken(actionId, 80)
         || !SafeToken(routeId, 192) || !SafeToken(methodName, 96)
+        || (targetKind.Length > 0 && !SafeToken(targetKind, 32))
         || reliableSequence <= 0 || messageId == 0
         || targetZdoId is < 0 or > uint.MaxValue
         || methodHash is < int.MinValue or > int.MaxValue
@@ -1089,7 +1093,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     RoutedRpcCutoverRunner.EnqueueLumberjacksInbound(
         reliableSequence, runId, actionId, routeId, messageId,
         senderPeerId, targetPeerId, targetZdoUserId, (uint)targetZdoId,
-        methodName, (int)methodHash, parameters);
+        targetKind, methodName, (int)methodHash, parameters);
   }
 
   void HandleZdoMutationReceiptWorker(string text) {

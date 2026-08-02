@@ -46,6 +46,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   const int ProbeInterestRadiusZones = 3;
 
   static readonly int ProbeTagHash = ProbeTagName.GetStableHashCode();
+  [ThreadStatic] static int _canonicalMutationBatchDepth;
   static readonly int ProbeValueHash = ProbeValueName.GetStableHashCode();
   static readonly int ProbePrefabHash =
       "ComfyNetworkSense_C3Probe".GetStableHashCode();
@@ -391,7 +392,8 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
 
   public static void CaptureMutation(ZDO zdo) {
     ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
-    if (active == null || !Enabled() || !IsServer() || zdo == null) return;
+    if (active == null || !Enabled() || !IsServer() || zdo == null
+        || _canonicalMutationBatchDepth > 0) return;
     try {
       if (!active.ServerInterestContains(zdo.GetSector())) return;
       active._serverOutbound.Enqueue(active.Snapshot(zdo, tombstone: false));
@@ -399,6 +401,23 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       active.Write("capture_failed", "mutation",
           exception.GetType().Name + ":" + exception.Message);
     }
+  }
+
+  /// <summary>
+  /// Applies one authenticated client-owned object snapshot to the server's
+  /// canonical ZDO while emitting one journal object, not one full object for
+  /// every individual position/rotation/velocity field mutation.
+  /// </summary>
+  public static void ApplyCanonicalMutation(ZDO zdo, Action apply) {
+    if (zdo == null) throw new ArgumentNullException(nameof(zdo));
+    if (apply == null) throw new ArgumentNullException(nameof(apply));
+    _canonicalMutationBatchDepth++;
+    try {
+      apply();
+    } finally {
+      _canonicalMutationBatchDepth--;
+    }
+    CaptureMutation(zdo);
   }
 
   public static void NotifyHardRelocation(Vector3 target) {

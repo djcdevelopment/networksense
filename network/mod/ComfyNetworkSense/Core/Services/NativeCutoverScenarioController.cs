@@ -35,6 +35,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly HashSet<string> _completedActionIds = new(StringComparer.Ordinal);
   readonly LumberjacksGameSessionRunner _gameSession;
   readonly RoutedRpcCutoverRunner _routedRpc;
+  readonly ShipCutoverRunner _ship;
   readonly ZdoJournalCutoverRunner _zdoJournal;
   readonly OwnershipLeaseCutoverRunner _ownershipLease;
   readonly WorldZoneCutoverRunner _worldZone;
@@ -64,6 +65,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   public NativeCutoverScenarioController(
       LumberjacksGameSessionRunner gameSession,
       RoutedRpcCutoverRunner routedRpc,
+      ShipCutoverRunner ship,
       ZdoJournalCutoverRunner zdoJournal,
       OwnershipLeaseCutoverRunner ownershipLease,
       WorldZoneCutoverRunner worldZone,
@@ -71,6 +73,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       SocketQuarantineCutoverRunner socketQuarantine) {
     _gameSession = gameSession;
     _routedRpc = routedRpc;
+    _ship = ship;
     _zdoJournal = zdoJournal;
     _ownershipLease = ownershipLease;
     _worldZone = worldZone;
@@ -245,6 +248,19 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "routed_withhold":
         case "zdo_journal_drive":
         case "zdo_journal_observe":
+          break;
+        case "ship_water_rendezvous":
+        case "ship_spawn":
+        case "ship_wait":
+        case "ship_board":
+        case "ship_transfer":
+        case "ship_wait_owner":
+        case "ship_wait_released":
+          break;
+        case "ship_drive":
+        case "ship_observe":
+          if (action.duration_seconds is < 3.0f or > 20.0f)
+            return "manifest_ship_duration_invalid";
           break;
         case "ownership_lease_pickup":
         case "ownership_contention":
@@ -494,6 +510,50 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         }
         if (!_zdoJournal.TryGetProbeResult(
                 _active.id, out bool terminal, out bool success,
+                out string probeDetail) || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "ship_water_rendezvous":
+      case "ship_spawn":
+      case "ship_wait":
+      case "ship_board":
+      case "ship_drive":
+      case "ship_observe":
+      case "ship_transfer":
+      case "ship_wait_owner":
+      case "ship_wait_released": {
+        if (!_sessionProbeStarted) {
+          string mode = kind switch {
+              "ship_water_rendezvous" => "water",
+              "ship_spawn" => "spawn",
+              "ship_wait" => "wait_ship",
+              "ship_board" => "board",
+              "ship_drive" => "drive",
+              "ship_observe" => "observe",
+              "ship_transfer" => "transfer",
+              "ship_wait_owner" => "wait_owner",
+              _ => "wait_released"
+          };
+          if (!_ship.BeginProbe(
+                  _active.id,
+                  mode,
+                  _active.duration_seconds,
+                  Mathf.Max(5.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail is
+                "ship_probe_client_not_ready" or
+                "ship_cutover_not_enabled") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_ship.TryGetProbeResult(
+                _active.id,
+                out bool terminal,
+                out bool success,
                 out string probeDetail) || !terminal) return;
         if (success) CompleteActive(probeDetail);
         else FailActive(probeDetail);

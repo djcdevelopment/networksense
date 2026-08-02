@@ -39,22 +39,30 @@ public sealed class ValheimRoutedRpcAdmissionsTests
                 entry.Priority == ValheimRoutedRpcPriority.Superseded)
             .ToArray();
 
-    Assert.Equal(7, harness.Length);
+    Assert.Equal(11, harness.Length);
     Assert.Equal(
         new[] {
             ValheimRoutedRpcAdmissions.ModAutoPort,
             ValheimRoutedRpcAdmissions.ModGameplayEvent,
-            ValheimRoutedRpcAdmissions.ModServerPulse
+            ValheimRoutedRpcAdmissions.ModServerPulse,
+            ValheimRoutedRpcAdmissions.ModShipSnapshot
         },
         runtime.Select(entry => entry.Name)
             .OrderBy(name => name, StringComparer.Ordinal));
     Assert.Equal(
         new[] {
+            "Backward",
+            "Forward",
             "RPC_DamageText",
             "RPC_HealthChanged",
             "RPC_UpdateMaterial",
+            "ReleaseControl",
+            "RequestControl",
+            "RequestRespons",
+            "Rudder",
             "SetEvent",
-            "Step"
+            "Step",
+            "Stop"
         },
         p2.Select(entry => entry.Name)
             .OrderBy(name => name, StringComparer.Ordinal));
@@ -254,14 +262,24 @@ public sealed class ValheimRoutedRpcAdmissionsTests
 
       int hash = ValheimRoutedRpcAdmissions.StableHash(name);
       byte[] payload = BuildPayload(signature);
-      Assert.False(ValheimRoutedRpcAdmissions.TryGet(name, hash, out _));
-      Assert.DoesNotContain(
-          ValheimRoutedRpcAdmissions.Entries,
-          entry => string.Equals(entry.Name, name, StringComparison.Ordinal));
+      Assert.True(ValheimRoutedRpcAdmissions.TryGet(
+          name, hash, out ValheimRoutedRpcAdmission admission));
+      Assert.Equal(
+          ValheimRoutedRpcAdmissions.ShipTargetKind,
+          admission.RequiredTargetKind);
       Assert.False(ValheimRoutedRpcAdmissions.AllowsEnvelope(
           name, hash, 10, 2, payload));
       Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
           name, hash, 10, 2, payload));
+      Assert.True(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+          name,
+          hash,
+          10,
+          2,
+          ValheimRoutedRpcAdmissions.ShipTargetKind,
+          payload));
+      Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+          name, hash, 10, 2, "saddle", payload));
     }
   }
 
@@ -271,6 +289,7 @@ public sealed class ValheimRoutedRpcAdmissionsTests
              ValheimRoutedRpcAdmissions.Entries) {
       long targetUser = admission.Scope == ValheimRoutedRpcScope.Instance ? 10 : 0;
       uint targetId = admission.Scope == ValheimRoutedRpcScope.Instance ? 2U : 0U;
+      string targetKind = admission.RequiredTargetKind;
       foreach (string signature in admission.PayloadSignatures) {
         byte[] payload = BuildPayload(signature);
         Assert.True(
@@ -279,6 +298,7 @@ public sealed class ValheimRoutedRpcAdmissionsTests
                 admission.MethodHash,
                 targetUser,
                 targetId,
+                targetKind,
                 payload),
             $"valid {admission.Name} payload {signature}");
         Assert.Equal(
@@ -288,6 +308,7 @@ public sealed class ValheimRoutedRpcAdmissionsTests
                 admission.MethodHash,
                 targetUser,
                 targetId,
+                targetKind,
                 payload));
         Assert.False(
             ValheimRoutedRpcAdmissions.AllowsEnvelope(
@@ -295,6 +316,7 @@ public sealed class ValheimRoutedRpcAdmissionsTests
                 admission.MethodHash,
                 targetUser,
                 targetId,
+                targetKind,
                 payload.Concat(new byte[] { 0 }).ToArray()),
             $"trailing byte for {admission.Name} payload {signature}");
         if (payload.Length > 0) {
@@ -304,6 +326,7 @@ public sealed class ValheimRoutedRpcAdmissionsTests
                   admission.MethodHash,
                   targetUser,
                   targetId,
+                  targetKind,
                   payload.Take(payload.Length - 1).ToArray()),
               $"truncated {admission.Name} payload {signature}");
         }
