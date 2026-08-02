@@ -9,20 +9,20 @@ public sealed class AlphaTransportSwitchesTests {
 
     AlphaTransportSwitches.SetLumberjacksHttpEnabled(false);
     Assert.False(AlphaTransportSwitches.LumberjacksHttpEnabled);
-    Assert.True(AlphaTransportSwitches.McpEnabled);
+    Assert.False(AlphaTransportSwitches.McpEnabled);
     Assert.True(AlphaTransportSwitches.LumberjacksWebSocketEnabled);
     Assert.True(AlphaTransportSwitches.LumberjacksUdpEnabled);
     Assert.False(AlphaTransportSwitches.MotionApplyEnabled);
 
-    AlphaTransportSwitches.SetMcpEnabled(false);
-    Assert.False(AlphaTransportSwitches.McpEnabled);
+    AlphaTransportSwitches.SetMcpEnabled(true);
+    Assert.True(AlphaTransportSwitches.McpEnabled);
     AlphaTransportSwitches.SetLumberjacksUdpEnabled(false);
     AlphaTransportSwitches.SetLumberjacksWebSocketEnabled(false);
     AlphaTransportSwitches.SetMotionApplyEnabled(true);
 
     AlphaTransportSwitches.Reset();
     Assert.True(AlphaTransportSwitches.LumberjacksHttpEnabled);
-    Assert.True(AlphaTransportSwitches.McpEnabled);
+    Assert.False(AlphaTransportSwitches.McpEnabled);
     Assert.True(AlphaTransportSwitches.LumberjacksWebSocketEnabled);
     Assert.True(AlphaTransportSwitches.LumberjacksUdpEnabled);
     Assert.False(AlphaTransportSwitches.MotionApplyEnabled);

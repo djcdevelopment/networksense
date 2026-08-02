@@ -89,6 +89,14 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
       detail = "lumberjacks_session_not_connected";
       return false;
     }
+    // A Gateway reincarnation deliberately clears the accepted descriptor and
+    // re-requests it. Do not race that refresh by emitting an ownership frame
+    // with an empty world epoch; the Gateway rejects that frame and the holder
+    // probe otherwise waits forever for a grant that can never arrive.
+    if (!SafeToken(_worldEpoch, 96)) {
+      detail = "ownership_world_epoch_not_ready";
+      return false;
+    }
     if (_probe != null && !_probe.Terminal) {
       detail = "another_ownership_probe_active";
       return false;
@@ -126,6 +134,10 @@ public sealed class OwnershipLeaseCutoverRunner : IDisposable {
     if (!_gameSession.WebSocketConnected ||
         !SafeToken(_gameSession.LogicalPeerId, 80)) {
       detail = "lumberjacks_session_not_connected";
+      return false;
+    }
+    if (!SafeToken(_worldEpoch, 96)) {
+      detail = "ownership_world_epoch_not_ready";
       return false;
     }
     if (_probe != null && !_probe.Terminal) {

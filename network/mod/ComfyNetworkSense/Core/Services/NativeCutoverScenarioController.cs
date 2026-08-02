@@ -502,7 +502,8 @@ public sealed class NativeCutoverScenarioController : IDisposable {
                   Mathf.Max(20.0f, _active.deadline_seconds - 1.0f),
                   out string startDetail)) {
             if (startDetail is "lumberjacks_session_not_connected"
-                or "ownership_lease_client_not_ready") return;
+                or "ownership_lease_client_not_ready"
+                or "ownership_world_epoch_not_ready") return;
             FailActive(startDetail);
             return;
           }
@@ -522,7 +523,8 @@ public sealed class NativeCutoverScenarioController : IDisposable {
                   Mathf.Max(10.0f, _active.deadline_seconds - 1.0f),
                   out string startDetail)) {
             if (startDetail is "lumberjacks_session_not_connected"
-                or "ownership_lease_client_not_ready") return;
+                or "ownership_lease_client_not_ready"
+                or "ownership_world_epoch_not_ready") return;
             FailActive(startDetail);
             return;
           }
