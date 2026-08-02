@@ -228,6 +228,44 @@ public sealed class ValheimRoutedRpcAdmissionsTests
   }
 
   [Fact]
+  public void VehicleControlCollision_RequiresTypedShipAndSaddleContracts() {
+    string path = Path.Combine(
+        AppContext.BaseDirectory,
+        "synthetic_baseline_v2.json");
+    using JsonDocument baseline = JsonDocument.Parse(File.ReadAllText(path));
+    JsonElement instanceRpcs = baseline.RootElement.GetProperty("InstanceRPCs");
+    (string Name, string Signature)[] methods = {
+        ("RequestControl", "Int64"),
+        ("ReleaseControl", "Int64"),
+        ("RequestRespons", "Boolean")
+    };
+
+    foreach ((string name, string signature) in methods) {
+      JsonElement extracted = instanceRpcs.GetProperty(name);
+      Assert.Equal(
+          new[] { "Sadle.Awake", "ShipControlls.Awake" },
+          extracted.GetProperty("registrations")
+              .EnumerateArray()
+              .Select(element => element.GetString())
+              .ToArray());
+      Assert.Equal(
+          new[] { signature },
+          ReadSignatures(extracted));
+
+      int hash = ValheimRoutedRpcAdmissions.StableHash(name);
+      byte[] payload = BuildPayload(signature);
+      Assert.False(ValheimRoutedRpcAdmissions.TryGet(name, hash, out _));
+      Assert.DoesNotContain(
+          ValheimRoutedRpcAdmissions.Entries,
+          entry => string.Equals(entry.Name, name, StringComparison.Ordinal));
+      Assert.False(ValheimRoutedRpcAdmissions.AllowsEnvelope(
+          name, hash, 10, 2, payload));
+      Assert.False(ValheimRoutedRpcAdmissions.AllowsRoutedEnvelope(
+          name, hash, 10, 2, payload));
+    }
+  }
+
+  [Fact]
   public void PayloadGate_AcceptsEveryExtractedShapeAndRejectsMalformedBounds() {
     foreach (ValheimRoutedRpcAdmission admission in
              ValheimRoutedRpcAdmissions.Entries) {
