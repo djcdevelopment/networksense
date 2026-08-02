@@ -33,6 +33,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   readonly ConcurrentQueue<string> _outbound = new();
   readonly ConcurrentQueue<MotionOutbound> _motionOutbound = new();
   readonly object _outboundGate = new();
+  readonly ReliableAckBarrier _reliableAckBarrier = new();
   readonly TelemetryLogWriter _writer = new();
 
   CancellationTokenSource _cts;
@@ -230,11 +231,38 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     return true;
   }
 
-  public bool QueueReliableAck(long serverSequence) =>
-      serverSequence > 0 && TryQueueEnvelope(
-          "reliable_ack",
-          "\"through_sequence\":"
-          + serverSequence.ToString(CultureInfo.InvariantCulture));
+  public bool HoldReliableAck(long serverSequence) {
+    bool held = _reliableAckBarrier.TryHold(serverSequence);
+    _events.Enqueue(new SessionEvent(
+        held ? "reliable_ack_barrier_held" : "reliable_ack_barrier_rejected",
+        serverSequence,
+        ConnectionId,
+        "held_before_intentional_socket_drop"));
+    return held;
+  }
+
+  public bool QueueReliableAck(long serverSequence) {
+    if (!_reliableAckBarrier.TryAcknowledge(
+            serverSequence, out long throughSequence, out long releasedSequence))
+      return false;
+    if (throughSequence == 0) return true;
+
+    bool queued = TryQueueEnvelope(
+        "reliable_ack",
+        "\"through_sequence\":"
+        + throughSequence.ToString(CultureInfo.InvariantCulture));
+    if (releasedSequence > 0) {
+      _events.Enqueue(new SessionEvent(
+          queued
+              ? "reliable_ack_barrier_released"
+              : "reliable_ack_barrier_release_queue_failed",
+          releasedSequence,
+          ConnectionId,
+          "through_sequence="
+          + throughSequence.ToString(CultureInfo.InvariantCulture)));
+    }
+    return queued;
+  }
 
   public bool TryQueueZdoJournalMutation(string payloadFields) =>
       TryQueueSemantic("valheim_zdo_mutation", payloadFields);
@@ -469,6 +497,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
     _socket = null;
     _udp = null;
     _udpToken = 0;
+    _reliableAckBarrier.Reset();
     SetState("idle", false, false, string.Empty);
   }
 
@@ -612,6 +641,10 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
             "valheim_zone_snapshot_complete" or
             "valheim_zone_snapshot_release" or
             "valheim_zone_membership_left") {
+          long reliableSequence = ExtractJsonLong(text, "seq");
+          if (WorldZoneCutoverRunner.ShouldHoldReliableAck(type, text) &&
+              !HoldReliableAck(reliableSequence))
+            throw new InvalidDataException("world zone reliable ACK barrier rejected");
           WorldZoneCutoverRunner.EnqueueCanonicalFrame(type, text);
           continue;
         }
@@ -793,6 +826,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       if (!resumeRejected)
         throw new InvalidDataException("new transport incarnation was not caused by rejected resume");
       ClearOutbound();
+      _reliableAckBarrier.Reset();
       lock (_gate) {
         _lastServerSequence = 0;
         Interlocked.Exchange(ref _nextClientSequence, 0);
@@ -907,9 +941,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       }
     }
 
-    TryQueueEnvelope(
-        "reliable_ack",
-        "\"through_sequence\":" + sequence.ToString(CultureInfo.InvariantCulture));
+    QueueReliableAck(sequence);
     if (shouldRespond) {
       TryQueueEnvelope(
           "valheim_control_response",
@@ -952,9 +984,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
         throw new InvalidDataException("control receipt was not ordered after its request");
       _lastServerSequence = sequence;
     }
-    TryQueueEnvelope(
-        "reliable_ack",
-        "\"through_sequence\":" + sequence.ToString(CultureInfo.InvariantCulture));
+    QueueReliableAck(sequence);
     _events.Enqueue(new SessionEvent(
         "probe_passed", sequence, connectionId,
         "request_sequence=" + requestSequence
@@ -1129,10 +1159,7 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
           }
           // The worker only banks the frame. Acknowledge reliable delivery after the
           // selected typed handler has run on Unity's main thread.
-          TryQueueEnvelope(
-              "reliable_ack",
-              "\"through_sequence\":"
-              + item.Sequence.ToString(CultureInfo.InvariantCulture));
+          QueueReliableAck(item.Sequence);
           break;
         case "native_direct_pulse_received":
           lock (_gate) {

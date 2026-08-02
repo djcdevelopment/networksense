@@ -45,7 +45,13 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         runtime.Select(entry => entry.Name)
             .OrderBy(name => name, StringComparer.Ordinal));
     Assert.Equal(
-        new[] { "RPC_DamageText", "SetEvent", "Step" },
+        new[] {
+            "RPC_DamageText",
+            "RPC_HealthChanged",
+            "RPC_UpdateMaterial",
+            "SetEvent",
+            "Step"
+        },
         p2.Select(entry => entry.Name)
             .OrderBy(name => name, StringComparer.Ordinal));
     Assert.Equal(8, superseded.Length);
@@ -93,6 +99,10 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         ValheimRoutedRpcAdmissions.StableHash("SleepStop"));
     Assert.Equal(-461013576,
         ValheimRoutedRpcAdmissions.StableHash("Step"));
+    Assert.Equal(-257317232,
+        ValheimRoutedRpcAdmissions.StableHash("RPC_HealthChanged"));
+    Assert.Equal(500148310,
+        ValheimRoutedRpcAdmissions.StableHash("RPC_UpdateMaterial"));
     Assert.Equal(617879363,
         ValheimRoutedRpcAdmissions.StableHash(
             ValheimRoutedRpcAdmissions.ModServerPulse));

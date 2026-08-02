@@ -105,6 +105,26 @@ public sealed class WorldZoneCutoverRunner : IDisposable {
   public static void EnqueueCanonicalFrame(string type, string json) =>
       Volatile.Read(ref _active)?._frames.Enqueue(new(type, json));
 
+  /// <summary>
+  /// Installs the transport ACK barrier before the receive worker banks the first
+  /// resume probe chunk. Without this, any later frame can send a cumulative ACK
+  /// past the deliberately unacknowledged chunk before Unity's main thread aborts
+  /// the socket, making replay timing-dependent.
+  /// </summary>
+  public static bool ShouldHoldReliableAck(string type, string json) {
+    if (!string.Equals(
+            type, "valheim_zone_snapshot_chunk",
+            StringComparison.OrdinalIgnoreCase)) return false;
+    WorldZoneCutoverRunner active = Volatile.Read(ref _active);
+    MembershipProbe membership = active?._membership;
+    return membership != null && !membership.Terminal && !membership.DropPerformed
+        && membership.Mode == "resume_once"
+        && string.Equals(
+            ExtractJsonString(json, "action_id"), membership.ActionId,
+            StringComparison.Ordinal)
+        && ExtractJsonLong(json, "zone_epoch") == membership.ZoneEpoch;
+  }
+
   public static bool Selected =>
       PluginConfig.WorldZoneCutoverEnabled?.Value == true ||
       NativeAutotestRequest.ActiveWorldZoneCutover;
