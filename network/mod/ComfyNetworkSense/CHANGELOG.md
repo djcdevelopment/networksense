@@ -2,6 +2,17 @@
 
 ### Unreleased
 
+- Make saddle discovery requests explicitly non-creating. A second client's
+  wait probe can now request an announcement without racing the designated
+  spawner, and spawn responses derive discovery state from the target ZDO's
+  actual run tag instead of the request that happened to find it.
+- Publish a dedicated-server-owned idle saddle directly from its canonical ZDO
+  when no live `Character` instance is loaded. The server advances the same
+  owner/epoch sequence, applies the same canonical fields, and performs the
+  same direct relevance fan-out used by a live instance.
+- Preserve complete OMEN evidence on composition failure by stopping the game
+  first and allowing the client wrapper to refresh its terminal lifecycle and
+  copied logs before a bounded force-stop fallback.
 - Generalize ship and saddle snapshot authority from run-tagged canaries to
   arbitrary existing world objects. Owners publish every live ship or saddled
   mount they actually own, including a dedicated-server owner; the canonical

@@ -453,6 +453,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
     request.Write(probe.RunId);
     request.Write(probe.ActionId);
     request.Write(probe.Mode == "spawn_untagged");
+    request.Write(true);
     request.SetPos(0);
     probe.RequestSent = _routedRpc.InvokeTyped(
         probe.ActionId,
@@ -474,6 +475,8 @@ public sealed class SaddleCutoverRunner : IDisposable {
           ZPackage request = new();
           request.Write(probe.RunId);
           request.Write(probe.ActionId);
+          request.Write(false);
+          request.Write(false);
           request.SetPos(0);
           _routedRpc.InvokeTyped(
               probe.ActionId,
@@ -832,6 +835,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
     bool serverPublisher = IsServer();
     ZNetPeer server = serverPublisher ? null : ZNet.instance?.GetServerPeer();
     if (!serverPublisher && (server == null || server.m_uid == 0)) return;
+    HashSet<ZDOID> publishedServerMounts = serverPublisher ? new() : null;
     foreach (Character mount in FindMounts()) {
       ZNetView view = mount.GetComponent<ZNetView>();
       ZDO zdo = view?.GetZDO();
@@ -983,19 +987,8 @@ public sealed class SaddleCutoverRunner : IDisposable {
                 "0.###", CultureInfo.InvariantCulture));
       }
       if (serverPublisher) {
-        _serverSnapshotSequences[SnapshotKey(zdo.m_uid, authorityEpoch)] =
-            sequence;
-        ApplyCanonicalSnapshot(zdo, snapshot);
-        if (!FanOutSnapshot(snapshot, "saddle-server-owner-snapshot")) {
-          Write("snapshot_fanout_failed", "unscoped",
-              "uid=" + zdo.m_uid + " source=server_owner");
-          continue;
-        }
-        if (sequence == 1 || sequence % 25 == 0)
-          Write("snapshot_server_accepted", "unscoped",
-              "uid=" + zdo.m_uid + " epoch=" + authorityEpoch +
-              " sequence=" + sequence + " owner=" + authorityOwner +
-              " source=server_owner");
+        publishedServerMounts.Add(zdo.m_uid);
+        PublishServerOwnedSnapshot(zdo, snapshot, "live_instance");
         continue;
       }
 
@@ -1005,6 +998,96 @@ public sealed class SaddleCutoverRunner : IDisposable {
           ValheimRoutedRpcAdmissions.ModSaddleSnapshot,
           new object[] { package });
     }
+    if (serverPublisher)
+      PublishServerOwnedZdoSnapshots(publishedServerMounts);
+  }
+
+  void PublishServerOwnedZdoSnapshots(ISet<ZDOID> publishedMounts) {
+    long serverPeerId = ZNet.GetUID();
+    foreach (KeyValuePair<ZDOID, ServerAuthority> pair in
+             _serverAuthorities.ToArray()) {
+      if (publishedMounts.Contains(pair.Key) ||
+          pair.Value.OwnerPeerId != serverPeerId)
+        continue;
+      ZDO zdo = ZDOMan.instance?.GetZDO(pair.Key);
+      if (zdo == null || zdo.GetOwner() != serverPeerId ||
+          !IsSaddlePrefab(zdo.GetPrefab()) ||
+          !zdo.GetBool(ZDOVars.s_tamed) ||
+          !zdo.GetBool(ZDOVars.s_haveSaddleHash))
+        continue;
+      long user = zdo.GetLong(ZDOVars.s_user, 0L);
+      if (user != 0L) {
+        Write("snapshot_server_owner_invalid", "unscoped",
+            "uid=" + zdo.m_uid + " owner=" + serverPeerId +
+            " user=" + user + " representation=zdo_only");
+        continue;
+      }
+
+      _clientSnapshotSequences.TryGetValue(zdo.m_uid, out uint sequence);
+      sequence++;
+      _clientSnapshotSequences[zdo.m_uid] = sequence;
+      _clientSnapshotUsers[zdo.m_uid] = 0L;
+      Snapshot snapshot = new() {
+          RunId = CurrentRunId(),
+          Uid = zdo.m_uid,
+          OwnerPeerId = serverPeerId,
+          Epoch = pair.Value.Epoch,
+          Sequence = sequence,
+          Position = zdo.GetPosition(),
+          Rotation = zdo.GetRotation(),
+          Velocity = zdo.GetVec3(
+              ZDOVars.s_bodyVelHash,
+              zdo.GetVec3(ZDOVars.s_velHash, Vector3.zero)),
+          AngularVelocity = zdo.GetVec3(
+              ZDOVars.s_bodyAVelHash, Vector3.zero),
+          User = 0L,
+          Stamina = zdo.GetFloat(ZDOVars.s_stamina, 0.0f),
+          RiderId = ZDOID.None,
+          ParentSync = false,
+          AttachJoint = string.Empty,
+          RelativePosition = Vector3.zero,
+          RelativeRotation = Quaternion.identity,
+          RelativeVelocity = Vector3.zero
+      };
+      if (sequence == 1)
+        Write("snapshot_owner_published", "unscoped",
+            "uid=" + zdo.m_uid + " epoch=" + pair.Value.Epoch +
+            " sequence=1 owner=" + serverPeerId +
+            " previous_user=0 user=0 rider=" + ZDOID.None +
+            " parent_sync=false joint= mount_velocity=" +
+            Format(snapshot.Velocity) +
+            " mount_speed=" + snapshot.Velocity.magnitude.ToString(
+                "0.###", CultureInfo.InvariantCulture) +
+            " mount_angular_velocity=" + Format(snapshot.AngularVelocity) +
+            " mount_angular_speed=" +
+            snapshot.AngularVelocity.magnitude.ToString(
+                "0.###", CultureInfo.InvariantCulture) +
+            " stamina=" + snapshot.Stamina.ToString(
+                "0.###", CultureInfo.InvariantCulture) +
+            " rel_pos=(0,0,0) rel_rot_deg=0" +
+            " rider_velocity=(0,0,0) rider_speed=0" +
+            " representation=zdo_only");
+      PublishServerOwnedSnapshot(zdo, snapshot, "zdo_only");
+    }
+  }
+
+  void PublishServerOwnedSnapshot(
+      ZDO zdo, Snapshot snapshot, string representation) {
+    _serverSnapshotSequences[SnapshotKey(zdo.m_uid, snapshot.Epoch)] =
+        snapshot.Sequence;
+    ApplyCanonicalSnapshot(zdo, snapshot);
+    if (!FanOutSnapshot(snapshot, "saddle-server-owner-snapshot")) {
+      Write("snapshot_fanout_failed", "unscoped",
+          "uid=" + zdo.m_uid +
+          " source=server_owner representation=" + representation);
+      return;
+    }
+    if (snapshot.Sequence == 1 || snapshot.Sequence % 25 == 0)
+      Write("snapshot_server_accepted", "unscoped",
+          "uid=" + zdo.m_uid + " epoch=" + snapshot.Epoch +
+          " sequence=" + snapshot.Sequence +
+          " owner=" + snapshot.OwnerPeerId +
+          " source=server_owner representation=" + representation);
   }
 
   static void HandleSnapshot(long senderPeerId, ZPackage package) {
@@ -1412,6 +1495,8 @@ public sealed class SaddleCutoverRunner : IDisposable {
       runId = package.ReadString();
       actionId = package.ReadString();
       bool untagged = package.GetPos() < package.Size() && package.ReadBool();
+      bool allowCreate =
+          package.GetPos() >= package.Size() || package.ReadBool();
       if (package.GetPos() != package.Size() || !SafeToken(runId, 80) ||
           !SafeToken(actionId, 80) ||
           !string.Equals(runId, CurrentRunId(), StringComparison.Ordinal))
@@ -1428,6 +1513,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
       if (active._serverMountsByRun.TryGetValue(runId, out ZDOID existing))
         zdo = ZDOMan.instance?.GetZDO(existing);
       if (zdo == null) {
+        if (!allowCreate) return;
         if (!TrySelectSpawnPosition(senderPosition, out Vector3 position))
           throw new InvalidOperationException("saddle_spawn_site_invalid");
         GameObject prefab = ZNetScene.instance?.GetPrefab("Lox");
@@ -1486,11 +1572,13 @@ public sealed class SaddleCutoverRunner : IDisposable {
               zdo.m_uid, out ServerAuthority knownAuthority)
           ? knownAuthority
           : new ServerAuthority(zdo.GetOwner(), 0, 1);
+      bool authorityPreseeded = !string.IsNullOrEmpty(
+          zdo.GetString(RunTagHash, string.Empty));
       active.SendSpawnResponse(
           ZRoutedRpc.Everybody,
           runId, actionId, zdo.m_uid, zdo.GetPosition(),
           authority.OwnerPeerId, authority.Epoch, true, "spawned",
-          authorityPreseeded: !untagged);
+          authorityPreseeded: authorityPreseeded);
     } catch (Exception exception) {
       active.Write("saddle_spawn_rejected", actionId,
           "sender=" + senderPeerId + " reason=" +
