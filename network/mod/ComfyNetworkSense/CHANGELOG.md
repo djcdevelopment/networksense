@@ -2,6 +2,37 @@
 
 ### Unreleased
 
+- Generalize ship and saddle snapshot authority from run-tagged canaries to
+  arbitrary existing world objects. Owners publish every live ship or saddled
+  mount they actually own, including a dedicated-server owner; the canonical
+  server adopts an untracked mount at epoch one, and replicas learn the
+  authoritative epoch from the server rather than requiring a test tag on the
+  ZDO. The untagged physical cell deliberately leaves all three authority maps
+  empty so server, owner, and observer must each exercise that discovery path,
+  then hands the unridden mount to AM4 and requires both clients to advance on
+  server-originated snapshots. The handoff explicitly clears the rider edge:
+  a dedicated server can own idle mount physics, but is never written as the
+  canonical `s_user`.
+- Replace vehicle snapshot `Everybody` broadcasts with producer-side,
+  per-native-peer relevance fan-out. Independent enter/retain/leave edges use
+  the established 64 m outer band plus 8 m hysteresis, route one direct copy to
+  each relevant observer, and never couple visibility to ownership.
+- Add the M7-E04 authority-lab experiment and a fail-closed physical profile
+  that drives an ordinary untagged Lox through two-rider authority/reclaim,
+  moves i5 out of and back into snapshot relevance, proves native-zero and
+  exact paired-image provenance, and destroys the exact untagged canary by its
+  in-memory identity.
+- Make the physical orchestrator deploy and SHA-verify the exact mod on AM4 as
+  part of the same transaction before either client launches. Every profile now
+  retains its exact scenario for reduction, and terminal descriptor/cold-join
+  failures stop black-screen clients immediately instead of waiting for the
+  outer timeout.
+- Close the bounded vanilla station-family review against extractor v2 and the
+  pinned game assembly. All 19 RPC names registered by Beehive, CookingStation,
+  Fermenter, Fireplace, Incinerator, SapCollector, ShieldGenerator, and Smelter
+  now have exact shared mod/Gateway contracts; 12 normal-play owner mutations,
+  directed responses, and presentation broadcasts no longer fall into poison.
+
 - Add the selected autonomous-creature authority canary around an actual,
   tamed, unridden Lox. Harmony instrumentation at `BaseAI.UpdateAI` requires
   the canonical owner to execute `MonsterAI`, the replica to be owner-gated,

@@ -272,10 +272,15 @@ public sealed class NativeCutoverScenarioController : IDisposable {
             return "manifest_ship_duration_invalid";
           break;
         case "saddle_spawn":
+        case "saddle_spawn_untagged":
         case "saddle_wait":
         case "saddle_rendezvous":
         case "saddle_wait_released":
         case "saddle_observe_reclaim":
+        case "saddle_server_handoff":
+        case "saddle_observe_server":
+        case "saddle_relevance_leave":
+        case "saddle_relevance_enter":
           break;
         case "saddle_disconnect_reclaim":
           if (action.duration_seconds is < 3.0f or > 15.0f)
@@ -594,22 +599,32 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         break;
       }
       case "saddle_spawn":
+      case "saddle_spawn_untagged":
       case "saddle_wait":
       case "saddle_rendezvous":
       case "saddle_drive":
       case "saddle_observe":
       case "saddle_wait_released":
       case "saddle_disconnect_reclaim":
-      case "saddle_observe_reclaim": {
+      case "saddle_observe_reclaim":
+      case "saddle_server_handoff":
+      case "saddle_observe_server":
+      case "saddle_relevance_leave":
+      case "saddle_relevance_enter": {
         if (!_sessionProbeStarted) {
           string mode = kind switch {
               "saddle_spawn" => "spawn",
+              "saddle_spawn_untagged" => "spawn_untagged",
               "saddle_wait" => "wait_mount",
               "saddle_rendezvous" => "rendezvous",
               "saddle_drive" => "drive",
               "saddle_observe" => "observe",
-              "saddle_wait_released" => "wait_released",
-              "saddle_disconnect_reclaim" => "disconnect_reclaim",
+               "saddle_wait_released" => "wait_released",
+               "saddle_disconnect_reclaim" => "disconnect_reclaim",
+               "saddle_server_handoff" => "server_handoff",
+               "saddle_observe_server" => "observe_server",
+               "saddle_relevance_leave" => "relevance_leave",
+              "saddle_relevance_enter" => "relevance_enter",
               _ => "observe_reclaim"
           };
           if (!_saddle.BeginProbe(

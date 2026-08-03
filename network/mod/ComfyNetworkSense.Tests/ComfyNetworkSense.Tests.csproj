@@ -26,9 +26,11 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\BoundedRawHttp.cs" Link="BoundedRawHttp.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ReliableAckBarrier.cs" Link="ReliableAckBarrier.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\RoutedRpcWireFields.cs" Link="RoutedRpcWireFields.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\SaddleAuthorityTransferPolicy.cs" Link="SaddleAuthorityTransferPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ShipCutoverModePolicy.cs" Link="ShipCutoverModePolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ContainerTransactionPolicy.cs" Link="ContainerTransactionPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\CreatureAiProofPolicy.cs" Link="CreatureAiProofPolicy.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\VehicleSnapshotRelevanceSet.cs" Link="VehicleSnapshotRelevanceSet.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoJournalInterestPolicy.cs" Link="ZdoJournalInterestPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\SessionSendGuard.cs" Link="SessionSendGuard.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\AlphaTransportSwitches.cs" Link="AlphaTransportSwitches.cs" />

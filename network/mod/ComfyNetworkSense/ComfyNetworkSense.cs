@@ -23,7 +23,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.75";
+  public const string PluginVersion = "0.5.78";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -38,7 +38,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m7-c10a-20260802-r36";
+  public const string ReleaseId = "m7-c10a-20260802-r39";
 
   public static ComfyNetworkSense Instance { get; private set; }
 

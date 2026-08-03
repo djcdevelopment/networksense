@@ -2,6 +2,7 @@ namespace ComfyNetworkSense;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 
@@ -39,6 +40,9 @@ public static class CutoverResidueSweeper {
       ZdoJournalCutoverRunner.ProbeTagName.GetStableHashCode();
   static readonly int C5TagHash =
       WorldZoneCutoverRunner.MembershipTagName.GetStableHashCode();
+  static readonly object UntaggedGate = new();
+  static readonly Dictionary<string, HashSet<ZDOID>> UntaggedByRun =
+      new(StringComparer.Ordinal);
 
   static readonly AccessTools.FieldRef<ZDOMan, Dictionary<ZDOID, ZDO>> _objectsByIdRef =
       AccessTools.FieldRefAccess<ZDOMan, Dictionary<ZDOID, ZDO>>("m_objectsByID");
@@ -50,6 +54,22 @@ public static class CutoverResidueSweeper {
   // always receipted so the sweep verdict is one read, matching the teleport-readiness
   // sector_objects call shape (FindSectorObjects area=1) so the numbers stay comparable.
   static readonly Vector2i ReferenceZone = new(35, -1);
+
+  /// <summary>
+  /// Registers an exact synthetic object without writing a test tag into its
+  /// ZDO. This lets the physical generalization gate exercise the same shape
+  /// as an ordinary existing world mount while retaining exact cleanup.
+  /// </summary>
+  public static void RegisterUntagged(string runId, ZDOID uid) {
+    if (string.IsNullOrWhiteSpace(runId) || uid.IsNone()) return;
+    lock (UntaggedGate) {
+      if (!UntaggedByRun.TryGetValue(runId, out HashSet<ZDOID> ids)) {
+        ids = new HashSet<ZDOID>();
+        UntaggedByRun[runId] = ids;
+      }
+      ids.Add(uid);
+    }
+  }
 
   /// <summary>
   /// Sweeps synthetic cutover residue. <paramref name="mode"/> is either a run id (destroy
@@ -85,6 +105,16 @@ public static class CutoverResidueSweeper {
       return false;
     }
 
+    HashSet<ZDOID> trackedUntagged = new();
+    lock (UntaggedGate) {
+      if (sweepAll) {
+        foreach (HashSet<ZDOID> ids in UntaggedByRun.Values)
+          trackedUntagged.UnionWith(ids);
+      } else if (UntaggedByRun.TryGetValue(mode, out HashSet<ZDOID> ids)) {
+        trackedUntagged.UnionWith(ids);
+      }
+    }
+
     HashSet<long> liveOwners = new();
     List<ZNetPeer> peers = ZNet.instance?.GetPeers();
     if (peers != null) {
@@ -107,6 +137,7 @@ public static class CutoverResidueSweeper {
     int vehicle = 0;
     int mount = 0;
     int container = 0;
+    int untaggedTracked = 0;
     int skippedLiveOwner = 0;
     foreach (ZDO zdo in objects.Values) {
       scanned++;
@@ -122,7 +153,11 @@ public static class CutoverResidueSweeper {
           prefab == MountPrefabHash;
       bool isContainer = !isC3 && !isC5 && !isItem && !isVehicle &&
           !isMount && prefab == ContainerPrefabHash;
-      if (isC3) {
+      bool isTrackedUntagged = trackedUntagged.Contains(zdo.m_uid) &&
+          (isVehicle || isMount || isContainer);
+      if (isTrackedUntagged) {
+        tag = "tracked-untagged";
+      } else if (isC3) {
         tag = zdo.GetString(C3TagHash, string.Empty);
       } else if (isC5) {
         tag = zdo.GetString(C5TagHash, string.Empty);
@@ -132,7 +167,8 @@ public static class CutoverResidueSweeper {
       } else {
         continue;
       }
-      if (!sweepAll && !string.Equals(tag, mode, StringComparison.Ordinal)) continue;
+      if (!isTrackedUntagged && !sweepAll &&
+          !string.Equals(tag, mode, StringComparison.Ordinal)) continue;
       // A failed container canary may still be owned by the dedicated server
       // because the canonical take never reached its final owner=0 mutation.
       // Its exact run tag makes it safe to sweep; leaving it behind would make
@@ -147,6 +183,7 @@ public static class CutoverResidueSweeper {
       else if (isVehicle) vehicle++;
       else if (isMount) mount++;
       else container++;
+      if (isTrackedUntagged) untaggedTracked++;
       if (!string.IsNullOrEmpty(tag)) tags.Add(tag);
       Vector2i sector = zdo.GetSector();
       string zoneKey = sector.x + "," + sector.y;
@@ -157,6 +194,17 @@ public static class CutoverResidueSweeper {
 
     foreach (ZDOID uid in matches) {
       HandleDestroyedZdoMethod.Invoke(ZDOMan.instance, new object[] { uid });
+    }
+    if (untaggedTracked > 0) {
+      lock (UntaggedGate) {
+        foreach (HashSet<ZDOID> ids in UntaggedByRun.Values)
+          ids.ExceptWith(matches);
+        foreach (string emptyRun in UntaggedByRun
+                     .Where(pair => pair.Value.Count == 0)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+          UntaggedByRun.Remove(emptyRun);
+      }
     }
 
     // Duplicate terrain compilers: a client that cannot yet see the zone's compiler
@@ -216,6 +264,7 @@ public static class CutoverResidueSweeper {
         .Append(" vehicle=").Append(vehicle)
         .Append(" mount=").Append(mount)
         .Append(" container=").Append(container)
+        .Append(" untagged_tracked=").Append(untaggedTracked)
         .Append(" tags=").Append(tags.Count == 0 ? "none" : string.Join("|", tags))
         .Append(" zones=");
     if (matchedZones.Count == 0) {

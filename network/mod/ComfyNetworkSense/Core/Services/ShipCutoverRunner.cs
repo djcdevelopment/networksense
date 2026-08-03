@@ -43,6 +43,7 @@ public sealed class ShipCutoverRunner : IDisposable {
       new(StringComparer.Ordinal);
   readonly Dictionary<string, ZDOID> _serverShipsByRun =
       new(StringComparer.Ordinal);
+  readonly VehicleSnapshotRelevanceSet _snapshotRelevance = new();
 
   ZRoutedRpc _registeredRpc;
   ShipProbe _probe;
@@ -68,7 +69,7 @@ public sealed class ShipCutoverRunner : IDisposable {
   public void Update(float now) {
     if (_disposed) return;
     EnsureHandlers();
-    if (Enabled() && !IsServer() && now >= _nextSnapshotAt) {
+    if (Enabled() && now >= _nextSnapshotAt) {
       _nextSnapshotAt = now + SnapshotIntervalSeconds;
       PublishOwnedSnapshots();
     }
@@ -441,31 +442,65 @@ public sealed class ShipCutoverRunner : IDisposable {
   }
 
   void PublishOwnedSnapshots() {
-    ZNetPeer server = ZNet.instance?.GetServerPeer();
-    if (server == null || server.m_uid == 0) return;
+    bool serverPublisher = IsServer();
+    ZNetPeer server = serverPublisher ? null : ZNet.instance?.GetServerPeer();
+    if (!serverPublisher && (server == null || server.m_uid == 0)) return;
     foreach (IMonoUpdater updater in Ship.Instances.ToArray()) {
       if (updater is not Ship ship || ship == null || !ship.gameObject.activeInHierarchy)
         continue;
       ZNetView view = ship.GetComponent<ZNetView>();
       ZDO zdo = view?.GetZDO();
       Rigidbody body = ship.GetComponent<Rigidbody>();
-      if (zdo == null || body == null || !view.IsOwner()) continue;
+      if (zdo == null || body == null || !view.IsOwner() ||
+          zdo.GetOwner() != ZNet.GetUID()) continue;
       _clientSnapshotSequences.TryGetValue(zdo.m_uid, out uint sequence);
       sequence++;
       _clientSnapshotSequences[zdo.m_uid] = sequence;
+      string runId = CurrentRunId();
+      long owner = zdo.GetOwner();
+      Vector3 position = ship.transform.position;
+      Quaternion rotation = ship.transform.rotation;
+      Vector3 velocity = body.linearVelocity;
+      Vector3 angularVelocity = body.angularVelocity;
+      int speed = (int) ship.GetSpeedSetting();
+      float rudder = ship.GetRudderValue();
+      long user = zdo.GetLong(ZDOVars.s_user, 0L);
+
+      if (serverPublisher) {
+        string key = SnapshotKey(owner, zdo.m_uid);
+        _serverSnapshotSequences[key] = sequence;
+        ZdoJournalCutoverRunner.ApplyCanonicalMutation(zdo, () =>
+            ApplySnapshotFields(
+                zdo, position, rotation, velocity, angularVelocity,
+                speed, rudder, user));
+        if (!FanOutSnapshot(
+                runId, zdo.m_uid, owner, sequence, position, rotation,
+                velocity, angularVelocity, speed, rudder, user)) {
+          Write("snapshot_fanout_failed", "unscoped",
+              "uid=" + zdo.m_uid + " source=server_owner");
+          continue;
+        }
+        if (sequence == 1 || sequence % 25 == 0)
+          Write("snapshot_applied", "unscoped",
+              "uid=" + zdo.m_uid + " sender=" + owner +
+              " sequence=" + sequence + " position=" + Format(position) +
+              " source=server_owner");
+        continue;
+      }
+
       ZPackage package = new();
       package.Write(SnapshotSchema);
-      package.Write(CurrentRunId());
+      package.Write(runId);
       package.Write(zdo.m_uid);
-      package.Write(zdo.GetOwner());
+      package.Write(owner);
       package.Write(sequence);
-      package.Write(ship.transform.position);
-      package.Write(ship.transform.rotation);
-      package.Write(body.linearVelocity);
-      package.Write(body.angularVelocity);
-      package.Write((int) ship.GetSpeedSetting());
-      package.Write(ship.GetRudderValue());
-      package.Write(zdo.GetLong(ZDOVars.s_user, 0L));
+      package.Write(position);
+      package.Write(rotation);
+      package.Write(velocity);
+      package.Write(angularVelocity);
+      package.Write(speed);
+      package.Write(rudder);
+      package.Write(user);
       package.SetPos(0);
       ZRoutedRpc.instance.InvokeRoutedRPC(
           server.m_uid,
@@ -508,7 +543,8 @@ public sealed class ShipCutoverRunner : IDisposable {
       ZDO zdo = ZDOMan.instance?.GetZDO(uid);
       if (IsServer()) {
         if (ownerPeerId != senderPeerId || zdo == null ||
-            zdo.GetOwner() != ownerPeerId || !IsShipPrefab(zdo.GetPrefab()))
+            zdo.GetOwner() != ownerPeerId || !IsShipPrefab(zdo.GetPrefab()) ||
+            !string.Equals(runId, CurrentRunId(), StringComparison.Ordinal))
           throw new InvalidOperationException("ship_snapshot_authority_invalid");
         if (Vector3.Distance(zdo.GetPosition(), position) >
             MaximumSnapshotStepMeters)
@@ -523,15 +559,9 @@ public sealed class ShipCutoverRunner : IDisposable {
             ApplySnapshotFields(
                 zdo, position, rotation, velocity, angularVelocity,
                 speed, rudder, user));
-        ZPackage replica = BuildSnapshotPackage(
-            runId, uid, ownerPeerId, sequence, position, rotation,
-            velocity, angularVelocity, speed, rudder, user);
-        if (!active._routedRpc.InvokeTyped(
-                "ship-snapshot",
-                () => ZRoutedRpc.instance.InvokeRoutedRPC(
-                    ZRoutedRpc.Everybody,
-                    ValheimRoutedRpcAdmissions.ModShipSnapshot,
-                    new object[] { replica })))
+        if (!active.FanOutSnapshot(
+                runId, uid, ownerPeerId, sequence, position, rotation,
+                velocity, angularVelocity, speed, rudder, user))
           throw new InvalidOperationException("ship_snapshot_fanout_queue_failed");
         if (sequence == 1 || sequence % 25 == 0)
           active.Write("snapshot_applied", "unscoped",
@@ -542,10 +572,7 @@ public sealed class ShipCutoverRunner : IDisposable {
 
       if (senderPeerId != ZNet.instance.GetServerPeer()?.m_uid || zdo == null ||
           zdo.GetOwner() != ownerPeerId || !IsShipPrefab(zdo.GetPrefab()) ||
-          !string.Equals(
-              zdo.GetString(RunTagHash, string.Empty),
-              runId,
-              StringComparison.Ordinal))
+          !string.Equals(runId, CurrentRunId(), StringComparison.Ordinal))
         throw new InvalidOperationException("ship_snapshot_replica_authority_invalid");
       if (ownerPeerId == ZDOMan.GetSessionID()) return;
 
@@ -582,6 +609,70 @@ public sealed class ShipCutoverRunner : IDisposable {
 
   static string SnapshotKey(long ownerPeerId, ZDOID uid) =>
       ownerPeerId.ToString(CultureInfo.InvariantCulture) + ":" + uid;
+
+  bool FanOutSnapshot(
+      string runId,
+      ZDOID uid,
+      long ownerPeerId,
+      uint sequence,
+      Vector3 position,
+      Quaternion rotation,
+      Vector3 velocity,
+      Vector3 angularVelocity,
+      int speed,
+      float rudder,
+      long user) {
+    ZNetPeer[] peers = ZNet.instance?.GetPeers()?.Where(peer =>
+        peer != null && peer.m_uid != 0).ToArray() ?? Array.Empty<ZNetPeer>();
+    var candidates = peers.Select(peer =>
+        new VehicleSnapshotRelevanceCandidate(
+            peer.m_uid,
+            Vector3.Distance(position, peer.m_refPos))).ToArray();
+    float outer = Mathf.Max(
+        1.0f, PluginConfig.ZdoOuterRadiusMeters?.Value ?? 64.0f);
+    float hysteresis = Mathf.Max(4.0f, outer * 0.125f);
+    IReadOnlyList<VehicleSnapshotRelevanceDecision> decisions =
+        _snapshotRelevance.Reconcile(
+            "ship:" + uid, candidates, outer, hysteresis);
+    int delivered = 0;
+    foreach (VehicleSnapshotRelevanceDecision decision in decisions) {
+      if (decision.Transition is VehicleSnapshotRelevanceTransition.Entered
+          or VehicleSnapshotRelevanceTransition.Left)
+        Write(
+            decision.Transition == VehicleSnapshotRelevanceTransition.Entered
+                ? "snapshot_relevance_entered"
+                : "snapshot_relevance_left",
+            "unscoped",
+            "uid=" + uid +
+            " peer=" + decision.PeerId +
+            " distance=" + decision.DistanceMeters.ToString(
+                "0.###", CultureInfo.InvariantCulture) +
+            " enter_radius=" + outer.ToString(
+                "0.###", CultureInfo.InvariantCulture) +
+            " leave_radius=" + (outer + hysteresis).ToString(
+                "0.###", CultureInfo.InvariantCulture));
+      if (!decision.Deliver) continue;
+
+      ZPackage replica = BuildSnapshotPackage(
+          runId, uid, ownerPeerId, sequence, position, rotation,
+          velocity, angularVelocity, speed, rudder, user);
+      if (!_routedRpc.InvokeTyped(
+              "ship-snapshot",
+              () => ZRoutedRpc.instance.InvokeRoutedRPC(
+                  decision.PeerId,
+                  ValheimRoutedRpcAdmissions.ModShipSnapshot,
+                  new object[] { replica })))
+        return false;
+      delivered++;
+    }
+    if (sequence == 1 || sequence % 25 == 0)
+      Write("snapshot_relevance_fanout", "unscoped",
+          "uid=" + uid +
+          " candidates=" + decisions.Count +
+          " recipients=" + delivered +
+          " target=direct_per_observer");
+    return true;
+  }
 
   static ZPackage BuildSnapshotPackage(
       string runId,
@@ -780,6 +871,7 @@ public sealed class ShipCutoverRunner : IDisposable {
       ZDO zdo = ZDOMan.instance?.GetZDO(uid);
       if (package.GetPos() != package.Size() || !SafeToken(runId, 80) ||
           !SafeToken(actionId, 80) || uid.IsNone() || newOwner == 0 ||
+          !string.Equals(runId, CurrentRunId(), StringComparison.Ordinal) ||
           zdo == null || zdo.GetOwner() != senderPeerId ||
           !IsShipPrefab(zdo.GetPrefab()) ||
           !(ZNet.instance?.GetPeers()?.Any(peer => peer.m_uid == newOwner) ?? false))
@@ -861,10 +953,7 @@ public sealed class ShipCutoverRunner : IDisposable {
 
     ZDO zdo = ZDOMan.instance?.GetZDO(uid);
     if (zdo == null || !IsShipPrefab(zdo.GetPrefab()) ||
-        !string.Equals(
-            zdo.GetString(RunTagHash, string.Empty),
-            runId,
-            StringComparison.Ordinal)) {
+        !string.Equals(runId, CurrentRunId(), StringComparison.Ordinal)) {
       active.FailMatchingTransferProbe(
           runId, actionId, newOwner,
           "ship_transfer_replica_missing");

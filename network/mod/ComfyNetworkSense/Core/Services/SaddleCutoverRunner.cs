@@ -58,10 +58,12 @@ public sealed class SaddleCutoverRunner : IDisposable {
   readonly Dictionary<string, ZDOID> _serverMountsByRun =
       new(StringComparer.Ordinal);
   readonly HashSet<ZDOID> _releasedRiderEdgeRepairLogged = new();
+  readonly VehicleSnapshotRelevanceSet _snapshotRelevance = new();
 
   ZRoutedRpc _registeredRpc;
   MountProbe _probe;
   float _nextSnapshotAt;
+  float _nextAdoptionAt;
   bool _disposed;
 
   public SaddleCutoverRunner(
@@ -76,7 +78,11 @@ public sealed class SaddleCutoverRunner : IDisposable {
   public void Update(float now) {
     if (_disposed) return;
     EnsureHandlers();
-    if (Enabled() && !IsServer() && now >= _nextSnapshotAt) {
+    if (Enabled() && IsServer() && now >= _nextAdoptionAt) {
+      _nextAdoptionAt = now + 1.0f;
+      AdoptExistingServerMounts();
+    }
+    if (Enabled() && now >= _nextSnapshotAt) {
       _nextSnapshotAt = now + SnapshotIntervalSeconds;
       PublishOwnedSnapshots();
     }
@@ -91,7 +97,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
   /// </summary>
   public void LateUpdate(float deltaTime) {
     if (_disposed || !Enabled() || IsServer()) return;
-    foreach (Character mount in FindRunMounts(CurrentRunId())) {
+    foreach (Character mount in FindMounts()) {
       ZDO mountZdo = mount.GetComponent<ZNetView>()?.GetZDO();
       Sadle saddle = FindSaddle(mount);
       if (mountZdo == null || saddle?.m_attachPoint == null) continue;
@@ -119,7 +125,8 @@ public sealed class SaddleCutoverRunner : IDisposable {
       float error = Vector3.Distance(
           rider.transform.position, saddle.m_attachPoint.position);
       MountProbe probe = _probe;
-      if (probe != null && !probe.Terminal && probe.Mode == "observe") {
+      if (probe != null && !probe.Terminal && probe.Mode == "observe" &&
+          Selected(saddle)) {
         probe.AttachmentErrors.Add(error);
         probe.AttachmentSamples++;
         probe.MaxAttachmentError = Mathf.Max(
@@ -138,9 +145,11 @@ public sealed class SaddleCutoverRunner : IDisposable {
     if (parent.IsNone()) return false;
     GameObject parentObject = ZNetScene.instance?.FindInstance(parent);
     ZDO parentZdo = parentObject?.GetComponent<ZNetView>()?.GetZDO();
-    return parentZdo != null && !string.IsNullOrEmpty(
-        parentZdo.GetString(RunTagHash, string.Empty)) &&
-        FindSaddle(parentObject.GetComponent<Character>()) != null;
+    Character parentCharacter = parentObject?.GetComponent<Character>();
+    return parentZdo != null && parentCharacter != null &&
+        parentCharacter.IsTamed() &&
+        parentZdo.GetBool(ZDOVars.s_haveSaddleHash) &&
+        FindSaddle(parentCharacter) != null;
   }
 
   internal static bool AllowCanonicalParentSyncFor(
@@ -148,8 +157,9 @@ public sealed class SaddleCutoverRunner : IDisposable {
     rider = null;
     if (saddle == null || !Enabled()) return false;
     ZDO mountZdo = saddle.GetCharacter()?.GetComponent<ZNetView>()?.GetZDO();
-    if (mountZdo == null || string.IsNullOrEmpty(
-            mountZdo.GetString(RunTagHash, string.Empty))) return false;
+    Character mount = saddle.GetCharacter();
+    if (mountZdo == null || mount == null || !mount.IsTamed() ||
+        !mountZdo.GetBool(ZDOVars.s_haveSaddleHash)) return false;
     long user = mountZdo.GetLong(ZDOVars.s_user, 0L);
     if (user == 0) return false;
     rider = FindPlayerBySession(user);
@@ -163,8 +173,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
         previousOwner == 0 || newOwner == 0 || previousOwner == newOwner ||
         previousOwner != ZDOMan.GetSessionID()) return;
     ZDO zdo = saddle.GetCharacter()?.GetComponent<ZNetView>()?.GetZDO();
-    if (zdo == null || string.IsNullOrEmpty(
-            zdo.GetString(RunTagHash, string.Empty))) return;
+    if (zdo == null) return;
     string actionId = RoutedRpcCutoverRunner.CurrentInboundActionId;
     if (!SafeToken(actionId, 80))
       actionId = active._probe?.ActionId ?? "saddle-owner-grant";
@@ -191,8 +200,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
     SaddleCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || !Enabled() || saddle == null) return;
     ZDO zdo = saddle.GetCharacter()?.GetComponent<ZNetView>()?.GetZDO();
-    if (zdo == null || string.IsNullOrEmpty(
-            zdo.GetString(RunTagHash, string.Empty))) return;
+    if (zdo == null) return;
     active.Write("vanilla_release_observed", "unscoped",
         "uid=" + zdo.m_uid +
         " owner=" + zdo.GetOwner() +
@@ -236,9 +244,10 @@ public sealed class SaddleCutoverRunner : IDisposable {
       out string detail) {
     detail = string.Empty;
     if (!SafeToken(actionId, 80) || mode is not (
-            "spawn" or "wait_mount" or "rendezvous" or "drive" or
+            "spawn" or "spawn_untagged" or "wait_mount" or "rendezvous" or "drive" or
             "observe" or "wait_released" or "disconnect_reclaim" or
-            "observe_reclaim")) {
+            "observe_reclaim" or "server_handoff" or "observe_server" or
+            "relevance_leave" or "relevance_enter")) {
       detail = "saddle_probe_parameters_invalid";
       return false;
     }
@@ -304,6 +313,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
     }
     switch (probe.Mode) {
       case "spawn": TickSpawnProbe(probe); break;
+      case "spawn_untagged": TickSpawnProbe(probe); break;
       case "wait_mount": TickWaitMountProbe(probe, now); break;
       case "rendezvous": TickRendezvousProbe(probe); break;
       case "drive": TickDriveProbe(probe, now); break;
@@ -311,7 +321,128 @@ public sealed class SaddleCutoverRunner : IDisposable {
       case "wait_released": TickWaitReleasedProbe(probe); break;
       case "disconnect_reclaim": TickDisconnectReclaimProbe(probe, now); break;
       case "observe_reclaim": TickObserveReclaimProbe(probe); break;
+      case "server_handoff": TickServerHandoffProbe(probe, now); break;
+      case "observe_server": TickObserveServerProbe(probe, now); break;
+      case "relevance_leave": TickRelevanceProbe(probe, enter: false); break;
+      case "relevance_enter": TickRelevanceProbe(probe, enter: true); break;
     }
+  }
+
+  void TickServerHandoffProbe(MountProbe probe, float now) {
+    if (!TryFindRunMount(
+            probe.RunId, out Character mount, out ZNetView view,
+            out _) || view?.GetZDO() == null)
+      return;
+    ZDO zdo = view.GetZDO();
+    long serverPeerId = ZNet.instance?.GetServerPeer()?.m_uid ?? 0;
+    long localPeerId = Player.m_localPlayer?.GetZDOID().UserID ?? 0;
+    if (serverPeerId == 0 || localPeerId == 0) return;
+
+    if (!probe.RequestSent) {
+      if (!_clientAuthorities.TryGetValue(
+              zdo.m_uid, out ClientAuthority authority) ||
+          authority.OwnerPeerId != localPeerId ||
+          zdo.GetOwner() != localPeerId || !view.IsOwner() ||
+          zdo.GetLong(ZDOVars.s_user, 0L) != 0)
+        return;
+      probe.PreReclaimEpoch = authority.Epoch;
+      if (!SendTransfer(
+              probe.ActionId, probe.RunId, zdo.m_uid, serverPeerId)) {
+        FailProbe("saddle_server_handoff_queue_failed");
+        return;
+      }
+      probe.RequestSent = true;
+      probe.Phase = "waiting_server_owner_epoch";
+      return;
+    }
+
+    if (!_clientAuthorities.TryGetValue(
+            zdo.m_uid, out ClientAuthority current) ||
+        current.OwnerPeerId != serverPeerId ||
+        current.Epoch != checked(probe.PreReclaimEpoch + 1) ||
+        zdo.GetOwner() != serverPeerId || view.IsOwner())
+      return;
+    int sequence = ReplicaSequence(zdo.m_uid, current.Epoch);
+    if (!probe.ObservationStarted) {
+      probe.ObservationStarted = true;
+      probe.ControlStartedAt = now;
+      probe.StartSnapshotSequence = sequence;
+      probe.AuthorityEpoch = current.Epoch;
+      probe.Phase = "observing_server_owner_snapshots";
+      return;
+    }
+    probe.SnapshotAdvance = Math.Max(
+        probe.SnapshotAdvance,
+        Math.Max(0, sequence - probe.StartSnapshotSequence));
+    if (now - probe.ControlStartedAt >= 2.0f && probe.SnapshotAdvance >= 8)
+      CompleteProbe("saddle_server_handoff_complete uid=" + zdo.m_uid +
+          " owner=" + serverPeerId + " epoch=" + current.Epoch +
+          " snapshot_advance=" + probe.SnapshotAdvance);
+  }
+
+  void TickObserveServerProbe(MountProbe probe, float now) {
+    if (!TryFindRunMount(
+            probe.RunId, out Character mount, out ZNetView view,
+            out _) || view?.GetZDO() == null)
+      return;
+    ZDO zdo = view.GetZDO();
+    long serverPeerId = ZNet.instance?.GetServerPeer()?.m_uid ?? 0;
+    if (serverPeerId == 0 ||
+        !_clientAuthorities.TryGetValue(
+            zdo.m_uid, out ClientAuthority authority) ||
+        authority.OwnerPeerId != serverPeerId ||
+        zdo.GetOwner() != serverPeerId || view.IsOwner() ||
+        zdo.GetLong(ZDOVars.s_user, 0L) != 0)
+      return;
+    int sequence = ReplicaSequence(zdo.m_uid, authority.Epoch);
+    if (!probe.ObservationStarted) {
+      probe.ObservationStarted = true;
+      probe.ControlStartedAt = now;
+      probe.StartSnapshotSequence = sequence;
+      probe.AuthorityEpoch = authority.Epoch;
+      probe.Phase = "observing_server_owner_snapshots";
+      return;
+    }
+    probe.SnapshotAdvance = Math.Max(
+        probe.SnapshotAdvance,
+        Math.Max(0, sequence - probe.StartSnapshotSequence));
+    if (now - probe.ControlStartedAt >= 2.0f && probe.SnapshotAdvance >= 8)
+      CompleteProbe("saddle_server_observer_complete uid=" + zdo.m_uid +
+          " owner=" + serverPeerId + " epoch=" + authority.Epoch +
+          " snapshot_advance=" + probe.SnapshotAdvance);
+  }
+
+  void TickRelevanceProbe(MountProbe probe, bool enter) {
+    if (!_announcements.TryGetValue(
+            probe.RunId, out MountAnnouncement announcement)) return;
+    Player player = Player.m_localPlayer;
+    GameObject mountObject =
+        ZNetScene.instance?.FindInstance(announcement.Uid);
+    Vector3 mountPosition = mountObject != null
+        ? mountObject.transform.position
+        : announcement.Position;
+    Vector3 target = enter
+        ? mountPosition + new Vector3(3.0f, 2.5f, 3.0f)
+        : mountPosition + new Vector3(96.0f, 2.5f, 0.0f);
+    if (!probe.RequestSent) {
+      if (!player.TeleportTo(target, player.transform.rotation, true)) return;
+      probe.RequestSent = true;
+      probe.Phase = enter
+          ? "teleporting_into_snapshot_relevance"
+          : "teleporting_out_of_snapshot_relevance";
+      return;
+    }
+    if (player.IsTeleporting()) return;
+    float distance = Vector3.Distance(
+        player.transform.position, mountPosition);
+    bool reached = enter ? distance <= 12.0f : distance >= 88.0f;
+    if (!reached) return;
+    CompleteProbe(
+        (enter ? "saddle_relevance_enter_complete" :
+            "saddle_relevance_leave_complete") +
+        " uid=" + announcement.Uid +
+        " distance=" + distance.ToString(
+            "0.###", CultureInfo.InvariantCulture));
   }
 
   void TickSpawnProbe(MountProbe probe) {
@@ -321,6 +452,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
     ZPackage request = new();
     request.Write(probe.RunId);
     request.Write(probe.ActionId);
+    request.Write(probe.Mode == "spawn_untagged");
     request.SetPos(0);
     probe.RequestSent = _routedRpc.InvokeTyped(
         probe.ActionId,
@@ -672,18 +804,67 @@ public sealed class SaddleCutoverRunner : IDisposable {
     Write("handlers_registered", "unscoped", Role());
   }
 
+  void AdoptExistingServerMounts() {
+    foreach (Character mount in FindMounts()) {
+      ZDO zdo = mount.GetComponent<ZNetView>()?.GetZDO();
+      if (zdo != null) AdoptServerAuthority(zdo, "existing_mount_scan");
+    }
+  }
+
+  void AdoptServerAuthority(ZDO zdo, string source) {
+    if (zdo == null || _serverAuthorities.ContainsKey(zdo.m_uid) ||
+        !IsSaddlePrefab(zdo.GetPrefab()) ||
+        !zdo.GetBool(ZDOVars.s_tamed) ||
+        !zdo.GetBool(ZDOVars.s_haveSaddleHash)) return;
+    long owner = zdo.GetOwner();
+    if (owner == 0) return;
+    _serverAuthorities[zdo.m_uid] = new ServerAuthority(owner, 0, 1);
+    Write("saddle_authority_adopted", "unscoped",
+        "uid=" + zdo.m_uid +
+        " owner=" + owner +
+        " epoch=1 source=" + source +
+        " run_tag=" +
+        (string.IsNullOrEmpty(zdo.GetString(RunTagHash, string.Empty))
+            ? "absent" : "present"));
+  }
+
   void PublishOwnedSnapshots() {
-    ZNetPeer server = ZNet.instance?.GetServerPeer();
-    if (server == null || server.m_uid == 0) return;
-    foreach (Character mount in FindRunMounts(CurrentRunId())) {
+    bool serverPublisher = IsServer();
+    ZNetPeer server = serverPublisher ? null : ZNet.instance?.GetServerPeer();
+    if (!serverPublisher && (server == null || server.m_uid == 0)) return;
+    foreach (Character mount in FindMounts()) {
       ZNetView view = mount.GetComponent<ZNetView>();
       ZDO zdo = view?.GetZDO();
       Rigidbody body = mount.GetComponent<Rigidbody>();
       Sadle saddle = FindSaddle(mount);
       if (zdo == null || body == null || saddle == null || !view.IsOwner() ||
-          !_clientAuthorities.TryGetValue(
-              zdo.m_uid, out ClientAuthority authority) ||
-          authority.OwnerPeerId != ZNet.GetUID()) continue;
+          zdo.GetOwner() != ZNet.GetUID())
+        continue;
+      long authorityOwner;
+      uint authorityEpoch;
+      if (serverPublisher) {
+        AdoptServerAuthority(zdo, "server_owner_publish");
+        if (!_serverAuthorities.TryGetValue(
+                zdo.m_uid, out ServerAuthority serverAuthority) ||
+            serverAuthority.OwnerPeerId != ZNet.GetUID())
+          continue;
+        authorityOwner = serverAuthority.OwnerPeerId;
+        authorityEpoch = serverAuthority.Epoch;
+      } else {
+        if (!_clientAuthorities.TryGetValue(
+                zdo.m_uid, out ClientAuthority authority)) {
+          long owner = zdo.GetOwner();
+          if (owner == 0 || owner != ZNet.GetUID()) continue;
+          authority = new ClientAuthority(owner, 1);
+          _clientAuthorities[zdo.m_uid] = authority;
+          Write("saddle_authority_adopted", "unscoped",
+              "uid=" + zdo.m_uid + " owner=" + owner +
+              " epoch=1 source=existing_untagged_owner");
+        }
+        if (authority.OwnerPeerId != ZNet.GetUID()) continue;
+        authorityOwner = authority.OwnerPeerId;
+        authorityEpoch = authority.Epoch;
+      }
 
       _clientSnapshotSequences.TryGetValue(zdo.m_uid, out uint sequence);
       sequence++;
@@ -752,13 +933,25 @@ public sealed class SaddleCutoverRunner : IDisposable {
                       "0.###", CultureInfo.InvariantCulture));
         }
       }
-      ZPackage package = BuildSnapshotPackage(
-          CurrentRunId(), zdo.m_uid, authority.OwnerPeerId,
-          authority.Epoch, sequence, mount.transform.position,
-          mount.transform.rotation, body.linearVelocity,
-          body.angularVelocity, user,
-          saddle.GetStamina(), riderId, parentSync, attachJoint,
-          relativePosition, relativeRotation, relativeVelocity);
+      Snapshot snapshot = new() {
+          RunId = CurrentRunId(),
+          Uid = zdo.m_uid,
+          OwnerPeerId = authorityOwner,
+          Epoch = authorityEpoch,
+          Sequence = sequence,
+          Position = mount.transform.position,
+          Rotation = mount.transform.rotation,
+          Velocity = body.linearVelocity,
+          AngularVelocity = body.angularVelocity,
+          User = user,
+          Stamina = saddle.GetStamina(),
+          RiderId = riderId,
+          ParentSync = parentSync,
+          AttachJoint = attachJoint,
+          RelativePosition = relativePosition,
+          RelativeRotation = relativeRotation,
+          RelativeVelocity = relativeVelocity
+      };
       bool hadPreviousUser = _clientSnapshotUsers.TryGetValue(
           zdo.m_uid, out long previousUser);
       bool userChanged = hadPreviousUser && previousUser != user;
@@ -766,9 +959,9 @@ public sealed class SaddleCutoverRunner : IDisposable {
       if (sequence == 1 || userChanged) {
         Write(userChanged ? "snapshot_owner_user_transition" :
                 "snapshot_owner_published", "unscoped",
-            "uid=" + zdo.m_uid + " epoch=" + authority.Epoch +
+            "uid=" + zdo.m_uid + " epoch=" + authorityEpoch +
             " sequence=" + sequence +
-            " owner=" + authority.OwnerPeerId +
+            " owner=" + authorityOwner +
             " previous_user=" + (hadPreviousUser ? previousUser : 0L) +
             " user=" + user +
             " rider=" + riderId + " parent_sync=" + parentSync +
@@ -789,6 +982,24 @@ public sealed class SaddleCutoverRunner : IDisposable {
             " rider_speed=" + relativeVelocity.magnitude.ToString(
                 "0.###", CultureInfo.InvariantCulture));
       }
+      if (serverPublisher) {
+        _serverSnapshotSequences[SnapshotKey(zdo.m_uid, authorityEpoch)] =
+            sequence;
+        ApplyCanonicalSnapshot(zdo, snapshot);
+        if (!FanOutSnapshot(snapshot, "saddle-server-owner-snapshot")) {
+          Write("snapshot_fanout_failed", "unscoped",
+              "uid=" + zdo.m_uid + " source=server_owner");
+          continue;
+        }
+        if (sequence == 1 || sequence % 25 == 0)
+          Write("snapshot_server_accepted", "unscoped",
+              "uid=" + zdo.m_uid + " epoch=" + authorityEpoch +
+              " sequence=" + sequence + " owner=" + authorityOwner +
+              " source=server_owner");
+        continue;
+      }
+
+      ZPackage package = BuildSnapshotPackage(snapshot);
       ZRoutedRpc.instance.InvokeRoutedRPC(
           server.m_uid,
           ValheimRoutedRpcAdmissions.ModSaddleSnapshot,
@@ -814,10 +1025,10 @@ public sealed class SaddleCutoverRunner : IDisposable {
         bool senderResolved = TryResolveAuthenticatedPeer(
             senderPeerId, out ZDOID senderCharacterId,
             out Vector3 senderPosition);
-        bool runMatches = mountZdo != null && string.Equals(
-            mountZdo.GetString(RunTagHash, string.Empty),
-            snapshot.RunId, StringComparison.Ordinal) && string.Equals(
+        bool runMatches = string.Equals(
             snapshot.RunId, CurrentRunId(), StringComparison.Ordinal);
+        if (mountZdo != null)
+          active.AdoptServerAuthority(mountZdo, "snapshot");
         if (senderResolved && runMatches &&
             active._serverAuthorities.TryGetValue(
                 snapshot.Uid, out ServerAuthority currentAuthority) &&
@@ -832,12 +1043,10 @@ public sealed class SaddleCutoverRunner : IDisposable {
           return;
         }
         if (mountZdo == null || !IsSaddlePrefab(mountZdo.GetPrefab()) ||
+            !mountZdo.GetBool(ZDOVars.s_tamed) ||
+            !mountZdo.GetBool(ZDOVars.s_haveSaddleHash) ||
             serverSaddle?.m_attachPoint == null ||
             !senderResolved ||
-            !string.Equals(
-                mountZdo.GetString(RunTagHash, string.Empty),
-                snapshot.RunId,
-                StringComparison.Ordinal) ||
             !string.Equals(
                 snapshot.RunId, CurrentRunId(), StringComparison.Ordinal) ||
             !active._serverAuthorities.TryGetValue(
@@ -874,13 +1083,8 @@ public sealed class SaddleCutoverRunner : IDisposable {
         active._serverSnapshotSequences[key] = snapshot.Sequence;
 
         active.ApplyCanonicalSnapshot(mountZdo, snapshot);
-        ZPackage replica = BuildSnapshotPackage(snapshot);
-        if (!active._routedRpc.InvokeTyped(
-                "saddle-snapshot-fanout",
-                () => ZRoutedRpc.instance.InvokeRoutedRPC(
-                    ZRoutedRpc.Everybody,
-                    ValheimRoutedRpcAdmissions.ModSaddleSnapshot,
-                    new object[] { replica })))
+        if (!active.FanOutSnapshot(
+                snapshot, "saddle-snapshot-fanout"))
           throw new InvalidOperationException(
               "saddle_snapshot_fanout_queue_failed");
         if (snapshot.Sequence == 1 || snapshot.Sequence % 25 == 0)
@@ -902,18 +1106,23 @@ public sealed class SaddleCutoverRunner : IDisposable {
       }
       if (senderPeerId != serverPeer || mountZdo == null ||
           !IsSaddlePrefab(mountZdo.GetPrefab()) ||
-          !string.Equals(
-              mountZdo.GetString(RunTagHash, string.Empty),
-              snapshot.RunId,
-              StringComparison.Ordinal) ||
+          !mountZdo.GetBool(ZDOVars.s_tamed) ||
+          !mountZdo.GetBool(ZDOVars.s_haveSaddleHash) ||
           !string.Equals(
               snapshot.RunId, CurrentRunId(), StringComparison.Ordinal))
         throw new InvalidOperationException(
             "saddle_snapshot_replica_authority_invalid");
       if (!active._clientAuthorities.TryGetValue(
-              snapshot.Uid, out ClientAuthority clientAuthority))
-        throw new InvalidOperationException(
-            "saddle_snapshot_replica_authority_missing");
+              snapshot.Uid, out ClientAuthority clientAuthority)) {
+        clientAuthority =
+            new ClientAuthority(snapshot.OwnerPeerId, snapshot.Epoch);
+        active._clientAuthorities[snapshot.Uid] = clientAuthority;
+        active.Write("saddle_authority_adopted", "unscoped",
+            "uid=" + snapshot.Uid +
+            " owner=" + snapshot.OwnerPeerId +
+            " epoch=" + snapshot.Epoch +
+            " source=server_snapshot");
+      }
       if (snapshot.Epoch < clientAuthority.Epoch) {
         active.Write("snapshot_stale_epoch_rejected", "unscoped",
             "uid=" + snapshot.Uid + " stale_epoch=" + snapshot.Epoch +
@@ -1009,6 +1218,60 @@ public sealed class SaddleCutoverRunner : IDisposable {
           exception.GetType().Name + ":" + exception.Message);
       throw;
     }
+  }
+
+  bool FanOutSnapshot(Snapshot snapshot, string actionId) {
+    ZNetPeer[] peers = ZNet.instance?.GetPeers()?.Where(peer =>
+        peer != null && peer.m_uid != 0).ToArray() ?? Array.Empty<ZNetPeer>();
+    var candidates = peers.Select(peer =>
+        new VehicleSnapshotRelevanceCandidate(
+            peer.m_uid,
+            Vector3.Distance(snapshot.Position, peer.m_refPos))).ToArray();
+    float outer = Mathf.Max(
+        1.0f, PluginConfig.ZdoOuterRadiusMeters?.Value ?? 64.0f);
+    float hysteresis = Mathf.Max(4.0f, outer * 0.125f);
+    IReadOnlyList<VehicleSnapshotRelevanceDecision> decisions =
+        _snapshotRelevance.Reconcile(
+            "saddle:" + snapshot.Uid, candidates, outer, hysteresis);
+    int delivered = 0;
+    foreach (VehicleSnapshotRelevanceDecision decision in decisions) {
+      if (decision.Transition is VehicleSnapshotRelevanceTransition.Entered
+          or VehicleSnapshotRelevanceTransition.Left)
+        Write(
+            decision.Transition == VehicleSnapshotRelevanceTransition.Entered
+                ? "snapshot_relevance_entered"
+                : "snapshot_relevance_left",
+            "unscoped",
+             "uid=" + snapshot.Uid +
+             " epoch=" + snapshot.Epoch +
+             " peer=" + decision.PeerId +
+            " distance=" + decision.DistanceMeters.ToString(
+                "0.###", CultureInfo.InvariantCulture) +
+            " enter_radius=" + outer.ToString(
+                "0.###", CultureInfo.InvariantCulture) +
+            " leave_radius=" + (outer + hysteresis).ToString(
+                "0.###", CultureInfo.InvariantCulture));
+      if (!decision.Deliver) continue;
+
+      ZPackage replica = BuildSnapshotPackage(snapshot);
+      if (!_routedRpc.InvokeTyped(
+              actionId,
+              () => ZRoutedRpc.instance.InvokeRoutedRPC(
+                  decision.PeerId,
+                  ValheimRoutedRpcAdmissions.ModSaddleSnapshot,
+                  new object[] { replica })))
+        return false;
+      delivered++;
+    }
+    if (snapshot.Sequence == 1 || snapshot.Sequence % 25 == 0)
+      Write("snapshot_relevance_fanout", "unscoped",
+          "uid=" + snapshot.Uid +
+          " epoch=" + snapshot.Epoch +
+          " sequence=" + snapshot.Sequence +
+          " candidates=" + decisions.Count +
+          " recipients=" + delivered +
+          " target=direct_per_observer");
+    return true;
   }
 
   void ApplyCanonicalSnapshot(ZDO mountZdo, Snapshot snapshot) {
@@ -1148,6 +1411,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
       package.SetPos(0);
       runId = package.ReadString();
       actionId = package.ReadString();
+      bool untagged = package.GetPos() < package.Size() && package.ReadBool();
       if (package.GetPos() != package.Size() || !SafeToken(runId, 80) ||
           !SafeToken(actionId, 80) ||
           !string.Equals(runId, CurrentRunId(), StringComparison.Ordinal))
@@ -1197,27 +1461,36 @@ public sealed class SaddleCutoverRunner : IDisposable {
                 tameable.m_randomStartingName[0]);
             zdo.Set(ZDOVars.s_tamedNameAuthor, "host");
           }
-          zdo.Set(RunTagHash, runId);
+          if (!untagged) zdo.Set(RunTagHash, runId);
           zdo.Set(ActionTagHash, actionId);
           zdo.SetOwner(senderPeerId);
         });
         active._serverMountsByRun[runId] = zdo.m_uid;
-        active._serverAuthorities[zdo.m_uid] =
-            new ServerAuthority(senderPeerId, 0, 1);
+        if (untagged)
+          CutoverResidueSweeper.RegisterUntagged(runId, zdo.m_uid);
+        else
+          active._serverAuthorities[zdo.m_uid] =
+              new ServerAuthority(senderPeerId, 0, 1);
         active.Write("saddle_spawned", actionId,
             "uid=" + zdo.m_uid + " owner=" + senderPeerId +
             " prefab=Lox tamed=true saddle=true" +
             " sender_character=" + senderCharacterId +
             " position=" + Format(position) +
+            " run_tag=" + (untagged ? "absent" : "present") +
             " persistent=" + prefabView.m_persistent +
             " type=" + prefabView.m_type +
             " distant=" + prefabView.m_distant);
       }
-      ServerAuthority authority = active._serverAuthorities[zdo.m_uid];
+      ServerAuthority authority =
+          active._serverAuthorities.TryGetValue(
+              zdo.m_uid, out ServerAuthority knownAuthority)
+          ? knownAuthority
+          : new ServerAuthority(zdo.GetOwner(), 0, 1);
       active.SendSpawnResponse(
           ZRoutedRpc.Everybody,
           runId, actionId, zdo.m_uid, zdo.GetPosition(),
-          authority.OwnerPeerId, authority.Epoch, true, "spawned");
+          authority.OwnerPeerId, authority.Epoch, true, "spawned",
+          authorityPreseeded: !untagged);
     } catch (Exception exception) {
       active.Write("saddle_spawn_rejected", actionId,
           "sender=" + senderPeerId + " reason=" +
@@ -1226,14 +1499,16 @@ public sealed class SaddleCutoverRunner : IDisposable {
         active.SendSpawnResponse(
             senderPeerId,
             runId, actionId, ZDOID.None, Vector3.zero,
-            0, 0, false, exception.Message);
+            0, 0, false, exception.Message,
+            authorityPreseeded: false);
     }
   }
 
   void SendSpawnResponse(
       long targetPeerId,
       string runId, string actionId, ZDOID uid, Vector3 position,
-      long owner, uint epoch, bool accepted, string result) {
+      long owner, uint epoch, bool accepted, string result,
+      bool authorityPreseeded) {
     ZPackage response = new();
     response.Write(runId);
     response.Write(actionId);
@@ -1243,6 +1518,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
     response.Write(epoch);
     response.Write(accepted);
     response.Write(result ?? string.Empty);
+    response.Write(authorityPreseeded);
     response.SetPos(0);
     _routedRpc.InvokeTyped(
         actionId,
@@ -1264,11 +1540,13 @@ public sealed class SaddleCutoverRunner : IDisposable {
     uint epoch = package.ReadUInt();
     bool accepted = package.ReadBool();
     string result = package.ReadString();
+    bool authorityPreseeded =
+        package.GetPos() < package.Size() ? package.ReadBool() : true;
     MountProbe probe = active._probe;
     bool matchingProbe = probe != null && !probe.Terminal &&
         string.Equals(probe.RunId, runId, StringComparison.Ordinal) &&
         string.Equals(probe.ActionId, actionId, StringComparison.Ordinal) &&
-        probe.Mode is "spawn" or "wait_mount";
+        probe.Mode is "spawn" or "spawn_untagged" or "wait_mount";
     if (package.GetPos() != package.Size() ||
         senderPeerId != ZNet.instance.GetServerPeer()?.m_uid ||
         !SafeToken(runId, 80) || !SafeToken(actionId, 80) ||
@@ -1283,12 +1561,21 @@ public sealed class SaddleCutoverRunner : IDisposable {
     }
     active._announcements[runId] =
         new MountAnnouncement(uid, position, owner, epoch);
-    active._clientAuthorities[uid] = new ClientAuthority(owner, epoch);
-    if (probe != null && !probe.Terminal && probe.Mode == "spawn" &&
+    if (authorityPreseeded) {
+      active._clientAuthorities[uid] = new ClientAuthority(owner, epoch);
+    } else {
+      active._clientAuthorities.Remove(uid);
+      active.Write("saddle_untagged_announced", actionId,
+          "uid=" + uid + " owner=" + owner +
+          " epoch=" + epoch + " authority_preseeded=false");
+    }
+    if (probe != null && !probe.Terminal &&
+        (probe.Mode is "spawn" or "spawn_untagged") &&
         string.Equals(probe.RunId, runId, StringComparison.Ordinal) &&
         string.Equals(probe.ActionId, actionId, StringComparison.Ordinal))
       active.CompleteProbe("saddle_spawn_accepted uid=" + uid +
           " owner=" + owner + " epoch=" + epoch +
+          " authority_preseeded=" + authorityPreseeded +
           " position=" + Format(position));
   }
 
@@ -1314,6 +1601,18 @@ public sealed class SaddleCutoverRunner : IDisposable {
   void CommitServerVanillaGrant(
       ZDO zdo, string actionId, long previousOwner, long newOwner) {
     try {
+      if (zdo != null && !_serverAuthorities.ContainsKey(zdo.m_uid) &&
+          previousOwner != 0) {
+        _serverAuthorities[zdo.m_uid] =
+            new ServerAuthority(previousOwner, 0, 1);
+        Write("saddle_authority_adopted", "unscoped",
+            "uid=" + zdo.m_uid +
+            " owner=" + previousOwner +
+            " epoch=1 source=vanilla_grant_previous_owner" +
+            " run_tag=" +
+            (string.IsNullOrEmpty(zdo.GetString(RunTagHash, string.Empty))
+                ? "absent" : "present"));
+      }
       if (zdo == null || !_serverAuthorities.TryGetValue(
               zdo.m_uid, out ServerAuthority authority) ||
           authority.OwnerPeerId != previousOwner ||
@@ -1329,7 +1628,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
       });
       _serverAuthorities[zdo.m_uid] =
           new ServerAuthority(newOwner, previousOwner, nextEpoch);
-      string runId = zdo.GetString(RunTagHash, CurrentRunId());
+      string runId = CurrentRunId();
       SendTransferResponse(
           runId, actionId, zdo.m_uid, newOwner, newOwner,
           nextEpoch, true, "server_owner_transferred");
@@ -1372,25 +1671,29 @@ public sealed class SaddleCutoverRunner : IDisposable {
       if (package.GetPos() != package.Size() || !SafeToken(runId, 80) ||
           !SafeToken(actionId, 80) || uid.IsNone() || newOwner == 0 ||
           zdo == null || !string.Equals(
-              zdo.GetString(RunTagHash, string.Empty),
-              runId, StringComparison.Ordinal) ||
+              runId, CurrentRunId(), StringComparison.Ordinal) ||
           !active._serverAuthorities.TryGetValue(
               uid, out ServerAuthority authority) ||
           authority.OwnerPeerId != senderPeerId ||
           zdo.GetOwner() != senderPeerId || !IsSaddlePrefab(zdo.GetPrefab()) ||
-          !(ZNet.instance?.GetPeers()?.Any(
-              peer => peer.m_uid == newOwner) ?? false))
+          !zdo.GetBool(ZDOVars.s_tamed) ||
+          !zdo.GetBool(ZDOVars.s_haveSaddleHash) ||
+          (newOwner != ZNet.GetUID() &&
+           !(ZNet.instance?.GetPeers()?.Any(
+               peer => peer.m_uid == newOwner) ?? false)))
         throw new InvalidOperationException(
             "saddle_transfer_authority_invalid");
       uint nextEpoch = checked(authority.Epoch + 1);
+      long nextUser = SaddleAuthorityTransferPolicy.CanonicalUser(
+          newOwner, ZNet.GetUID());
       ZdoJournalCutoverRunner.ApplyCanonicalMutation(zdo, () => {
-        zdo.Set(ZDOVars.s_user, newOwner);
+        zdo.Set(ZDOVars.s_user, nextUser);
         zdo.SetOwner(newOwner);
       });
       active._serverAuthorities[uid] =
           new ServerAuthority(newOwner, senderPeerId, nextEpoch);
       active.SendTransferResponse(
-          runId, actionId, uid, newOwner, newOwner,
+          runId, actionId, uid, newOwner, nextUser,
           nextEpoch, true, "transferred");
       active.SendTransferResponse(
           runId, "saddle-stale-transfer-epoch", uid,
@@ -1404,7 +1707,8 @@ public sealed class SaddleCutoverRunner : IDisposable {
           runId, zdo, senderPeerId, authority.Epoch);
       active.Write("saddle_owner_transferred", actionId,
           "uid=" + uid + " old_owner=" + senderPeerId +
-          " new_owner=" + newOwner + " epoch=" + nextEpoch);
+          " new_owner=" + newOwner + " user=" + nextUser +
+          " epoch=" + nextEpoch);
     } catch (Exception exception) {
       active.Write("saddle_transfer_rejected", actionId,
           "sender=" + senderPeerId + " uid=" + uid +
@@ -1466,8 +1770,9 @@ public sealed class SaddleCutoverRunner : IDisposable {
     }
     ZDO zdo = ZDOMan.instance?.GetZDO(uid);
     if (zdo == null || !IsSaddlePrefab(zdo.GetPrefab()) ||
-        !string.Equals(zdo.GetString(RunTagHash, string.Empty),
-            runId, StringComparison.Ordinal)) {
+        !zdo.GetBool(ZDOVars.s_tamed) ||
+        !zdo.GetBool(ZDOVars.s_haveSaddleHash) ||
+        !string.Equals(runId, CurrentRunId(), StringComparison.Ordinal)) {
       active.FailMatchingProbe("saddle_transfer_replica_missing");
       return;
     }
@@ -1535,7 +1840,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
       }
       _serverAuthorities[pair.Key] =
           new ServerAuthority(fallback, 0, nextEpoch);
-      string runId = zdo.GetString(RunTagHash, CurrentRunId());
+      string runId = CurrentRunId();
       SendTransferResponse(
           runId, "saddle-disconnect-reclaim", pair.Key,
           fallback, 0, nextEpoch, true, "peer_detached_reclaimed");
@@ -1567,19 +1872,27 @@ public sealed class SaddleCutoverRunner : IDisposable {
         ? saddle.m_attachPoint.name : string.Empty;
     long staleUser = string.IsNullOrEmpty(attachJoint) ? 0L : staleOwner;
     if (staleUser == 0) staleRiderId = ZDOID.None;
-    ZPackage stale = BuildSnapshotPackage(
-        runId, zdo.m_uid, staleOwner, staleEpoch,
-        uint.MaxValue - 1, zdo.GetPosition(), zdo.GetRotation(),
-        Vector3.zero, Vector3.zero, staleUser,
-        zdo.GetFloat(ZDOVars.s_stamina, 0.0f), staleRiderId,
-        staleUser != 0, attachJoint, Vector3.zero, Quaternion.identity,
-        Vector3.zero);
-    bool queued = _routedRpc.InvokeTyped(
-        "saddle-stale-authority-epoch",
-        () => ZRoutedRpc.instance.InvokeRoutedRPC(
-            ZRoutedRpc.Everybody,
-            ValheimRoutedRpcAdmissions.ModSaddleSnapshot,
-            new object[] { stale }));
+    Snapshot stale = new() {
+        RunId = runId,
+        Uid = zdo.m_uid,
+        OwnerPeerId = staleOwner,
+        Epoch = staleEpoch,
+        Sequence = uint.MaxValue - 1,
+        Position = zdo.GetPosition(),
+        Rotation = zdo.GetRotation(),
+        Velocity = Vector3.zero,
+        AngularVelocity = Vector3.zero,
+        User = staleUser,
+        Stamina = zdo.GetFloat(ZDOVars.s_stamina, 0.0f),
+        RiderId = staleRiderId,
+        ParentSync = staleUser != 0,
+        AttachJoint = attachJoint,
+        RelativePosition = Vector3.zero,
+        RelativeRotation = Quaternion.identity,
+        RelativeVelocity = Vector3.zero
+    };
+    bool queued = FanOutSnapshot(
+        stale, "saddle-stale-authority-epoch");
     Write(
         queued ? "stale_epoch_probe_sent" : "stale_epoch_probe_failed",
         "saddle-stale-authority-epoch",
@@ -1697,6 +2010,22 @@ public sealed class SaddleCutoverRunner : IDisposable {
     mount = null;
     view = null;
     saddle = null;
+    SaddleCutoverRunner active = Volatile.Read(ref _active);
+    if (active != null && active._announcements.TryGetValue(
+            runId, out MountAnnouncement announcement)) {
+      GameObject announcedObject =
+          ZNetScene.instance?.FindInstance(announcement.Uid);
+      Character announcedMount = announcedObject?.GetComponent<Character>();
+      ZNetView announcedView = announcedObject?.GetComponent<ZNetView>();
+      Sadle announcedSaddle = FindSaddle(announcedMount);
+      if (announcedMount != null && announcedView?.GetZDO() != null &&
+          announcedSaddle != null) {
+        mount = announcedMount;
+        view = announcedView;
+        saddle = announcedSaddle;
+        return true;
+      }
+    }
     foreach (Character candidate in FindRunMounts(runId)) {
       ZNetView candidateView = candidate.GetComponent<ZNetView>();
       Sadle candidateSaddle = FindSaddle(candidate);
@@ -1710,14 +2039,25 @@ public sealed class SaddleCutoverRunner : IDisposable {
   }
 
   static IEnumerable<Character> FindRunMounts(string runId) {
-    foreach (Character candidate in Character.GetAllCharacters().ToArray()) {
-      if (candidate == null || candidate.IsPlayer() ||
-          !candidate.gameObject.activeInHierarchy) continue;
+    foreach (Character candidate in FindMounts()) {
       ZDO zdo = candidate.GetComponent<ZNetView>()?.GetZDO();
       if (zdo != null && string.Equals(
               zdo.GetString(RunTagHash, string.Empty),
-              runId, StringComparison.Ordinal) && FindSaddle(candidate) != null)
+              runId, StringComparison.Ordinal))
         yield return candidate;
+    }
+  }
+
+  static IEnumerable<Character> FindMounts() {
+    foreach (Character candidate in Character.GetAllCharacters().ToArray()) {
+      if (candidate == null || candidate.IsPlayer() ||
+          !candidate.gameObject.activeInHierarchy || !candidate.IsTamed())
+        continue;
+      ZDO zdo = candidate.GetComponent<ZNetView>()?.GetZDO();
+      Sadle saddle = FindSaddle(candidate);
+      if (zdo == null || !zdo.GetBool(ZDOVars.s_haveSaddleHash) ||
+          saddle == null || !saddle.gameObject.activeInHierarchy) continue;
+      yield return candidate;
     }
   }
 
@@ -1733,9 +2073,15 @@ public sealed class SaddleCutoverRunner : IDisposable {
   }
 
   static bool Selected(Sadle saddle) {
-    ZDO zdo = saddle?.GetCharacter()?.GetComponent<ZNetView>()?.GetZDO();
-    return zdo != null && !string.IsNullOrEmpty(
-        zdo.GetString(RunTagHash, string.Empty));
+    Character mount = saddle?.GetCharacter();
+    ZDO zdo = mount?.GetComponent<ZNetView>()?.GetZDO();
+    if (zdo == null || !mount.IsTamed() ||
+        !zdo.GetBool(ZDOVars.s_haveSaddleHash)) return false;
+    if (!string.IsNullOrEmpty(zdo.GetString(RunTagHash, string.Empty)))
+      return true;
+    SaddleCutoverRunner active = Volatile.Read(ref _active);
+    return active != null && active._announcements.Values.Any(
+        announcement => announcement.Uid == zdo.m_uid);
   }
 
   static Player FindPlayerBySession(long user) {

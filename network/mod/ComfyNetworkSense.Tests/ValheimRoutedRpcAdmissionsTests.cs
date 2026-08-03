@@ -58,8 +58,20 @@ public sealed class ValheimRoutedRpcAdmissionsTests
             "Controls",
             "FlashShield",
             "Forward",
+            "RPC_AnimateLever",
+            "RPC_AnimateLeverReturn",
+            "RPC_Attack",
             "RPC_DamageText",
             "RPC_HealthChanged",
+            "RPC_HitNow",
+            "RPC_IncinerateRespons",
+            "RPC_RequestIncinerate",
+            "RPC_SetFuel",
+            "RPC_SetFuelAmount",
+            "RPC_SetSlotVisual",
+            "RPC_Tap",
+            "RPC_ToggleOn",
+            "RPC_UpdateEffects",
             "RPC_UpdateMaterial",
             "ReleaseControl",
             "RemoveSaddle",
@@ -107,6 +119,73 @@ public sealed class ValheimRoutedRpcAdmissionsTests
         p1.Where(entry => entry.Scope == ValheimRoutedRpcScope.Global)
             .Select(entry => entry.Name)
             .OrderBy(name => name, StringComparer.Ordinal));
+  }
+
+  [Fact]
+  public void StationFamilies_AllExtractedRpcsHaveExactSharedRoutes() {
+    string path = Path.Combine(
+        AppContext.BaseDirectory,
+        "synthetic_baseline_v2.json");
+    using JsonDocument baseline = JsonDocument.Parse(File.ReadAllText(path));
+    JsonElement instanceRpcs = baseline.RootElement.GetProperty("InstanceRPCs");
+    string[] stationRegistrations = {
+        "Beehive.Awake",
+        "CookingStation.Awake",
+        "Fermenter.Awake",
+        "Fireplace.Awake",
+        "Incinerator.Awake",
+        "SapCollector.Awake",
+        "ShieldGenerator.Start",
+        "Smelter.Awake"
+    };
+    (string Name, ValheimRoutedRpcPriority Priority)[] expected = {
+        ("RPC_AddFuel", ValheimRoutedRpcPriority.P1),
+        ("RPC_AddFuelAmount", ValheimRoutedRpcPriority.P1),
+        ("RPC_AddItem", ValheimRoutedRpcPriority.P1),
+        ("RPC_AddOre", ValheimRoutedRpcPriority.P1),
+        ("RPC_AnimateLever", ValheimRoutedRpcPriority.P2),
+        ("RPC_AnimateLeverReturn", ValheimRoutedRpcPriority.P2),
+        ("RPC_Attack", ValheimRoutedRpcPriority.P2),
+        ("RPC_EmptyProcessed", ValheimRoutedRpcPriority.P1),
+        ("RPC_Extract", ValheimRoutedRpcPriority.P1),
+        ("RPC_HitNow", ValheimRoutedRpcPriority.P2),
+        ("RPC_IncinerateRespons", ValheimRoutedRpcPriority.P2),
+        ("RPC_RemoveDoneItem", ValheimRoutedRpcPriority.P1),
+        ("RPC_RequestIncinerate", ValheimRoutedRpcPriority.P2),
+        ("RPC_SetFuel", ValheimRoutedRpcPriority.P2),
+        ("RPC_SetFuelAmount", ValheimRoutedRpcPriority.P2),
+        ("RPC_SetSlotVisual", ValheimRoutedRpcPriority.P2),
+        ("RPC_Tap", ValheimRoutedRpcPriority.P2),
+        ("RPC_ToggleOn", ValheimRoutedRpcPriority.P2),
+        ("RPC_UpdateEffects", ValheimRoutedRpcPriority.P2)
+    };
+
+    string[] extractedStationMethods = instanceRpcs.EnumerateObject()
+        .Where(property => property.Value.GetProperty("registrations")
+            .EnumerateArray()
+            .Select(element => element.GetString())
+            .Any(registration => stationRegistrations.Contains(
+                registration,
+                StringComparer.Ordinal)))
+        .Select(property => property.Name)
+        .OrderBy(name => name, StringComparer.Ordinal)
+        .ToArray();
+    Assert.Equal(
+        expected.Select(row => row.Name),
+        extractedStationMethods);
+
+    foreach ((string name, ValheimRoutedRpcPriority priority) in expected) {
+      ValheimRoutedRpcAdmission admission = Find(name);
+      Assert.Equal(priority, admission.Priority);
+      Assert.Equal(ValheimRoutedRpcScope.Instance, admission.Scope);
+      Assert.Equal(ValheimRoutedRpcDisposition.Route, admission.Disposition);
+      Assert.Empty(admission.TargetKinds);
+      Assert.Equal(
+          ReadSignatures(instanceRpcs.GetProperty(name))
+              .OrderBy(value => value, StringComparer.Ordinal),
+          admission.PayloadSignatures
+              .OrderBy(value => value, StringComparer.Ordinal));
+    }
   }
 
   [Fact]
