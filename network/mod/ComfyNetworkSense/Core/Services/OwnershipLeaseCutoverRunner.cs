@@ -1180,6 +1180,8 @@ static class OwnershipLeaseOwnerPatches {
   static bool SetOwnerPrefix(ZDO __instance, long uid) =>
       !OwnershipLeaseCutoverRunner.ShouldBlockRelease(__instance, uid) &&
       !ContainerCutoverRunner.ShouldBlockNativeOwnerReassignment(
+          __instance, uid) &&
+      !SaddleCutoverRunner.ShouldBlockNativeOwnerReassignment(
           __instance, uid);
 }
 

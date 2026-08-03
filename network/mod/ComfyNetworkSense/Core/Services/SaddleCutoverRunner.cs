@@ -58,6 +58,10 @@ public sealed class SaddleCutoverRunner : IDisposable {
   readonly Dictionary<string, ZDOID> _serverMountsByRun =
       new(StringComparer.Ordinal);
   readonly HashSet<ZDOID> _releasedRiderEdgeRepairLogged = new();
+  readonly HashSet<string> _reportedOwnerSuppressions =
+      new(StringComparer.Ordinal);
+  readonly HashSet<string> _reportedOwnerRepairs =
+      new(StringComparer.Ordinal);
   readonly VehicleSnapshotRelevanceSet _snapshotRelevance = new();
 
   ZRoutedRpc _registeredRpc;
@@ -215,6 +219,34 @@ public sealed class SaddleCutoverRunner : IDisposable {
     SaddleCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || !Enabled() || !IsServer() || peerId == 0) return;
     active.ReclaimDetachedPeer(peerId);
+  }
+
+  internal static bool ShouldBlockNativeOwnerReassignment(
+      ZDO zdo, long attemptedOwner) {
+    SaddleCutoverRunner active = Volatile.Read(ref _active);
+    if (active == null || active._disposed || !Enabled() || !IsServer() ||
+        zdo == null || !active._serverAuthorities.TryGetValue(
+            zdo.m_uid, out ServerAuthority authority))
+      return false;
+    long serverPeerId = ZNet.GetUID();
+    long currentOwner = zdo.GetOwner();
+    bool blocked =
+        SaddleAuthorityTransferPolicy.BlocksNativeServerOwnerReassignment(
+            OwnershipLeaseCutoverRunner.ReleaseScopeDepth > 0,
+            authority.OwnerPeerId,
+            serverPeerId,
+            currentOwner,
+            attemptedOwner);
+    if (!blocked) return false;
+    string key = zdo.m_uid + ":" + attemptedOwner;
+    if (active._reportedOwnerSuppressions.Add(key))
+      active.Write("saddle_native_owner_reassignment_suppressed", "unscoped",
+          "uid=" + zdo.m_uid +
+          " held_owner=" + currentOwner +
+          " attempted_owner=" + attemptedOwner +
+          " canonical_owner=" + authority.OwnerPeerId +
+          " source=ZDOMan.ReleaseNearbyZDOS");
+    return true;
   }
 
   internal static void NotifyLocalControls(
@@ -1010,11 +1042,23 @@ public sealed class SaddleCutoverRunner : IDisposable {
           pair.Value.OwnerPeerId != serverPeerId)
         continue;
       ZDO zdo = ZDOMan.instance?.GetZDO(pair.Key);
-      if (zdo == null || zdo.GetOwner() != serverPeerId ||
-          !IsSaddlePrefab(zdo.GetPrefab()) ||
+      if (zdo == null || !IsSaddlePrefab(zdo.GetPrefab()) ||
           !zdo.GetBool(ZDOVars.s_tamed) ||
           !zdo.GetBool(ZDOVars.s_haveSaddleHash))
         continue;
+      long currentOwner = zdo.GetOwner();
+      if (currentOwner != serverPeerId) {
+        ZdoJournalCutoverRunner.ApplyCanonicalMutation(
+            zdo, () => zdo.SetOwner(serverPeerId));
+        string repairKey = zdo.m_uid + ":" + currentOwner;
+        if (_reportedOwnerRepairs.Add(repairKey))
+          Write("saddle_canonical_owner_drift_repaired", "unscoped",
+              "uid=" + zdo.m_uid +
+              " previous_owner=" + currentOwner +
+              " owner=" + serverPeerId +
+              " epoch=" + pair.Value.Epoch +
+              " representation=zdo_only");
+      }
       long user = zdo.GetLong(ZDOVars.s_user, 0L);
       if (user != 0L) {
         Write("snapshot_server_owner_invalid", "unscoped",

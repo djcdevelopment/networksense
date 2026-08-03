@@ -2,6 +2,11 @@
 
 ### Unreleased
 
+- Fence a canonical dedicated-server saddle owner at the existing
+  `ReleaseNearbyZDOS` / `ZDO.SetOwner` seam. The r40 physical run proved the
+  ZDO-only publisher emitted two snapshots before vanilla's two-second owner
+  sweep revoked it. r41 suppresses and logs that exact native reassignment,
+  while the publisher repairs and logs any owner drift that reaches it.
 - Make saddle discovery requests explicitly non-creating. A second client's
   wait probe can now request an announcement without racing the designated
   spawner, and spawn responses derive discovery state from the target ZDO's
