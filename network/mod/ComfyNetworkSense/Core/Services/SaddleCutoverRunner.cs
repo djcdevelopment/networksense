@@ -57,6 +57,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
       new(StringComparer.Ordinal);
   readonly Dictionary<string, ZDOID> _serverMountsByRun =
       new(StringComparer.Ordinal);
+  readonly HashSet<ZDOID> _releasedRiderEdgeRepairLogged = new();
 
   ZRoutedRpc _registeredRpc;
   MountProbe _probe;
@@ -688,6 +689,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
       sequence++;
       _clientSnapshotSequences[zdo.m_uid] = sequence;
       long user = zdo.GetLong(ZDOVars.s_user, 0L);
+      if (user == 0L) RepairReleasedRiderEdges(zdo.m_uid);
       ZDOID riderId = ZDOID.None;
       bool parentSync = false;
       string attachJoint = string.Empty;
@@ -1063,20 +1065,46 @@ public sealed class SaddleCutoverRunner : IDisposable {
         rider, () => ClearRiderEdge(rider, mountId));
   }
 
-  void ClearReplicaRiderEdges(ZDOID mountId) {
+  int ClearReplicaRiderEdges(ZDOID mountId) {
+    int cleared = 0;
     if (_replicaRidersByMount.TryGetValue(
             mountId, out ZDOID knownRider)) {
       ZDO knownZdo = ZDOMan.instance?.GetZDO(knownRider);
-      if (knownZdo != null)
+      if (knownZdo != null && knownZdo.GetConnectionZDOID(
+              ZDOExtraData.ConnectionType.SyncTransform) == mountId) {
         ClearRiderEdge(knownZdo, mountId);
+        cleared++;
+      }
     }
     foreach (Player player in Player.GetAllPlayers()) {
       ZDO rider = player?.GetComponent<ZNetView>()?.GetZDO();
       if (rider != null && rider.GetConnectionZDOID(
-              ZDOExtraData.ConnectionType.SyncTransform) == mountId)
+              ZDOExtraData.ConnectionType.SyncTransform) == mountId) {
         ClearRiderEdge(rider, mountId);
+        cleared++;
+      }
     }
     _replicaRidersByMount.Remove(mountId);
+    return cleared;
+  }
+
+  /// <summary>
+  /// Native release clears s_user immediately, but a delayed durable player
+  /// snapshot can restore the old SyncTransform parent afterward. An empty
+  /// canonical rider token makes that edge stale by definition. Repair it on
+  /// every owner snapshot and immediately before autonomous-AI proof so the
+  /// player replica cannot remain parented to an unridden mount.
+  /// </summary>
+  internal int RepairReleasedRiderEdges(ZDOID mountId) {
+    ZDO mount = ZDOMan.instance?.GetZDO(mountId);
+    if (_disposed || mount == null ||
+        mount.GetLong(ZDOVars.s_user, 0L) != 0L) return 0;
+    int cleared = ClearReplicaRiderEdges(mountId);
+    if (cleared > 0 && _releasedRiderEdgeRepairLogged.Add(mountId))
+      Write("released_rider_edge_repaired", "unscoped",
+          "uid=" + mountId + " owner=" + mount.GetOwner() +
+          " cleared=" + cleared);
+    return cleared;
   }
 
   static void ApplyRiderEdge(ZDO rider, Snapshot snapshot) {
@@ -1178,6 +1206,7 @@ public sealed class SaddleCutoverRunner : IDisposable {
             new ServerAuthority(senderPeerId, 0, 1);
         active.Write("saddle_spawned", actionId,
             "uid=" + zdo.m_uid + " owner=" + senderPeerId +
+            " prefab=Lox tamed=true saddle=true" +
             " sender_character=" + senderCharacterId +
             " position=" + Format(position) +
             " persistent=" + prefabView.m_persistent +
@@ -1777,6 +1806,29 @@ public sealed class SaddleCutoverRunner : IDisposable {
   uint ClientEpoch(ZDOID uid) =>
       _clientAuthorities.TryGetValue(uid, out ClientAuthority value)
           ? value.Epoch : 0;
+
+  /// <summary>
+  /// Exposes only the accepted client-side authority tuple needed by the
+  /// autonomous-creature canary. The saddle runner remains the sole owner of
+  /// transfer epochs and canonical snapshot sequencing.
+  /// </summary>
+  internal bool TryGetClientAuthorityState(
+      ZDOID uid,
+      out long ownerPeerId,
+      out uint epoch,
+      out int replicaSequence) {
+    ownerPeerId = 0;
+    epoch = 0;
+    replicaSequence = 0;
+    if (_disposed || uid.IsNone() || !_clientAuthorities.TryGetValue(
+            uid, out ClientAuthority authority) ||
+        authority.OwnerPeerId == 0 || authority.Epoch == 0)
+      return false;
+    ownerPeerId = authority.OwnerPeerId;
+    epoch = authority.Epoch;
+    replicaSequence = ReplicaSequence(uid, epoch);
+    return true;
+  }
 
   static void ApplyMountFields(ZDO zdo, Snapshot snapshot) {
     zdo.SetPosition(snapshot.Position);

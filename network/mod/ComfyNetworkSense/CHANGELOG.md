@@ -2,6 +2,22 @@
 
 ### Unreleased
 
+- Add the selected autonomous-creature authority canary around an actual,
+  tamed, unridden Lox. Harmony instrumentation at `BaseAI.UpdateAI` requires
+  the canonical owner to execute `MonsterAI`, the replica to be owner-gated,
+  and both rendered clients to observe movement through numbered canonical
+  snapshots across initial ownership, saddle transfer, and disconnect reclaim.
+- Add a fail-closed C10a creature scenario/reducer with exact owner epochs,
+  bounded first autonomous AI execution after native release and reclaim,
+  stale-authority fences, native-zero ledgers, exact image provenance, and
+  destruction of the one tagged Lox. The accepted saddle contract is reused
+  only to move authority; ridden movement cannot satisfy the AI proof.
+- Repair a released rider's stale `SyncTransform` parent edge whenever
+  canonical `s_user` is empty. The r35 physical falsifier proved autonomous AI
+  resumed in 23 ms after transfer, then a delayed durable player snapshot
+  restored the old mount connection and prevented the owner proof from
+  starting; released-edge convergence is now continuous and explicitly logged.
+
 - Add the first canonical container transaction: an actual tagged wood chest
   remains server-owned while two physical clients invoke `Container.TakeAll`
   at the same revision. The server commits exactly one Raspberry, rejects the

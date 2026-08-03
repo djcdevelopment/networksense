@@ -37,6 +37,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly RoutedRpcCutoverRunner _routedRpc;
   readonly ShipCutoverRunner _ship;
   readonly SaddleCutoverRunner _saddle;
+  readonly CreatureAiCutoverRunner _creatureAi;
   readonly ContainerCutoverRunner _container;
   readonly ZdoJournalCutoverRunner _zdoJournal;
   readonly OwnershipLeaseCutoverRunner _ownershipLease;
@@ -69,6 +70,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       RoutedRpcCutoverRunner routedRpc,
       ShipCutoverRunner ship,
       SaddleCutoverRunner saddle,
+      CreatureAiCutoverRunner creatureAi,
       ContainerCutoverRunner container,
       ZdoJournalCutoverRunner zdoJournal,
       OwnershipLeaseCutoverRunner ownershipLease,
@@ -79,6 +81,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
     _routedRpc = routedRpc;
     _ship = ship;
     _saddle = saddle;
+    _creatureAi = creatureAi;
     _container = container;
     _zdoJournal = zdoJournal;
     _ownershipLease = ownershipLease;
@@ -282,6 +285,11 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "saddle_observe":
           if (action.duration_seconds is < 3.0f or > 20.0f)
             return "manifest_saddle_duration_invalid";
+          break;
+        case "creature_ai_drive":
+        case "creature_ai_observe":
+          if (action.duration_seconds is < 3.0f or > 20.0f)
+            return "manifest_creature_ai_duration_invalid";
           break;
         case "container_spawn":
         case "container_wait":
@@ -619,6 +627,33 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           _sessionProbeStarted = true;
         }
         if (!_saddle.TryGetProbeResult(
+                _active.id,
+                out bool terminal,
+                out bool success,
+                out string probeDetail) || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "creature_ai_drive":
+      case "creature_ai_observe": {
+        if (!_sessionProbeStarted) {
+          string mode = kind == "creature_ai_drive" ? "drive" : "observe";
+          if (!_creatureAi.BeginProbe(
+                  _active.id,
+                  mode,
+                  _active.duration_seconds,
+                  Mathf.Max(5.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail is
+                "creature_ai_probe_client_not_ready" or
+                "creature_ai_cutover_not_enabled") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_creatureAi.TryGetProbeResult(
                 _active.id,
                 out bool terminal,
                 out bool success,
