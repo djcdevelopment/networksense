@@ -189,12 +189,16 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       Volatile.Write(ref _interestZoneX, currentZone.x);
       Volatile.Write(ref _interestZoneY, currentZone.y);
     }
+    bool refreshInterest = registerInterest &&
+        ZdoJournalInterestPolicy.ShouldRefreshProcessRegistration(
+            _hasRegisteredInterest);
 
     if (CanonicalEnabled()) {
       if (server) {
         QueueCanonicalMutations();
       } else {
-        if (registerInterest && QueueCanonicalInterest(interestRadius))
+        if (registerInterest &&
+            QueueCanonicalInterest(interestRadius, refreshInterest))
           MarkInterestRegistered(currentZone, interestRadius, now);
         FlushCanonicalAcks();
       }
@@ -205,7 +209,8 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         && Interlocked.CompareExchange(ref _workerInFlight, 1, 0) == 0) {
       try {
         _nextWorker = now + WorkerSeconds;
-        _ = Task.Run(() => Work(server, registerInterest));
+        _ = Task.Run(() => Work(
+            server, registerInterest, refreshInterest));
         if (registerInterest) MarkInterestRegistered(
             currentZone,
             _probe != null && !_probe.Terminal
@@ -390,13 +395,18 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     });
   }
 
-  public static void CaptureMutation(ZDO zdo) {
+  public static void CaptureMutation(ZDO zdo) =>
+      CaptureMutation(zdo, receiptRequired: false);
+
+  static void CaptureMutation(ZDO zdo, bool receiptRequired) {
     ZdoJournalCutoverRunner active = Volatile.Read(ref _active);
     if (active == null || !Enabled() || !IsServer() || zdo == null
         || _canonicalMutationBatchDepth > 0) return;
     try {
       if (!active.ServerInterestContains(zdo.GetSector())) return;
-      active._serverOutbound.Enqueue(active.Snapshot(zdo, tombstone: false));
+      JournalObject snapshot = active.Snapshot(zdo, tombstone: false);
+      snapshot.receipt_required = receiptRequired;
+      active._serverOutbound.Enqueue(snapshot);
     } catch (Exception exception) {
       active.Write("capture_failed", "mutation",
           exception.GetType().Name + ":" + exception.Message);
@@ -408,7 +418,20 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   /// canonical ZDO while emitting one journal object, not one full object for
   /// every individual position/rotation/velocity field mutation.
   /// </summary>
-  public static void ApplyCanonicalMutation(ZDO zdo, Action apply) {
+  public static void ApplyCanonicalMutation(ZDO zdo, Action apply) =>
+      ApplyCanonicalMutation(zdo, apply, receiptRequired: false);
+
+  /// <summary>
+  /// Applies one canonical mutation and requests an observable Gateway receipt
+  /// plus per-recipient delivery telemetry. Physical cutover canaries use this
+  /// overload for the exact objects whose fan-out is part of the verdict.
+  /// </summary>
+  public static void ApplyCanonicalMutationWithReceipt(
+      ZDO zdo, Action apply) =>
+      ApplyCanonicalMutation(zdo, apply, receiptRequired: true);
+
+  static void ApplyCanonicalMutation(
+      ZDO zdo, Action apply, bool receiptRequired) {
     if (zdo == null) throw new ArgumentNullException(nameof(zdo));
     if (apply == null) throw new ArgumentNullException(nameof(apply));
     _canonicalMutationBatchDepth++;
@@ -417,7 +440,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     } finally {
       _canonicalMutationBatchDepth--;
     }
-    CaptureMutation(zdo);
+    CaptureMutation(zdo, receiptRequired);
   }
 
   public static void NotifyHardRelocation(Vector3 target) {
@@ -788,12 +811,14 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         Write("mutation_posted", "server",
             "transport=canonical_session source_seq=" + value.source_seq
             + " object_revision=" + value.object_revision
+            + " uid=" + value.uid_user + ":" + value.uid_id
             + " tombstone=" + value.tombstone
-            + " delivery_only=" + value.delivery_only);
+            + " delivery_only=" + value.delivery_only
+            + " receipt_required=" + value.receipt_required);
     }
   }
 
-  bool QueueCanonicalInterest(int radiusZones) {
+  bool QueueCanonicalInterest(int radiusZones, bool refresh) {
     int zoneX = Volatile.Read(ref _interestZoneX);
     int zoneY = Volatile.Read(ref _interestZoneY);
     long zoneEpoch = Interlocked.Read(ref _interestZoneEpoch) + 1;
@@ -805,12 +830,14 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         + ",\"zone_y\":" + zoneY.ToString(CultureInfo.InvariantCulture)
         + ",\"radius_zones\":"
         + radiusZones.ToString(CultureInfo.InvariantCulture)
-        + ",\"refresh\":false";
+        + ",\"refresh\":" +
+            refresh.ToString().ToLowerInvariant();
     if (!_gameSession.TryQueueZdoJournalInterest(fields)) return false;
     Interlocked.Exchange(ref _interestZoneEpoch, zoneEpoch);
     Write("canonical_interest_queued", _probe?.ActionId ?? "client",
         "zone_epoch=" + zoneEpoch + " zone=" + zoneX + "," + zoneY
         + " radius_zones=" + radiusZones
+        + " refresh=" + refresh.ToString().ToLowerInvariant()
         + " logical_peer_id=" + _gameSession.LogicalPeerId);
     return true;
   }
@@ -896,13 +923,13 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
     }
   }
 
-  void Work(bool server, bool registerInterest) {
+  void Work(bool server, bool registerInterest, bool refreshInterest) {
     try {
       if (server) {
         PostServerMutations();
         PollRunStatus();
       } else {
-        if (registerInterest) PostInterest();
+        if (registerInterest) PostInterest(refreshInterest);
         FlushAcks();
         PollClient();
       }
@@ -923,8 +950,10 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         Write("mutation_posted", "server",
             "source_seq=" + value.source_seq
             + " object_revision=" + value.object_revision
+            + " uid=" + value.uid_user + ":" + value.uid_id
             + " tombstone=" + value.tombstone
-            + " delivery_only=" + value.delivery_only);
+            + " delivery_only=" + value.delivery_only
+            + " receipt_required=" + value.receipt_required);
       } catch {
         _serverOutbound.Enqueue(value);
         throw;
@@ -946,7 +975,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
       Volatile.Write(ref _interestedRecipients, count);
   }
 
-  void PostInterest() {
+  void PostInterest(bool refresh) {
     int zoneX = Volatile.Read(ref _interestZoneX);
     int zoneY = Volatile.Read(ref _interestZoneY);
     Dictionary<string, object> interest = new() {
@@ -960,7 +989,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
         ["radius_zones"] = _probe != null && !_probe.Terminal
             ? ProbeInterestRadiusZones
             : WorldInterestRadiusZones,
-        ["refresh"] = false
+        ["refresh"] = refresh
     };
     string response = Send(
         _endpoint + "/valheim/zdo-journal/interest", "POST",

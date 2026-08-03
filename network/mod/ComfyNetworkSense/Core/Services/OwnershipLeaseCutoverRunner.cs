@@ -1178,7 +1178,9 @@ static class OwnershipLeaseOwnerPatches {
   [HarmonyPriority(Priority.Last)]
   [HarmonyPatch("SetOwner", new[] { typeof(long) })]
   static bool SetOwnerPrefix(ZDO __instance, long uid) =>
-      !OwnershipLeaseCutoverRunner.ShouldBlockRelease(__instance, uid);
+      !OwnershipLeaseCutoverRunner.ShouldBlockRelease(__instance, uid) &&
+      !ContainerCutoverRunner.ShouldBlockNativeOwnerReassignment(
+          __instance, uid);
 }
 
 [HarmonyPatch(typeof(ZDOMan), nameof(ZDOMan.DestroyZDO))]

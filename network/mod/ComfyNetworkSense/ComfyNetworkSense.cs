@@ -23,7 +23,7 @@ using UnityEngine;
 public sealed class ComfyNetworkSense : BaseUnityPlugin {
   public const string PluginGuid = "djcdevelopment.valheim.comfynetworksense";
   public const string PluginName = "ComfyNetworkSense";
-  public const string PluginVersion = "0.5.67";
+  public const string PluginVersion = "0.5.73";
 
   // The release this build belongs to, as named by the release manifest (e.g. "m1-clean-20260717-r1").
   // The handshake sends it so the Gateway can refuse to hand a strict verdict to a mod too old to
@@ -38,7 +38,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   // Hand-set at the release cut, exactly like PluginVersion above, and deliberately NOT computed at
   // runtime from the DLL's own hash: the code doing the hashing is the DLL, so it would buy no
   // assurance for its cost. "dev" means an uncut local build, which is never a release.
-  public const string ReleaseId = "m7-c10a-20260802-r28";
+  public const string ReleaseId = "m7-c10a-20260802-r34";
 
   public static ComfyNetworkSense Instance { get; private set; }
 
@@ -66,6 +66,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
   RoutedRpcCutoverRunner _routedRpcCutoverRunner;
   ShipCutoverRunner _shipCutoverRunner;
   SaddleCutoverRunner _saddleCutoverRunner;
+  ContainerCutoverRunner _containerCutoverRunner;
   ZdoJournalCutoverRunner _zdoJournalCutoverRunner;
   OwnershipLeaseCutoverRunner _ownershipLeaseCutoverRunner;
   WorldZoneCutoverRunner _worldZoneCutoverRunner;
@@ -121,6 +122,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _shipCutoverRunner = new(_routedRpcCutoverRunner);
     _saddleCutoverRunner = new(
         _lumberjacksGameSessionRunner, _routedRpcCutoverRunner);
+    _containerCutoverRunner = new(_routedRpcCutoverRunner);
     _zdoJournalCutoverRunner = new(_lumberjacksGameSessionRunner);
     _ownershipLeaseCutoverRunner =
         new(_lumberjacksGameSessionRunner);
@@ -137,6 +139,7 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
             _routedRpcCutoverRunner,
             _shipCutoverRunner,
             _saddleCutoverRunner,
+            _containerCutoverRunner,
             _zdoJournalCutoverRunner,
             _ownershipLeaseCutoverRunner,
             _worldZoneCutoverRunner,
@@ -353,6 +356,10 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
       using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.SaddleCutoverRunner.Update")) {
         _saddleCutoverRunner?.Update(now);
+      }
+
+      using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.ContainerCutoverRunner.Update")) {
+        _containerCutoverRunner?.Update(now);
       }
 
       using (NetworkSensePerfProbe.Measure("ComfyNetworkSense.RoutedRpcCutoverRunner.Update")) {
@@ -1009,6 +1016,8 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     _shipCutoverRunner = null;
     _saddleCutoverRunner?.Dispose();
     _saddleCutoverRunner = null;
+    _containerCutoverRunner?.Dispose();
+    _containerCutoverRunner = null;
     _zdoJournalCutoverRunner?.Dispose();
     _zdoJournalCutoverRunner = null;
     _ownershipLeaseCutoverRunner?.Dispose();

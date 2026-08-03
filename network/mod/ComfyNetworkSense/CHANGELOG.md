@@ -2,6 +2,36 @@
 
 ### Unreleased
 
+- Add the first canonical container transaction: an actual tagged wood chest
+  remains server-owned while two physical clients invoke `Container.TakeAll`
+  at the same revision. The server commits exactly one Raspberry, rejects the
+  stale contender, replays duplicate transaction IDs without another mutation
+  or inventory credit, and journals the empty inventory to fresh processes.
+- Add a fail-closed C10a container scenario/reducer covering exact paired image
+  provenance, native-poison zero use, XOR winner semantics, total inventory
+  gain of one, duplicate replay, revision-two reconstruction, and exact cleanup.
+- Ground-snap the real player-built chest and invoke its placement hook while
+  isolating `WearNTear` support decay; the initial r29 physical attempt proved
+  an unsnapped piece tombstones before either client can reconstruct it.
+- Resolve that ground plane from deterministic `WorldGenerator` height when a
+  Steam-free dedicated peer has no native terrain collider; r30 retained this
+  distinction by failing before it created an unsnapped chest.
+- Replace the r31 fixed-delay contention assumption with a server-held barrier:
+  no chest mutation occurs until two distinct physical peers have each sent an
+  original and byte-equivalent duplicate transaction. Receipt-required journal
+  mutations now prove both the seeded and emptied chest fan out to both clients,
+  and stalled probes report their exact local ZDO/inventory shape.
+- Serialize the canonical `Container` inventory payload explicitly inside the
+  journal batch and suppress `ZDOMan.ReleaseNearbyZDOS` reassignment only for
+  the tagged chest. The r32 physical falsifier proved metadata reached both
+  clients while the stale vanilla item payload and two-second owner reclaim did
+  not; both conditions are now required by the reducer.
+- Force the first ZDO interest registration in every fresh Valheim process to
+  refresh durable state, while keeping later steady-state registrations
+  non-refreshing. The r33 transaction passed end to end but retained
+  `snapshot_count=0` after relaunch because stable logical-peer identity made
+  the new process indistinguishable from the old process's interest record.
+
 - Route the pinned `UseStamina(Single)` instance RPC through the shared
   Lumberjacks contract for legitimate cross-owner harpoon and fishing paths,
   and add a bounded two-physical-client probe that requires the owning client

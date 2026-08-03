@@ -31,6 +31,8 @@ public static class CutoverResidueSweeper {
       "VikingShip".GetStableHashCode()
   };
   static readonly int MountPrefabHash = "Lox".GetStableHashCode();
+  static readonly int ContainerPrefabHash =
+      "piece_chest_wood".GetStableHashCode();
   static readonly int TerrainCompilerPrefabHash =
       "_TerrainCompiler".GetStableHashCode();
   static readonly int C3TagHash =
@@ -104,6 +106,7 @@ public static class CutoverResidueSweeper {
     int ownershipItem = 0;
     int vehicle = 0;
     int mount = 0;
+    int container = 0;
     int skippedLiveOwner = 0;
     foreach (ZDO zdo in objects.Values) {
       scanned++;
@@ -117,18 +120,24 @@ public static class CutoverResidueSweeper {
           VehiclePrefabHashes.Contains(prefab);
       bool isMount = !isC3 && !isC5 && !isItem && !isVehicle &&
           prefab == MountPrefabHash;
+      bool isContainer = !isC3 && !isC5 && !isItem && !isVehicle &&
+          !isMount && prefab == ContainerPrefabHash;
       if (isC3) {
         tag = zdo.GetString(C3TagHash, string.Empty);
       } else if (isC5) {
         tag = zdo.GetString(C5TagHash, string.Empty);
-      } else if (isItem || isVehicle || isMount) {
+      } else if (isItem || isVehicle || isMount || isContainer) {
         tag = zdo.GetString(C3TagHash, string.Empty);
         if (string.IsNullOrEmpty(tag)) continue;
       } else {
         continue;
       }
       if (!sweepAll && !string.Equals(tag, mode, StringComparison.Ordinal)) continue;
-      if (liveOwners.Contains(zdo.GetOwner())) {
+      // A failed container canary may still be owned by the dedicated server
+      // because the canonical take never reached its final owner=0 mutation.
+      // Its exact run tag makes it safe to sweep; leaving it behind would make
+      // the next no-dupe gate contend with stale real inventory.
+      if (liveOwners.Contains(zdo.GetOwner()) && !isContainer) {
         skippedLiveOwner++;
         continue;
       }
@@ -136,7 +145,8 @@ public static class CutoverResidueSweeper {
       else if (isC5) c5ZoneProbe++;
       else if (isItem) ownershipItem++;
       else if (isVehicle) vehicle++;
-      else mount++;
+      else if (isMount) mount++;
+      else container++;
       if (!string.IsNullOrEmpty(tag)) tags.Add(tag);
       Vector2i sector = zdo.GetSector();
       string zoneKey = sector.x + "," + sector.y;
@@ -205,6 +215,7 @@ public static class CutoverResidueSweeper {
         .Append(" ownership_item=").Append(ownershipItem)
         .Append(" vehicle=").Append(vehicle)
         .Append(" mount=").Append(mount)
+        .Append(" container=").Append(container)
         .Append(" tags=").Append(tags.Count == 0 ? "none" : string.Join("|", tags))
         .Append(" zones=");
     if (matchedZones.Count == 0) {

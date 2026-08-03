@@ -37,6 +37,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
   readonly RoutedRpcCutoverRunner _routedRpc;
   readonly ShipCutoverRunner _ship;
   readonly SaddleCutoverRunner _saddle;
+  readonly ContainerCutoverRunner _container;
   readonly ZdoJournalCutoverRunner _zdoJournal;
   readonly OwnershipLeaseCutoverRunner _ownershipLease;
   readonly WorldZoneCutoverRunner _worldZone;
@@ -68,6 +69,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
       RoutedRpcCutoverRunner routedRpc,
       ShipCutoverRunner ship,
       SaddleCutoverRunner saddle,
+      ContainerCutoverRunner container,
       ZdoJournalCutoverRunner zdoJournal,
       OwnershipLeaseCutoverRunner ownershipLease,
       WorldZoneCutoverRunner worldZone,
@@ -77,6 +79,7 @@ public sealed class NativeCutoverScenarioController : IDisposable {
     _routedRpc = routedRpc;
     _ship = ship;
     _saddle = saddle;
+    _container = container;
     _zdoJournal = zdoJournal;
     _ownershipLease = ownershipLease;
     _worldZone = worldZone;
@@ -279,6 +282,11 @@ public sealed class NativeCutoverScenarioController : IDisposable {
         case "saddle_observe":
           if (action.duration_seconds is < 3.0f or > 20.0f)
             return "manifest_saddle_duration_invalid";
+          break;
+        case "container_spawn":
+        case "container_wait":
+        case "container_contend_take":
+        case "container_observe_empty":
           break;
         case "ownership_lease_pickup":
         case "ownership_contention":
@@ -611,6 +619,39 @@ public sealed class NativeCutoverScenarioController : IDisposable {
           _sessionProbeStarted = true;
         }
         if (!_saddle.TryGetProbeResult(
+                _active.id,
+                out bool terminal,
+                out bool success,
+                out string probeDetail) || !terminal) return;
+        if (success) CompleteActive(probeDetail);
+        else FailActive(probeDetail);
+        break;
+      }
+      case "container_spawn":
+      case "container_wait":
+      case "container_contend_take":
+      case "container_observe_empty": {
+        if (!_sessionProbeStarted) {
+          string mode = kind switch {
+              "container_spawn" => "spawn",
+              "container_wait" => "wait_container",
+              "container_contend_take" => "contend_take",
+              _ => "observe_empty"
+          };
+          if (!_container.BeginProbe(
+                  _active.id,
+                  mode,
+                  Mathf.Max(5.0f, _active.deadline_seconds - 1.0f),
+                  out string startDetail)) {
+            if (startDetail is
+                "container_probe_client_not_ready" or
+                "container_cutover_not_enabled") return;
+            FailActive(startDetail);
+            return;
+          }
+          _sessionProbeStarted = true;
+        }
+        if (!_container.TryGetProbeResult(
                 _active.id,
                 out bool terminal,
                 out bool success,

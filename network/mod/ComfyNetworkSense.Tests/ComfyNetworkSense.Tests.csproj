@@ -27,6 +27,8 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\ReliableAckBarrier.cs" Link="ReliableAckBarrier.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\RoutedRpcWireFields.cs" Link="RoutedRpcWireFields.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ShipCutoverModePolicy.cs" Link="ShipCutoverModePolicy.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\ContainerTransactionPolicy.cs" Link="ContainerTransactionPolicy.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoJournalInterestPolicy.cs" Link="ZdoJournalInterestPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\SessionSendGuard.cs" Link="SessionSendGuard.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\AlphaTransportSwitches.cs" Link="AlphaTransportSwitches.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ValheimMotionCodec.cs" Link="ValheimMotionCodec.cs" />

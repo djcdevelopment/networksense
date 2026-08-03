@@ -39,10 +39,12 @@ public sealed class ValheimRoutedRpcAdmissionsTests
                 entry.Priority == ValheimRoutedRpcPriority.Superseded)
             .ToArray();
 
-    Assert.Equal(15, harness.Length);
+    Assert.Equal(17, harness.Length);
     Assert.Equal(
         new[] {
             ValheimRoutedRpcAdmissions.ModAutoPort,
+            ValheimRoutedRpcAdmissions.ModContainerTransactionRequest,
+            ValheimRoutedRpcAdmissions.ModContainerTransactionResult,
             ValheimRoutedRpcAdmissions.ModGameplayEvent,
             ValheimRoutedRpcAdmissions.ModSaddleSnapshot,
             ValheimRoutedRpcAdmissions.ModServerPulse,
