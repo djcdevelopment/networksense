@@ -119,6 +119,7 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   long _malformedRejected;
   long _superseded;
   long _applyFailures;
+  int _nextThrottledApplyTick;
   bool _disposed;
 
   public ZdoJournalCutoverRunner(LumberjacksGameSessionRunner gameSession) {
@@ -1029,6 +1030,18 @@ public sealed class ZdoJournalCutoverRunner : IDisposable {
   }
 
   void DrainClient() {
+    // Harness fault injection: a throttled client applies (and ACKs) one delivery per
+    // interval, reproducing the slow-WAN-consumer wedge on the local loop. See the
+    // zdoJournalApplyThrottleMs config description.
+    int throttleMs = PluginConfig.ZdoJournalApplyThrottleMs?.Value ?? 0;
+    if (throttleMs > 0) {
+      if (Environment.TickCount - _nextThrottledApplyTick < 0) return;
+      if (_clientInbound.TryDequeue(out JournalDelivery throttled)) {
+        _nextThrottledApplyTick = Environment.TickCount + throttleMs;
+        Apply(throttled);
+      }
+      return;
+    }
     int budget =
         Player.m_localPlayer != null && Player.m_localPlayer.IsTeleporting()
             ? TeleportApplyPerUpdate

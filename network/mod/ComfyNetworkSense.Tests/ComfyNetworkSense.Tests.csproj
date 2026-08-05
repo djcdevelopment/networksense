@@ -33,6 +33,7 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\VehicleSnapshotRelevanceSet.cs" Link="VehicleSnapshotRelevanceSet.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoJournalInterestPolicy.cs" Link="ZdoJournalInterestPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\SessionSendGuard.cs" Link="SessionSendGuard.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\ResumeReattachPolicy.cs" Link="ResumeReattachPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\AlphaTransportSwitches.cs" Link="AlphaTransportSwitches.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ValheimMotionCodec.cs" Link="ValheimMotionCodec.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoIntegrationContract.cs" Link="ZdoIntegrationContract.cs" />

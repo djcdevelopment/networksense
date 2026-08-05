@@ -169,6 +169,15 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
     LogInfo("Lumberjacks contract release=" + ReleaseId
         + " schema_version=" + ZdoIntegrationContract.SchemaVersion
         + " operation=" + ZdoIntegrationContract.Operation);
+    // Warning level on purpose: runtime arming is per-run and in-memory, so the effective
+    // play mode after a restart is exactly what this line says — both silent 2026-08-05
+    // transitions (armed abort leftover, restart dropping to native) would have been one
+    // grep away had this existed.
+    LogWarning("Effective cutover mode at boot: " + TelemetryCoordinator.EffectiveCutoverMode()
+        + " (config lumberjacksCutoverMode=" + (PluginConfig.LumberjacksCutoverMode?.Value ?? "native")
+        + ", env COMFY_LUMBERJACKS_CUTOVER_MODE="
+        + (Environment.GetEnvironmentVariable("COMFY_LUMBERJACKS_CUTOVER_MODE") ?? "<unset>")
+        + ", zdoRedirectEnabled=" + PluginConfig.ZdoRedirectEnabled.Value + ")");
   }
 
   // Loads the player's quest-view.json (quest-evaluator track). The file always loads; matching is

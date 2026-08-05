@@ -35,7 +35,9 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
   readonly ConcurrentQueue<MotionOutbound> _motionOutbound = new();
   readonly object _outboundGate = new();
   readonly ReliableAckBarrier _reliableAckBarrier = new();
+  readonly ResumeReattachPolicy _resumePolicy = new();
   readonly TelemetryLogWriter _writer = new();
+  volatile bool _sessionStartedSeen;
 
   CancellationTokenSource _cts;
   Task _connectionTask;
@@ -506,6 +508,9 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
 
   async Task RunConnections(CancellationToken token) {
     while (!token.IsCancellationRequested) {
+      bool hadResumeToken;
+      lock (_gate) hadResumeToken = !string.IsNullOrEmpty(_resumeToken);
+      _sessionStartedSeen = false;
       try {
         await RunOneConnection(token).ConfigureAwait(false);
       } catch (OperationCanceledException) when (token.IsCancellationRequested) {
@@ -526,10 +531,39 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       }
 
       if (!token.IsCancellationRequested) {
-        try { await Task.Delay(500, token).ConfigureAwait(false); }
-        catch (OperationCanceledException) { break; }
+        if (!_sessionStartedSeen &&
+            _resumePolicy.OnConnectionEndedWithoutSessionStarted(hadResumeToken)) {
+          AbandonResumeAndReincarnate();
+        }
+        try {
+          await Task.Delay(_resumePolicy.NextRetryDelayMs, token).ConfigureAwait(false);
+        } catch (OperationCanceledException) { break; }
       }
     }
+  }
+
+  /// <summary>
+  /// Drops the refused resume token and performs the same local reset the
+  /// resume-rejected reincarnation path runs, so the next session_started is treated as a
+  /// clean first connection (fresh session plus full resync) instead of tripping the
+  /// strict resume assertions.
+  /// </summary>
+  void AbandonResumeAndReincarnate() {
+    lock (_gate) {
+      _resumeToken = string.Empty;
+      _connectionId = string.Empty;
+      _resumeEpoch = -1;
+      _lastServerSequence = 0;
+      Interlocked.Exchange(ref _nextClientSequence, 0);
+    }
+    ClearOutbound();
+    _reliableAckBarrier.Reset();
+    ZdoJournalCutoverRunner.NotifySessionReincarnated();
+    WorldZoneCutoverRunner.NotifySessionReincarnated();
+    _events.Enqueue(new SessionEvent(
+        "resume_abandoned", 0, string.Empty,
+        "refused_attempts=" + ResumeReattachPolicy.MaxRefusedResumeAttempts
+        + " action=reincarnate"));
   }
 
   async Task RunOneConnection(CancellationToken token) {
@@ -889,6 +923,8 @@ public sealed class LumberjacksGameSessionRunner : IDisposable {
       ZdoJournalCutoverRunner.NotifySessionReincarnated();
       WorldZoneCutoverRunner.NotifySessionReincarnated();
     }
+    _sessionStartedSeen = true;
+    _resumePolicy.OnSessionStarted();
 
     try {
       _udp?.Close();

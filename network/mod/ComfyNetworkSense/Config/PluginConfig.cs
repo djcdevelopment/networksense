@@ -111,6 +111,7 @@ public static class PluginConfig {
   public static ConfigEntry<bool> RoutedRpcCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoJournalCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> ZdoJournalCanonicalSessionEnabled { get; private set; }
+  public static ConfigEntry<int> ZdoJournalApplyThrottleMs { get; private set; }
   public static ConfigEntry<bool> OwnershipLeaseCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> WorldZoneCutoverEnabled { get; private set; }
   public static ConfigEntry<bool> MotionAuthorityCutoverEnabled { get; private set; }
@@ -1039,6 +1040,18 @@ public static class PluginConfig {
             "C4 gate: carry the C3 journal mutation, interest, delivery and acknowledgement "
             + "frames on the canonical authenticated Lumberjacks game session. Default OFF "
             + "until durable logical-peer identity is deliberately proven.");
+
+    ZdoJournalApplyThrottleMs =
+        config.Bind(
+            "NativeCutover",
+            "zdoJournalApplyThrottleMs",
+            0,
+            "HARNESS FAULT INJECTION, never for play: minimum milliseconds between applied "
+            + "canonical ZDO deliveries on a client. A positive value makes the client apply "
+            + "(and therefore ACK) slowly, which reproduces the candidate-8 post-restart "
+            + "redelivery wedge on the local loop without WAN latency: the Gateway's reliable "
+            + "queue fills, reliable_send_queue_full surfaces, and the stall-abort/resume "
+            + "cycle can be proven before any GCP spend. 0 = off (production).");
 
     OwnershipLeaseCutoverEnabled =
         config.Bind(
