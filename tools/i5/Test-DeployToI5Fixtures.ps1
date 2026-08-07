@@ -1,12 +1,21 @@
 <#
 .SYNOPSIS
-Fixture-smoke the i5 deploy script's directory exclude behavior.
+Fixture-smoke the i5 deploy script's directory exclude behavior and its
+large-manifest remote-call batching.
 
 .DESCRIPTION
-Creates a tiny local directory with keep files and excluded bin/obj files, deploys
-it to the i5 staging root, then verifies that keep files exist remotely and the
-excluded files do not. This catches the class of bug where the manifest was
-filtered but scp still copied the full source directory.
+Case 1 (exclude): creates a tiny local directory with keep files and excluded
+bin/obj files, deploys it to the i5 staging root, then verifies that keep files
+exist remotely and the excluded files do not. This catches the class of bug where
+the manifest was filtered but scp still copied the full source directory.
+
+Case 2 (large manifest): deploys a directory whose manifest is far too large to
+fit one remote -EncodedCommand call. The i5's sshd spawns each remote command
+through a shell capped at 8191 characters, so an unbatched mkdir or hash
+verification silently overflows and the deploy throws after every scp already
+succeeded (observed 2026-08-07). The case asserts the deploy still verifies green,
+and records the command length the unbatched form would have needed as evidence
+that the fixture really sits in the overflow regime.
 #>
 [CmdletBinding()]
 param(
@@ -89,24 +98,66 @@ $remote = $remoteJson | ConvertFrom-Json
 
 $missingExpected = @($remote.present | Where-Object { -not [bool]$_.exists })
 $copiedExcluded = @($remote.absent | Where-Object { [bool]$_.exists })
-$verdict = if ($missingExpected.Count -eq 0 -and $copiedExcluded.Count -eq 0) {
+$excludePassed = ($missingExpected.Count -eq 0 -and $copiedExcluded.Count -eq 0)
+
+# --- Case 2: manifest too large for a single remote command line -------------
+$largeCaseRoot = Join-Path $sourceRoot 'deploy-large-manifest-command-line-budget-case'
+New-Item -ItemType Directory -Force -Path $largeCaseRoot, (Join-Path $largeCaseRoot 'nested-group') | Out-Null
+$largeFileCount = 45
+1..$largeFileCount | ForEach-Object {
+    $leaf = 'step-{0:d3}-collect-telemetry-payload.ps1' -f $_
+    $dir = if ($_ % 2 -eq 0) { Join-Path $largeCaseRoot 'nested-group' } else { $largeCaseRoot }
+    Set-Content -LiteralPath (Join-Path $dir $leaf) -Value "# payload $_" -Encoding ascii
+}
+
+$largeRemoteRoot = ($RemoteRoot.TrimEnd('/', '\') + '/' + $runId + '-large-manifest')
+$largeRemotePaths = @(Get-ChildItem -LiteralPath $largeCaseRoot -Recurse -File | ForEach-Object {
+    $rel = $_.FullName.Substring($largeCaseRoot.Length).TrimStart('\', '/') -replace '\\', '/'
+    "$largeRemoteRoot/$(Split-Path -Leaf $largeCaseRoot)/$rel"
+})
+
+# What one unbatched -EncodedCommand call would have cost. Above 8191 the remote
+# shell refuses the command, which is exactly the regression this case guards.
+$unbatchedScript = "`$paths = '$($largeRemotePaths -join ';')' -split ';'"
+$unbatchedChars = "powershell.exe -NoProfile -EncodedCommand $([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($unbatchedScript)))".Length
+
+& (Join-Path $repoRoot 'tools\i5\Deploy-ToI5.ps1') -Path $largeCaseRoot -Dest $largeRemoteRoot | Out-Host
+$largePassed = ($LASTEXITCODE -eq 0)
+
+$verdict = if ($excludePassed -and $largePassed) {
     'i5_deploy_exclude_fixture_passed'
 } else {
     'i5_deploy_exclude_fixture_failed'
 }
 
 $summary = [ordered]@{
-    schema_version = 1
+    schema_version = 2
     generated_utc = [DateTimeOffset]::UtcNow.ToString('o')
     verdict = $verdict
     local_fixture = $caseRoot
     remote_root = $remoteRunRoot
     expected_present = $remote.present
     expected_absent = $remote.absent
+    exclude_case_passed = $excludePassed
+    large_manifest_case = [ordered]@{
+        passed = $largePassed
+        local_fixture = $largeCaseRoot
+        remote_root = $largeRemoteRoot
+        file_count = $largeRemotePaths.Count
+        unbatched_command_chars = $unbatchedChars
+        command_line_limit = 8191
+        exercises_overflow = ($unbatchedChars -gt 8191)
+    }
 }
 $summaryPath = Join-Path $outRoot 'summary.json'
 [IO.File]::WriteAllText($summaryPath, (($summary | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
 
 Write-Host ("i5 deploy exclude fixtures: {0}" -f $summary.verdict)
+Write-Host ("  exclude case: {0}" -f $(if ($excludePassed) { 'passed' } else { 'FAILED' }))
+Write-Host ("  large-manifest case: {0}  [{1} file(s); unbatched would need {2} chars, limit {3}]" -f `
+    $(if ($largePassed) { 'passed' } else { 'FAILED' }), $largeRemotePaths.Count, $unbatchedChars, 8191)
+if (-not $summary.large_manifest_case.exercises_overflow) {
+    Write-Host '  WARNING: fixture no longer exceeds the command-line limit - it is not testing the batching'
+}
 Write-Host ("Summary JSON: {0}" -f $summaryPath)
 if ($verdict -ne 'i5_deploy_exclude_fixture_passed') { exit 1 }

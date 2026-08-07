@@ -57,6 +57,46 @@ param(
 $SshAlias = 'i5'
 $SshOpts  = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8')
 
+# Remote calls that embed a path list in a -EncodedCommand payload grow with the
+# manifest, and the i5's sshd spawns the command through a shell capped at 8191
+# characters. Batch those calls so no single command line approaches the cap.
+$RemoteCommandBudget = 6000
+
+function Split-IntoRemoteBatches {
+    param(
+        [string[]]$Items,
+        [int]$OverheadChars = 0
+    )
+
+    # base64 over UTF-16LE costs ~8/3 command-line characters per script
+    # character; 128 covers the "powershell.exe -NoProfile -EncodedCommand "
+    # prefix and rounding.
+    $maxScriptChars = [int]((($RemoteCommandBudget - 128) * 3) / 8) - $OverheadChars
+    if ($maxScriptChars -lt 1) { $maxScriptChars = 1 }
+
+    $batches = @()
+    $current = @()
+    $used = 0
+    foreach ($item in $Items) {
+        # quotes, indent, doubled apostrophes and the line separator
+        $cost = $item.Length + 10
+        if ($current.Count -gt 0 -and ($used + $cost) -gt $maxScriptChars) {
+            $batches += , $current
+            $current = @()
+            $used = 0
+        }
+        $current += $item
+        $used += $cost
+    }
+    if ($current.Count -gt 0) { $batches += , $current }
+    return , $batches
+}
+
+function ConvertTo-QuotedPathList {
+    param([string[]]$Items)
+    return (@($Items | ForEach-Object { "    '$($_.Replace("'", "''"))'" }) -join ",`r`n")
+}
+
 # Native ssh/scp stderr noise (e.g. the OpenSSH post-quantum KEX warning, first
 # seen 2026-07-31) must stay non-terminating even when a caller invokes this script
 # in-process under -ErrorAction Stop. Delivery is decided by the explicit SHA256
@@ -150,11 +190,14 @@ foreach ($p in $paths) {
     New-Item -ItemType Directory -Force -Path $p | Out-Null
 }
 '@
-    $quotedParents = @($remoteParents | ForEach-Object { "    '$($_.Replace("'", "''"))'" }) -join ",`r`n"
-    $mkdirScript = $mkdirTemplate.Replace('__PATHS__', $quotedParents)
-    $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($mkdirScript))
-    $null = ssh @SshOpts $SshAlias "powershell.exe -NoProfile -EncodedCommand $b64" 2>$null
-    if ($LASTEXITCODE -ne 0) { throw 'could not create remote manifest parent directories' }
+    $mkdirBatches = Split-IntoRemoteBatches -Items $remoteParents -OverheadChars $mkdirTemplate.Length
+    Write-Verbose ("mkdir: {0} path(s) in {1} remote call(s)" -f $remoteParents.Count, @($mkdirBatches).Count)
+    foreach ($batch in $mkdirBatches) {
+        $mkdirScript = $mkdirTemplate.Replace('__PATHS__', (ConvertTo-QuotedPathList -Items $batch))
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($mkdirScript))
+        $null = ssh @SshOpts $SshAlias "powershell.exe -NoProfile -EncodedCommand $b64" 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'could not create remote manifest parent directories' }
+    }
 }
 
 foreach ($m in $manifest) {
@@ -165,17 +208,26 @@ foreach ($m in $manifest) {
 
 # --- Verify: recompute SHA256 on both ends, compare per file -----------------
 $verifyTemplate = @'
-$paths = '__PATHS__' -split ';'
+$paths = @(
+__PATHS__
+)
 foreach ($p in $paths) {
     if (Test-Path -LiteralPath $p) { $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash }
     else { $h = 'MISSING' }
     Write-Output ($p + '|' + $h)
 }
 '@
-$verifyScript = $verifyTemplate.Replace('__PATHS__', (($manifest | ForEach-Object Remote) -join ';'))
-$b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($verifyScript))
-$remoteLines = ssh @SshOpts $SshAlias "powershell.exe -NoProfile -EncodedCommand $b64" 2>$null
-if ($LASTEXITCODE -ne 0) { throw 'remote hash verification call failed' }
+$remotePaths = @($manifest | ForEach-Object Remote)
+$verifyBatches = Split-IntoRemoteBatches -Items $remotePaths -OverheadChars $verifyTemplate.Length
+Write-Verbose ("verify: {0} path(s) in {1} remote call(s)" -f $remotePaths.Count, @($verifyBatches).Count)
+$remoteLines = @()
+foreach ($batch in $verifyBatches) {
+    $verifyScript = $verifyTemplate.Replace('__PATHS__', (ConvertTo-QuotedPathList -Items $batch))
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($verifyScript))
+    $batchLines = ssh @SshOpts $SshAlias "powershell.exe -NoProfile -EncodedCommand $b64" 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'remote hash verification call failed' }
+    $remoteLines += @($batchLines)
+}
 
 $remoteHash = @{}
 foreach ($line in @($remoteLines)) {
