@@ -92,6 +92,29 @@ foreach ($relative in $payload) {
     }
 }
 
+# The /join first-install lane REQUIRES a config template entry: ModPackBuilder
+# personalizes the [Lumberjacks] block inside the zip and 503s when the entry is
+# absent. (The Companion UPDATE lane is unaffected — BuildConfigPreservingUpdatePack
+# strips the entry so an update never overwrites a personalized config.) Stage a
+# SANITIZED copy of the local config: the enrollment credential pair is blanked and
+# the consumer lane disarmed, so the template carries no machine credential even if
+# a future personalizer misses a key.
+$configRelative = 'BepInEx/config/djcdevelopment.valheim.comfynetworksense.cfg'
+$configSource = Join-Path $ValheimRoot ($configRelative -replace '/', '\')
+if (!(Test-Path -LiteralPath $configSource -PathType Leaf)) {
+    throw "missing config template source: $configSource"
+}
+$configText = [IO.File]::ReadAllText($configSource)
+foreach ($blankKey in @('lumberjacksEnrollmentId', 'lumberjacksClientAccessKey')) {
+    $configText = [regex]::Replace($configText,
+        '(?m)^(' + [regex]::Escape($blankKey) + '\s*=\s*)\S*\s*$', '${1}')
+}
+$configText = [regex]::Replace($configText,
+    '(?m)^(zdoAuthoritativeConsumerEnabled\s*=\s*)\S*\s*$', '${1}false')
+$configTarget = Join-Path $stageRoot (Join-Path 'Valheim' ($configRelative -replace '/', '\'))
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $configTarget) | Out-Null
+[IO.File]::WriteAllText($configTarget, $configText, [Text.UTF8Encoding]::new($false))
+
 $readme = @"
 Comfy P7 alpha modpack
 
