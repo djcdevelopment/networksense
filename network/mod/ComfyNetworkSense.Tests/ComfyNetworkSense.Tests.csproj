@@ -41,6 +41,7 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoFanoutPolicy.cs" Link="ZdoFanoutPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\GameplayEventClassifier.cs" Link="GameplayEventClassifier.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\LivePlayerTargetPolicy.cs" Link="LivePlayerTargetPolicy.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\BlueprintFile.cs" Link="BlueprintFile.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Models\TrackedQuest.cs" Link="TrackedQuest.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestViewLoader.cs" Link="QuestViewLoader.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestTriggerEvaluator.cs" Link="QuestTriggerEvaluator.cs" />
