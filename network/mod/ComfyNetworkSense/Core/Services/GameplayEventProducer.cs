@@ -282,8 +282,11 @@ public sealed class GameplayEventProducer : IDisposable {
     };
 
     // Quest fields ride the payload to the durable EventLog only (not the public feed's detail).
+    // quest_name repeats the detail (the quest's public-safe name) because the gateway forwards
+    // only the payload to the EventLog — without it the durable row would hold just the id.
     if (!string.IsNullOrEmpty(questId)) {
       payload["quest_id"] = questId;
+      payload["quest_name"] = detail;
       payload["guild"] = questGuild;
       payload["category"] = questCategory;
       payload["bot_command"] = questCommand;
