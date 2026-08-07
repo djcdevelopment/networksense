@@ -76,6 +76,16 @@ stability is *measured* (`AuthorityStabilitySec`, computed in
 `ConfigEntry`, so it isn't player-tunable. If hysteresis becomes tunable, add the
 knob here.
 
+**Update 2026-08-07 — tunable in the lab only.** `ComfyQuestLab` now constructs the
+evaluator itself and exposes `[Quests] questCooldownSeconds` (default `60f`, range
+0–3600), wired to `SettingChanged` so it retunes the live evaluator rather than the
+next reload. The default matches the shipping constructor deliberately, so what a
+creator observes in the lab is what a player would get. **The shipping mod is
+unchanged** — this is an authoring knob, not a gameplay one. Two related divergences,
+both deliberate and both lab-only: `lab_reload` builds a fresh evaluator, dropping every
+cooldown outright, and `[Quests] questsEnabled` can disable evaluation entirely while
+still loading and displaying the files.
+
 ## Entry template
 
 Add a new row per change; edit a `verdict` once, when its evidence lands.
