@@ -49,6 +49,11 @@ param(
 
     [switch]$ValheimPlugins,
 
+    # Shortcut: target the i5's live BepInEx config directory. Same trust class as
+    # -ValheimPlugins (the deploy lane already writes into the live install); used to
+    # ship a personalized ComfyNetworkSense config for the at-rest cutover posture.
+    [switch]$ValheimConfig,
+
     [switch]$DryRun,
 
     [string[]]$ExcludeDirectoryName = @()
@@ -105,6 +110,9 @@ $ErrorActionPreference = 'Continue'
 
 if ($ValheimPlugins) {
     $Dest = 'C:/Program Files (x86)/Steam/steamapps/common/Valheim/BepInEx/plugins'
+}
+if ($ValheimConfig) {
+    $Dest = 'C:/Program Files (x86)/Steam/steamapps/common/Valheim/BepInEx/config'
 }
 $Dest = ($Dest -replace '\\', '/').TrimEnd('/')
 
