@@ -343,8 +343,8 @@ The visual choice is deliberately not inferred from a build receipt. Copy
 `tools/component-packets/samples/questlab-gallery-acceptance.sample.json` into the ignored
 capture directory, name the human and comparison request, choose the profile, and turn each
 observation true only after looking in game. The final verifier rejects a missing school,
-catalog event, coalescing witness, lifecycle operation, human decision, or same-action double
-completion:
+catalog event, coalescing witness, lifecycle operation, human decision, mixed-machine evidence,
+or same-action double completion:
 
 ```powershell
 python tools/component-packets/verify_questlab_release.py `
