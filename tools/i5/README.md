@@ -297,6 +297,45 @@ ignored `captures/questlab/i5/`. A timeout reports that the request was delivere
 consumed and never reissues it. Run `Test-I5Link.ps1` once at the start of the live block;
 do not repeat the preflight between these bounded requests.
 
+### Quest Lab live block — one human pass
+
+With the final DLL/config already SHA-verified and Valheim loaded into a private world:
+
+```powershell
+# Headless-in-game proof of all 34 source-shared evaluator events
+.\Invoke-I5QuestLabBatch.ps1 run -Suite creator-events
+
+# One setup request raises the default gallery, installs eight ordinary quests,
+# and stages Wood, Coal, and Copper Ore at the player's feet.
+.\Invoke-I5QuestLabBatch.ps1 prepare -Suite all-schools
+.\Invoke-I5QuestLabBatch.ps1 run -Suite all-schools
+```
+
+The human then does one compact circuit: pick up a staged stack; take the gallery portal;
+kill the combat Greyling; use the central bronze axe on the harvest birch; take the central
+Hammer and place any piece with the staged Wood; add staged Coal to the crafting smelter;
+and write the social sign. Weapon/tool use normally witnesses progression on the same circuit;
+if it remains, jump or use any skill once. Then collect and close the run:
+
+```powershell
+.\Invoke-I5QuestLabBatch.ps1 report
+.\Invoke-I5QuestLabBatch.ps1 export
+.\Invoke-I5QuestLabBatch.ps1 reset
+```
+
+For the Gallery v2 choice, return through the ground portal before clearing the raised floor.
+These requests give the operator identify → safe clear → one-command comparison → selected
+rebuild, without one-off console entry:
+
+```powershell
+.\Invoke-I5QuestLabBatch.ps1 gallery_identify
+.\Invoke-I5QuestLabBatch.ps1 gallery_clear -Selector all
+.\Invoke-I5QuestLabBatch.ps1 gallery_compare -Profile marble-wide -CompareProfile marble-grand
+# after visual selection:
+.\Invoke-I5QuestLabBatch.ps1 gallery_clear -Selector all
+.\Invoke-I5QuestLabBatch.ps1 gallery_build -Profile marble-wide # or marble-grand
+```
+
 ## Rules for agents
 
 - **Offline is normal.** The i5 is a roaming laptop, `expect="optional"` in the
