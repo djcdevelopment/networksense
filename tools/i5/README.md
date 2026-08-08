@@ -365,7 +365,7 @@ python tools/component-packets/verify_questlab_release.py `
   --gallery-request <rebuild-request.json> `
   --gallery-acceptance <gallery-acceptance.json> `
   --expected-version 0.2.0 `
-  --expected-release questlab-v0.2.0-20260808-r10 `
+  --expected-release questlab-v0.2.0-20260808-r11 `
   --write captures/questlab/omen/release-verification.json
 ```
 
