@@ -296,7 +296,7 @@ mailbox. Requests expire within 30 minutes and accept only prepare/run/reset/rep
 or Gallery v2 build/compare/identify/clear/rebuild, with allowlisted suites and profiles.
 The plugin consumes each request once on Unity's main thread and writes a request receipt;
 the helper retrieves it, any exported suite receipt, and a filtered Quest Lab log tail into
-ignored `captures/questlab/i5/`. A timeout reports that the request was delivered but not
+ignored `captures/questlab/<lane>/` (`i5` or `omen`). A timeout reports that the request was delivered but not
 consumed and never reissues it. Run `Test-I5Link.ps1` once at the start of the live block;
 do not repeat the preflight between these bounded requests.
 
