@@ -69,6 +69,9 @@ Host i5
 # Raise one visual comparison in a single request and collect its identify/log receipt
 .\Invoke-I5QuestLabBatch.ps1 gallery_compare -Profile marble-wide -CompareProfile marble-grand
 
+# Render and validate the exact request without touching i5
+.\Invoke-I5QuestLabBatch.ps1 gallery_compare -Profile marble-wide -CompareProfile marble-grand -DryRun
+
 # Start/rebuild the i5 Companion with the Valheim directory mounted
 .\Start-I5Companion.ps1
 
