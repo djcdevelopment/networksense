@@ -336,7 +336,7 @@ rebuild, without one-off console entry:
 .\Invoke-I5QuestLabBatch.ps1 gallery_compare -Profile marble-wide -CompareProfile marble-grand
 # after visual selection:
 .\Invoke-I5QuestLabBatch.ps1 gallery_clear -Selector all
-.\Invoke-I5QuestLabBatch.ps1 gallery_build -Profile marble-wide # or marble-grand
+.\Invoke-I5QuestLabBatch.ps1 gallery_build # selected default: marble-grand
 ```
 
 The visual choice is deliberately not inferred from a build receipt. Copy
@@ -357,7 +357,7 @@ python tools/component-packets/verify_questlab_release.py `
   --gallery-request <rebuild-request.json> `
   --gallery-acceptance <gallery-acceptance.json> `
   --expected-version 0.2.0 `
-  --expected-release questlab-v0.2.0-20260808-r4 `
+  --expected-release questlab-v0.2.0-20260808-r5 `
   --write captures/questlab/omen/release-verification.json
 ```
 
