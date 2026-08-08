@@ -26,6 +26,16 @@ public class LabBatchContractTests {
   }
 
   [Fact]
+  public void FreshCharacterGetsEveryConsumedBuildAndStationMaterial() {
+    Assert.Equal(new[] { "Wood", "Coal", "CopperOre" }, LabBatchContract.PreparedSupplyPrefabs);
+    LabBatchSuite suite = LabBatchContract.FindSuite("all-schools");
+    Assert.Contains(suite.Expectations, x => x.EventName == "piece_placed"
+        && x.Instruction.Contains("staged Wood", StringComparison.Ordinal));
+    Assert.Contains(suite.Expectations, x => x.EventName == "station_fuel_added"
+        && x.Instruction.Contains("staged Coal", StringComparison.Ordinal));
+  }
+
+  [Fact]
   public void CreatorEventContractExercisesEverySafeCanonicalEvent() {
     LabBatchSession run = LabBatchContract.RunCreatorEventContract(
         "contract-test", "2026-08-08T12:00:00.0000000+00:00");
