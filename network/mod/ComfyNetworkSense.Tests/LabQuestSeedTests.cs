@@ -29,12 +29,44 @@ public class LabQuestSeedTests {
     Assert.Equal(2, set.Quests.Count);
     Assert.Equal(1, set.ArmedCount);
 
-    LabQuest neck = set.Quests.Single(q => q.QuestId == "neck_romancer");
+    LabQuest armed = set.Quests.Single(q => q.QuestId == "first_blood");
     LabQuest wood = set.Quests.Single(q => q.QuestId == "punchwood");
 
-    Assert.True(neck.IsArmed);
+    Assert.True(armed.IsArmed);
     Assert.Equal(LabArmed.VerbNotKill, wood.Armed);
     Assert.Contains("'hit'", wood.ArmedLine());
+  }
+
+  /// <summary>The seed's armed quest must target something the practice gallery actually puts in
+  /// front of you.
+  ///
+  /// This is the test that would have caught the mistake it exists for. The seed originally
+  /// targeted a Neck — lifted from the test fixture because it was schema-valid — so a creator's
+  /// first act after raising an eight-monument practice ground was to walk away from it and go
+  /// find a shoreline. Building the gallery is what buys back that time; a seed that sends people
+  /// hunting spends it again.
+  ///
+  /// Asserted against the gallery plan rather than a hardcoded name, so moving or renaming the
+  /// combat station moves this with it instead of quietly making the seed wrong again.</summary>
+  [Fact]
+  public void TheArmedSeedQuestTargetsACreatureTheGalleryStandsUpForYou() {
+    string combatStation = LabGalleryPlan.Monuments
+        .Single(m => m.Category == LabCategory.Combat).Station.Prefab;
+
+    TrackedQuest armed = Seeded().Quests.Single(q => q.IsArmed).Quest;
+
+    Assert.Contains(armed.TriggerTarget.ToLowerInvariant(), combatStation.ToLowerInvariant());
+  }
+
+  /// <summary>No filters on the armed quest, so the very first kill fires it. A creator who has
+  /// to satisfy a weapon_skill they did not notice learns "this thing is broken", not "this is
+  /// how triggers work" — the requirements text invites adding one as the next edit instead.</summary>
+  [Fact]
+  public void TheArmedSeedQuestFiresOnAnyKillOfItsTarget() {
+    TrackedQuest armed = Seeded().Quests.Single(q => q.IsArmed).Quest;
+
+    Assert.True(string.IsNullOrWhiteSpace(armed.TriggerWeaponSkill));
+    Assert.False(armed.TriggerProjectile);
   }
 
   [Fact]
