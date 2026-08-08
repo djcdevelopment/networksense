@@ -52,6 +52,7 @@
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSeed.cs" Link="LabQuestSeed.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabCreatureNaming.cs" Link="LabCreatureNaming.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabActionDedupe.cs" Link="LabActionDedupe.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabBatchContract.cs" Link="LabBatchContract.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabRuntimeProfile.cs" Link="LabRuntimeProfile.cs" />
     <!-- Generated, and Unity-free by construction (plain floats and strings) — linked so the
          seed can be asserted against the gallery the seed is meant to be practised in. It names

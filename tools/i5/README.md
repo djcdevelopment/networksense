@@ -59,6 +59,16 @@ Host i5
 # Ship the mod straight into the live BepInEx plugins dir
 .\Deploy-ToI5.ps1 -Path ..\..\network\mod\ComfyNetworkSense\bin\Release\ComfyNetworkSense.dll -ValheimPlugins
 
+# After one Test-I5Link preflight, prepare/run/report/export Quest Lab through the
+# bounded request mailbox (never a console or keystroke lane)
+.\Invoke-I5QuestLabBatch.ps1 prepare -Suite all-schools
+.\Invoke-I5QuestLabBatch.ps1 run -Suite all-schools
+.\Invoke-I5QuestLabBatch.ps1 report
+.\Invoke-I5QuestLabBatch.ps1 export
+
+# Raise one visual comparison in a single request and collect its identify/log receipt
+.\Invoke-I5QuestLabBatch.ps1 gallery_compare -Profile marble-wide -CompareProfile marble-grand
+
 # Start/rebuild the i5 Companion with the Valheim directory mounted
 .\Start-I5Companion.ps1
 
@@ -274,6 +284,15 @@ any mismatch — a green run *is* the receipt. Directories land as
 before anything is copied. When `-ExcludeDirectoryName` is used, the deploy
 copies exact manifest files rather than recursively copying the whole directory,
 so excluded `bin`, `obj`, or other build-output folders do not land remotely.
+
+`Invoke-I5QuestLabBatch.ps1` composes that verified config deploy with one fixed request
+mailbox. Requests expire within 30 minutes and accept only prepare/run/reset/report/export
+or Gallery v2 build/compare/identify/clear/rebuild, with allowlisted suites and profiles.
+The plugin consumes each request once on Unity's main thread and writes a request receipt;
+the helper retrieves it, any exported suite receipt, and a filtered Quest Lab log tail into
+ignored `captures/questlab/i5/`. A timeout reports that the request was delivered but not
+consumed and never reissues it. Run `Test-I5Link.ps1` once at the start of the live block;
+do not repeat the preflight between these bounded requests.
 
 ## Rules for agents
 
