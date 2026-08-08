@@ -339,6 +339,28 @@ rebuild, without one-off console entry:
 .\Invoke-I5QuestLabBatch.ps1 gallery_build -Profile marble-wide # or marble-grand
 ```
 
+The visual choice is deliberately not inferred from a build receipt. Copy
+`tools/component-packets/samples/questlab-gallery-acceptance.sample.json` into the ignored
+capture directory, name the human and comparison request, choose the profile, and turn each
+observation true only after looking in game. The final verifier rejects a missing school,
+catalog event, coalescing witness, lifecycle operation, human decision, or same-action double
+completion:
+
+```powershell
+python tools/component-packets/verify_questlab_release.py `
+  --creator-events <creator-suite.json> `
+  --all-schools <live-suite.json> `
+  --gallery-request <build-request.json> `
+  --gallery-request <compare-request.json> `
+  --gallery-request <identify-request.json> `
+  --gallery-request <clear-request.json> `
+  --gallery-request <rebuild-request.json> `
+  --gallery-acceptance <gallery-acceptance.json> `
+  --expected-version 0.2.0 `
+  --expected-release questlab-v0.2.0-20260808-r2 `
+  --write captures/questlab/omen/release-verification.json
+```
+
 ## Rules for agents
 
 - **Offline is normal.** The i5 is a roaming laptop, `expect="optional"` in the
