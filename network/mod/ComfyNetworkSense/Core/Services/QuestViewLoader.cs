@@ -97,6 +97,7 @@ public static class QuestViewLoader {
       TriggerWeaponSkill = triggerBody == null ? null : ReadString(triggerBody, "weapon_skill"),
       TriggerProjectile = triggerBody != null && ReadBool(triggerBody, "projectile"),
       TriggerShots = triggerBody == null ? null : ReadShots(triggerBody),
+      TriggerWhere = triggerBody == null ? null : ReadWhere(triggerBody),
     };
   }
 
@@ -150,6 +151,114 @@ public static class QuestViewLoader {
     }
 
     return shots.Count > 0 ? shots : null;
+  }
+
+  /// <summary>
+  /// Parse the additive <c>trigger.where</c> object. It is intentionally scalar-only: accepting a
+  /// nested value and then ignoring it would silently widen a quest trigger, which is the unsafe
+  /// direction. Strings, JSON numbers, and booleans retain their text spelling for exact matching
+  /// against <see cref="QuestEvent.Fields"/>.
+  /// </summary>
+  static Dictionary<string, string> ReadWhere(string triggerBody) {
+    string body = ExtractObjectBody(triggerBody, "where");
+    if (body == null) {
+      if (Regex.IsMatch(triggerBody, "\"where\"\\s*:")) {
+        throw new InvalidOperationException("trigger.where must be an object of scalar values.");
+      }
+      return null;
+    }
+
+    var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    int index = 1; // opening brace
+    while (true) {
+      SkipWhitespace(body, ref index);
+      if (index >= body.Length - 1) {
+        break;
+      }
+      if (body[index] != '"') {
+        throw new InvalidOperationException("trigger.where contains a malformed field name.");
+      }
+
+      string name = ReadJsonString(body, ref index);
+      if (string.IsNullOrWhiteSpace(name)) {
+        throw new InvalidOperationException("trigger.where field names cannot be empty.");
+      }
+      SkipWhitespace(body, ref index);
+      if (index >= body.Length || body[index] != ':') {
+        throw new InvalidOperationException("trigger.where contains a field without a value.");
+      }
+      index++;
+      SkipWhitespace(body, ref index);
+      if (index >= body.Length - 1) {
+        throw new InvalidOperationException("trigger.where contains a field without a value.");
+      }
+
+      string value;
+      if (body[index] == '"') {
+        value = ReadJsonString(body, ref index);
+      } else {
+        int start = index;
+        while (index < body.Length - 1 && body[index] != ',') {
+          index++;
+        }
+        value = body.Substring(start, index - start).Trim();
+        if (!ScalarTokenRegex.IsMatch(value)) {
+          throw new InvalidOperationException(
+              "trigger.where values must be strings, numbers, or booleans.");
+        }
+      }
+
+      if (fields.ContainsKey(name)) {
+        throw new InvalidOperationException("trigger.where repeats field '" + name + "'.");
+      }
+      fields.Add(name, value);
+
+      SkipWhitespace(body, ref index);
+      if (index >= body.Length - 1) {
+        break;
+      }
+      if (body[index] != ',') {
+        throw new InvalidOperationException("trigger.where fields must be comma-separated.");
+      }
+      index++;
+    }
+
+    return fields.Count == 0 ? null : fields;
+  }
+
+  static readonly Regex ScalarTokenRegex = new(
+      "^(?:true|false|-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)$",
+      RegexOptions.CultureInvariant);
+
+  static void SkipWhitespace(string text, ref int index) {
+    while (index < text.Length && char.IsWhiteSpace(text[index])) {
+      index++;
+    }
+  }
+
+  /// <summary>Read one JSON string at <paramref name="index"/> and advance past its quote.</summary>
+  static string ReadJsonString(string text, ref int index) {
+    if (index >= text.Length || text[index] != '"') {
+      throw new InvalidOperationException("Expected a JSON string.");
+    }
+
+    int contentStart = ++index;
+    bool escape = false;
+    while (index < text.Length) {
+      char c = text[index];
+      if (escape) {
+        escape = false;
+      } else if (c == '\\') {
+        escape = true;
+      } else if (c == '"') {
+        string value = text.Substring(contentStart, index - contentStart);
+        index++;
+        return Unescape(value);
+      }
+      index++;
+    }
+
+    throw new InvalidOperationException("Unterminated JSON string in trigger.where.");
   }
 
   /// <summary>The <c>{...}</c> body of the object at key <paramref name="name"/> (braces included),

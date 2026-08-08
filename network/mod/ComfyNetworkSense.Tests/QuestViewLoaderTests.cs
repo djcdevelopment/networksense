@@ -205,4 +205,64 @@ public class QuestViewLoaderTests {
     Assert.Empty(QuestViewLoader.Quests);
     Assert.Null(QuestViewLoader.LastError);
   }
+
+  [Fact]
+  public void AdditiveWhereObjectParsesScalarFieldsWithoutChangingSchemaVersion() {
+    const string json = """
+    { "schema_version": 1, "quests": [
+      { "quest_id": "craft", "name": "Craft", "guild": "G", "trigger": {
+        "event": "item_crafted", "target": "SwordIron",
+        "where": { "station": "forge", "quality": 2, "upgraded": true }
+      } }
+    ] }
+    """;
+
+    TrackedQuest quest = QuestViewLoader.Parse(json, out _).Single();
+
+    Assert.Equal("item_crafted", quest.TriggerEvent);
+    Assert.Equal("SwordIron", quest.TriggerTarget);
+    Assert.Equal("forge", quest.TriggerWhere["station"]);
+    Assert.Equal("2", quest.TriggerWhere["quality"]);
+    Assert.Equal("true", quest.TriggerWhere["upgraded"]);
+  }
+
+  [Fact]
+  public void ExistingQuestWithoutWhereKeepsNullFilterState() {
+    TrackedQuest neck = Quest(QuestViewLoader.Parse(Fixture, out _), "neck_romancer");
+
+    Assert.Null(neck.TriggerWhere);
+  }
+
+  [Theory]
+  [InlineData("[]")]
+  [InlineData("{ \"nested\": { \"x\": 1 } }")]
+  [InlineData("{ \"list\": [1, 2] }")]
+  [InlineData("{ \"nothing\": null }")]
+  public void WhereRejectsShapesTheEvaluatorCouldOtherwiseSilentlyIgnore(string where) {
+    string json =
+        "{ \"schema_version\": 1, \"quests\": [{ \"quest_id\": \"q\", \"name\": \"Q\", "
+        + "\"guild\": \"G\", \"trigger\": { \"event\": \"item_crafted\", \"where\": "
+        + where + " } }] }";
+
+    var error = Assert.Throws<System.InvalidOperationException>(
+        () => QuestViewLoader.Parse(json, out _));
+
+    Assert.Contains("trigger.where", error.Message);
+  }
+
+  [Fact]
+  public void WhereRejectsCaseInsensitiveDuplicateKeys() {
+    const string json = """
+    { "schema_version": 1, "quests": [
+      { "quest_id": "q", "name": "Q", "guild": "G", "trigger": {
+        "event": "item_crafted", "where": { "station": "forge", "STATION": "kiln" }
+      } }
+    ] }
+    """;
+
+    var error = Assert.Throws<System.InvalidOperationException>(
+        () => QuestViewLoader.Parse(json, out _));
+
+    Assert.Contains("repeats field", error.Message);
+  }
 }

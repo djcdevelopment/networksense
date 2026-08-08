@@ -27,6 +27,13 @@ public sealed class TrackedQuest {
   public bool TriggerProjectile { get; set; }
   public List<string> TriggerShots { get; set; }
 
+  /// <summary>
+  /// Additive event-specific scalar filters from <c>trigger.where</c>. Existing quest files omit
+  /// this field and retain their exact behaviour. Keys match <see cref="QuestEvent.Fields"/> plus
+  /// the universal event/target/weapon_skill/projectile fields.
+  /// </summary>
+  public Dictionary<string, string> TriggerWhere { get; set; }
+
   /// <summary>Quests the game can auto-capture: not externally auto-checked and not IRL.</summary>
   public bool IsCapturable =>
       !AutoChecked && !string.Equals(Venue, "irl", StringComparison.OrdinalIgnoreCase);

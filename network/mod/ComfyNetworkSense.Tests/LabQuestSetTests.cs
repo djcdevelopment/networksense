@@ -205,6 +205,16 @@ public class LabQuestSetTests {
   }
 
   [Fact]
+  public void ChangingAWhereFieldShowsAsATriggerChange() {
+    var before = LabQuestSet.Build(Files(("a.json",
+        View(Quest("q", "{ \"event\": \"item_crafted\", \"where\": { \"station\": \"forge\" } }")))));
+    var after = LabQuestSet.Build(Files(("a.json",
+        View(Quest("q", "{ \"event\": \"item_crafted\", \"where\": { \"station\": \"workbench\" } }")))));
+
+    Assert.Contains("~ q (trigger changed)", after.DiffFrom(before));
+  }
+
+  [Fact]
   public void FixingTheVerbShowsAsNowArmed() {
     var before = LabQuestSet.Build(Files(("a.json",
         View(Quest("q", "{ \"event\": \"hit\", \"target\": \"Neck\" }")))));

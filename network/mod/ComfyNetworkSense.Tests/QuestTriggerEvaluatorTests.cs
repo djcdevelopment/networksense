@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using ComfyNetworkSense;
@@ -23,6 +24,21 @@ public class QuestTriggerEvaluatorTests {
       };
 
   static List<TrackedQuest> List(params TrackedQuest[] quests) => quests.ToList();
+
+  static TrackedQuest EventQuest(
+      string eventName,
+      string id = "event-q",
+      string target = null,
+      Dictionary<string, string> where = null) =>
+      new() {
+        QuestId = id,
+        Name = id + "-name",
+        Guild = "Test",
+        TriggerEvent = eventName,
+        TriggerTarget = target,
+        TriggerWhere = where,
+        Venue = "in_game",
+      };
 
   [Fact]
   public void MatchingCreatureKill_Completes() {
@@ -141,5 +157,124 @@ public class QuestTriggerEvaluatorTests {
 
     Assert.Empty(evaluator.OnCreatureKilled(new List<TrackedQuest>(), "Neck", null, false, 10.0));
     Assert.Empty(evaluator.OnCreatureKilled(null, "Neck", null, false, 10.0));
+  }
+
+  [Fact]
+  public void EveryCreatorSafeCatalogEventUsesTheSameBindableEvaluatorPath() {
+    string[] events = QuestEventCatalog.AllEventNames.OrderBy(name => name).ToArray();
+
+    Assert.Equal(34, QuestEventCatalog.Count);
+    Assert.Equal(34, events.Length);
+
+    for (int i = 0; i < events.Length; i++) {
+      string eventName = events[i];
+      var evaluator = new QuestTriggerEvaluator(cooldownSeconds: 0.0);
+
+      QuestCompletion completion = Assert.Single(
+          evaluator.OnEvent(
+              List(EventQuest(eventName, id: "q-" + i)),
+              new QuestEvent(eventName),
+              i + 1.0));
+
+      Assert.Equal(eventName, completion.EventName);
+    }
+  }
+
+  [Fact]
+  public void EventNamesAreCaseInsensitiveButDiagnosticEventsCannotBind() {
+    var evaluator = new QuestTriggerEvaluator(cooldownSeconds: 0.0);
+
+    Assert.Single(evaluator.OnEvent(
+        List(EventQuest("ITEM_CRAFTED")), new QuestEvent("item_crafted"), 1.0));
+    Assert.Empty(evaluator.OnEvent(
+        List(EventQuest("health_changed", id: "unsafe")),
+        new QuestEvent("health_changed"),
+        2.0));
+    Assert.False(QuestEventCatalog.IsBindable("health_changed"));
+  }
+
+  [Fact]
+  public void PublishedHitVerbRemainsABroadCompatibilityAlias() {
+    var evaluator = new QuestTriggerEvaluator(cooldownSeconds: 0.0);
+    var legacy = EventQuest("hit", target: "tree_or_bush");
+
+    Assert.True(QuestEventCatalog.IsBindable("hit"));
+    Assert.Equal(1, QuestEventCatalog.AliasCount);
+    Assert.Single(evaluator.OnEvent(
+        List(legacy), new QuestEvent("resource_damaged", "Beech1 (tree)"), 1.0));
+
+    legacy.TriggerTarget = "Troll";
+    Assert.Single(evaluator.OnEvent(
+        List(legacy), new QuestEvent("damage_dealt", "Troll"), 2.0));
+    Assert.Empty(evaluator.OnEvent(
+        List(legacy), new QuestEvent("kill", "Troll"), 3.0));
+  }
+
+  [Fact]
+  public void GenericTargetAndWhereFieldsNarrowAnEvent() {
+    var evaluator = new QuestTriggerEvaluator(cooldownSeconds: 0.0);
+    var quest = EventQuest(
+        "item_crafted",
+        target: "iron",
+        where: new Dictionary<string, string> {
+          ["station"] = "forge",
+          ["quality"] = "2",
+        });
+    var fields = new Dictionary<string, string> {
+      ["station"] = "Forge",
+      ["quality"] = "2",
+    };
+
+    Assert.Single(evaluator.OnEvent(
+        List(quest), new QuestEvent("item_crafted", "SwordIron", fields: fields), 1.0));
+
+    fields["quality"] = "1";
+    Assert.Empty(evaluator.OnEvent(
+        List(quest), new QuestEvent("item_crafted", "SwordIron", fields: fields), 2.0));
+
+    Assert.Empty(evaluator.OnEvent(
+        List(quest), new QuestEvent("item_crafted", "Club", fields: new Dictionary<string, string> {
+          ["station"] = "forge", ["quality"] = "2",
+        }), 3.0));
+  }
+
+  [Fact]
+  public void LocalAndRpcWitnessesCannotDoubleCompleteWithCooldownZero() {
+    var evaluator = new QuestTriggerEvaluator(cooldownSeconds: 0.0, dedupeWindowSeconds: 1.0);
+    var quest = EventQuest("damage_dealt");
+
+    Assert.Single(evaluator.OnEvent(
+        List(quest), new QuestEvent("damage_dealt", "Troll", dedupeKey: "victim-42/action-7"), 10.0));
+    Assert.Empty(evaluator.OnEvent(
+        List(quest), new QuestEvent("damage_dealt", "Troll", dedupeKey: "victim-42/action-7"), 10.1));
+
+    Assert.Single(evaluator.OnEvent(
+        List(quest), new QuestEvent("damage_dealt", "Troll", dedupeKey: "victim-42/action-8"), 10.2));
+    Assert.Single(evaluator.OnEvent(
+        List(quest), new QuestEvent("damage_dealt", "Troll", dedupeKey: "victim-42/action-7"), 11.1));
+  }
+
+  [Fact]
+  public void MissingDedupeKeyDoesNotInventIdentityForIndependentActions() {
+    var evaluator = new QuestTriggerEvaluator(cooldownSeconds: 0.0);
+    var quest = EventQuest("resource_picked");
+
+    Assert.Single(evaluator.OnEvent(List(quest), new QuestEvent("resource_picked", "Raspberry"), 1.0));
+    Assert.Single(evaluator.OnEvent(List(quest), new QuestEvent("resource_picked", "Raspberry"), 1.1));
+  }
+
+  [Fact]
+  public void QuestEventCopiesFieldsAndExposesUniversalFieldsToWhere() {
+    var mutable = new Dictionary<string, string> { ["station"] = "forge" };
+    var gameplayEvent = new QuestEvent(
+        "item_crafted", "SwordIron", "Swords", true, fields: mutable);
+    mutable["station"] = "workbench";
+
+    Assert.True(gameplayEvent.TryGetField("station", out string station));
+    Assert.Equal("forge", station);
+    Assert.True(gameplayEvent.TryGetField("target", out string target));
+    Assert.Equal("SwordIron", target);
+    Assert.True(gameplayEvent.TryGetField("projectile", out string projectile));
+    Assert.Equal("true", projectile);
   }
 }
