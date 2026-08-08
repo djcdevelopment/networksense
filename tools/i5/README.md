@@ -314,8 +314,9 @@ With the final DLL/config already SHA-verified and Valheim loaded into a private
 .\Invoke-I5QuestLabBatch.ps1 run -Suite all-schools
 ```
 
-The human arrives beside food, a bronze axe, and the birch. Eat if desired, pick up the axe,
-and strike the birch; take the paired portal; pick up the bow and arrows on the player side of
+The human arrives at a ground welcome camp: take food from the picnic-table item stands if
+desired, pick up the bronze axe, and strike the Birch; then take the ascent portal to the
+canopy-clear deck. Pick up the bow and arrows on the player side of
 Combat and kill the Greyling at its rune; pick up the hammer and wood at Building and place any
 piece; put the coal waiting directly in front of Crafting's smelter into it; and write the hub
 sign labelled `sign here`. Picking up any staged item witnesses Inventory, the portal witnesses
@@ -364,7 +365,7 @@ python tools/component-packets/verify_questlab_release.py `
   --gallery-request <rebuild-request.json> `
   --gallery-acceptance <gallery-acceptance.json> `
   --expected-version 0.2.0 `
-  --expected-release questlab-v0.2.0-20260808-r9 `
+  --expected-release questlab-v0.2.0-20260808-r10 `
   --write captures/questlab/omen/release-verification.json
 ```
 
