@@ -308,17 +308,19 @@ With the final DLL/config already SHA-verified and Valheim loaded into a private
 # Headless-in-game proof of all 34 source-shared evaluator events
 .\Invoke-I5QuestLabBatch.ps1 run -Suite creator-events
 
-# One setup request raises the default gallery, installs eight ordinary quests,
-# and stages Wood, Coal, and Copper Ore at the player's feet.
+# One setup request safely clears marked old builds, raises the compact default course,
+# and installs eight ordinary quests. Targets and supplies are staged at point of use.
 .\Invoke-I5QuestLabBatch.ps1 prepare -Suite all-schools
 .\Invoke-I5QuestLabBatch.ps1 run -Suite all-schools
 ```
 
-The human then does one compact circuit: pick up a staged stack; take the gallery portal;
-kill the combat Greyling; use the central bronze axe on the harvest birch; take the central
-Hammer and place any piece with the staged Wood; add staged Coal to the crafting smelter;
-and write the social sign. Weapon/tool use normally witnesses progression on the same circuit;
-if it remains, jump or use any skill once. Then collect and close the run:
+The human arrives beside food, a bronze axe, and the birch. Eat if desired, pick up the axe,
+and strike the birch; take the paired portal; pick up the bow and arrows on the player side of
+Combat and kill the Greyling at its rune; pick up the hammer and wood at Building and place any
+piece; put the coal waiting directly in front of Crafting's smelter into it; and write the hub
+sign labelled `sign here`. Picking up any staged item witnesses Inventory, the portal witnesses
+World, and weapon/tool use normally witnesses Progression; if that one remains, jump or use any
+skill once. Every station is only 9 m from the hub. Then collect and close the run:
 
 ```powershell
 .\Invoke-I5QuestLabBatch.ps1 report
@@ -329,7 +331,10 @@ if it remains, jump or use any skill once. Then collect and close the run:
 Gallery clear and rebuild now return a player standing on a selected raised floor to the
 natural terrain at the same X/Z before removing marked objects. If Valheim does not accept or
 complete that movement, deletion fails closed and the request receipt says why. These requests
-give the operator identify → safe clear → one-command comparison → selected
+also wait a bounded five seconds for queued marked ZDO destroys to disappear before claiming
+success. `prepare all-schools` uses the same clear-all-then-build lifecycle, so it is the normal
+one-command reset between human passes. The bounded operations give the operator identify →
+safe clear → one-command comparison → selected
 rebuild, without one-off console entry:
 
 ```powershell
@@ -359,7 +364,7 @@ python tools/component-packets/verify_questlab_release.py `
   --gallery-request <rebuild-request.json> `
   --gallery-acceptance <gallery-acceptance.json> `
   --expected-version 0.2.0 `
-  --expected-release questlab-v0.2.0-20260808-r6 `
+  --expected-release questlab-v0.2.0-20260808-r8 `
   --write captures/questlab/omen/release-verification.json
 ```
 

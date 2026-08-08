@@ -26,13 +26,18 @@ public class LabBatchContractTests {
   }
 
   [Fact]
-  public void FreshCharacterGetsEveryConsumedBuildAndStationMaterial() {
-    Assert.Equal(new[] { "Wood", "Coal", "CopperOre" }, LabBatchContract.PreparedSupplyPrefabs);
+  public void FreshCharacterInstructionsPointAtEveryLocalCourseSupply() {
     LabBatchSuite suite = LabBatchContract.FindSuite("all-schools");
+    Assert.Contains(suite.Expectations, x => x.EventName == "kill"
+        && x.Instruction.Contains("bow and arrows at the combat spoke mouth", StringComparison.Ordinal));
+    Assert.Contains(suite.Expectations, x => x.EventName == "resource_damaged"
+        && x.Instruction.Contains("bronze axe beside the arrival portal", StringComparison.Ordinal));
     Assert.Contains(suite.Expectations, x => x.EventName == "piece_placed"
-        && x.Instruction.Contains("staged Wood", StringComparison.Ordinal));
+        && x.Instruction.Contains("Hammer and Wood in front of the building bench", StringComparison.Ordinal));
     Assert.Contains(suite.Expectations, x => x.EventName == "station_fuel_added"
-        && x.Instruction.Contains("staged Coal", StringComparison.Ordinal));
+        && x.Instruction.Contains("Coal directly in front of the crafting smelter", StringComparison.Ordinal));
+    Assert.Contains(suite.Expectations, x => x.EventName == "sign_written"
+        && x.Instruction.Contains("hub sign that says sign here", StringComparison.Ordinal));
   }
 
   [Fact]
