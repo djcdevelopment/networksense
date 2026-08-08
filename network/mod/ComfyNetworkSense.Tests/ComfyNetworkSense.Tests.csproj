@@ -48,6 +48,7 @@
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSet.cs" Link="LabQuestSet.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestAdvisor.cs" Link="LabQuestAdvisor.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSeed.cs" Link="LabQuestSeed.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabCreatureNaming.cs" Link="LabCreatureNaming.cs" />
   </ItemGroup>
 
   <ItemGroup>
