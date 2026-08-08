@@ -326,8 +326,10 @@ if it remains, jump or use any skill once. Then collect and close the run:
 .\Invoke-I5QuestLabBatch.ps1 reset
 ```
 
-For the Gallery v2 choice, return through the ground portal before clearing the raised floor.
-These requests give the operator identify → safe clear → one-command comparison → selected
+Gallery clear and rebuild now return a player standing on a selected raised floor to the
+natural terrain at the same X/Z before removing marked objects. If Valheim does not accept or
+complete that movement, deletion fails closed and the request receipt says why. These requests
+give the operator identify → safe clear → one-command comparison → selected
 rebuild, without one-off console entry:
 
 ```powershell
