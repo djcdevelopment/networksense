@@ -47,18 +47,16 @@ public class LabQuestSetTests {
     Assert.Equal(1, set.ArmedCount);
   }
 
-  /// <summary>The lab's central lesson: "hit" parses cleanly and can never fire. The verdict has
-  /// to name the creator's actual verb, because "not armed" alone sends them looking at the target.</summary>
+  /// <summary>The published schema-1 hit verb remains armed across the canonical split between
+  /// creature and resource damage.</summary>
   [Fact]
-  public void AHitQuestIsNotArmedAndTheReasonNamesTheVerb() {
+  public void AHitQuestIsArmedThroughTheCompatibilityAlias() {
     var set = LabQuestSet.Build(Files(("a.json",
         View(Quest("h", "{ \"event\": \"hit\", \"target\": \"tree_or_bush\" }")))));
 
     LabQuest quest = Find(set, "h");
-    Assert.Empty(set.Errors);          // it parsed fine — that is exactly the trap
-    Assert.False(quest.IsArmed);
-    Assert.Equal(LabArmed.VerbNotKill, quest.Armed);
-    Assert.Contains("'hit'", quest.ArmedLine());
+    Assert.Empty(set.Errors);
+    Assert.True(quest.IsArmed);
   }
 
   [Fact]
@@ -84,14 +82,30 @@ public class LabQuestSetTests {
     Assert.Equal(LabArmed.AutoChecked, Find(set, "a").Armed);
   }
 
-  /// <summary>A trigger-less quest must not be reported as a verb problem. The probe forces the
-  /// verb to "kill" to find out whether the verb was the only obstacle, and that ablation would
-  /// mislabel this shape if the checks ran in the wrong order.</summary>
+  /// <summary>A trigger-less quest must not be reported as an unsupported-event problem.</summary>
   [Fact]
-  public void TheVerbAblationDoesNotMisreportATriggerLessQuest() {
+  public void ATriggerLessQuestIsNotMisreportedAsAnUnsupportedEvent() {
     var set = LabQuestSet.Build(Files(("a.json", View(Quest("m", "null")))));
 
-    Assert.NotEqual(LabArmed.VerbNotKill, Find(set, "m").Armed);
+    Assert.NotEqual(LabArmed.UnsupportedEvent, Find(set, "m").Armed);
+  }
+
+  [Fact]
+  public void AnUnknownEventIsNamedAsUnsupported() {
+    var set = LabQuestSet.Build(Files(("a.json",
+        View(Quest("x", "{ \"event\": \"method_name_from_a_mod\" }")))));
+
+    Assert.Equal(LabArmed.UnsupportedEvent, Find(set, "x").Armed);
+    Assert.Contains("method_name_from_a_mod", Find(set, "x").ArmedLine());
+  }
+
+  [Fact]
+  public void AGenericWhereFilterCanBeDryFiredWithoutMirroringEvaluatorRules() {
+    var set = LabQuestSet.Build(Files(("a.json", View(Quest("craft",
+        "{ \"event\": \"item_crafted\", \"target\": \"SwordIron\", "
+        + "\"where\": { \"station\": \"forge\", \"quality\": 2 } }")))));
+
+    Assert.True(Find(set, "craft").IsArmed);
   }
 
   // ---- per-file isolation ------------------------------------------------------------------

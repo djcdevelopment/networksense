@@ -17,24 +17,22 @@ public class LabQuestSeedTests {
 
   /// <summary>The load-bearing test of the whole seed.
   ///
-  /// A newcomer's first launch has to show one quest that works and one that silently cannot,
-  /// because the difference between them is the lesson. Asserting it through the real parser and
-  /// the real evaluator means this goes red the day either contract moves underneath the seed —
-  /// which is exactly when the starter file would otherwise start teaching the wrong thing.</summary>
+  /// A newcomer's first launch has to prove both the old kill shape and the broader schema-1 hit
+  /// alias. Asserting through the real parser/evaluator turns red if either contract moves.</summary>
   [Fact]
-  public void TheSeedShowsOneArmedQuestAndOneThatSilentlyCannotFire() {
+  public void TheSeedShowsTwoArmedQuestShapes() {
     LabQuestSet set = Seeded();
 
     Assert.Empty(set.Errors);
     Assert.Equal(2, set.Quests.Count);
-    Assert.Equal(1, set.ArmedCount);
+    Assert.Equal(2, set.ArmedCount);
 
     LabQuest armed = set.Quests.Single(q => q.QuestId == "first_blood");
     LabQuest wood = set.Quests.Single(q => q.QuestId == "punchwood");
 
     Assert.True(armed.IsArmed);
-    Assert.Equal(LabArmed.VerbNotKill, wood.Armed);
-    Assert.Contains("'hit'", wood.ArmedLine());
+    Assert.True(wood.IsArmed);
+    Assert.Equal("hit", wood.Quest.TriggerEvent);
   }
 
   /// <summary>The seed's armed quest must target something the practice gallery actually puts in
@@ -53,7 +51,7 @@ public class LabQuestSeedTests {
     string combatStation = LabGalleryPlan.Monuments
         .Single(m => m.Category == LabCategory.Combat).Station.Prefab;
 
-    TrackedQuest armed = Seeded().Quests.Single(q => q.IsArmed).Quest;
+    TrackedQuest armed = Seeded().Quests.Single(q => q.QuestId == "first_blood").Quest;
 
     Assert.Contains(armed.TriggerTarget.ToLowerInvariant(), combatStation.ToLowerInvariant());
   }
@@ -63,10 +61,19 @@ public class LabQuestSeedTests {
   /// how triggers work" — the requirements text invites adding one as the next edit instead.</summary>
   [Fact]
   public void TheArmedSeedQuestFiresOnAnyKillOfItsTarget() {
-    TrackedQuest armed = Seeded().Quests.Single(q => q.IsArmed).Quest;
+    TrackedQuest armed = Seeded().Quests.Single(q => q.QuestId == "first_blood").Quest;
 
     Assert.True(string.IsNullOrWhiteSpace(armed.TriggerWeaponSkill));
     Assert.False(armed.TriggerProjectile);
+  }
+
+  [Fact]
+  public void PunchwoodRetainsThePublishedHitVerbAndHarvestTarget() {
+    TrackedQuest wood = Seeded().Quests.Single(q => q.QuestId == "punchwood").Quest;
+
+    Assert.Equal("hit", wood.TriggerEvent);
+    Assert.Equal("tree_or_bush", wood.TriggerTarget);
+    Assert.Equal("Unarmed", wood.TriggerWeaponSkill);
   }
 
   [Fact]
