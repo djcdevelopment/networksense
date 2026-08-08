@@ -72,6 +72,9 @@ Host i5
 # Render and validate the exact request without touching i5
 .\Invoke-I5QuestLabBatch.ps1 gallery_compare -Profile marble-wide -CompareProfile marble-grand -DryRun
 
+# Use the same fixed mailbox on local OMEN when it is the explicitly selected live lane
+.\Invoke-I5QuestLabBatch.ps1 run -Suite creator-events -Lane omen
+
 # Start/rebuild the i5 Companion with the Valheim directory mounted
 .\Start-I5Companion.ps1
 
