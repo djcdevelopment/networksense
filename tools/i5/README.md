@@ -350,7 +350,9 @@ rebuild, without one-off console entry:
 The visual choice is deliberately not inferred from a build receipt. Copy
 `tools/component-packets/samples/questlab-gallery-acceptance.sample.json` into the ignored
 capture directory, name the human and comparison request, choose the profile, and turn each
-observation true only after looking in game. The final verifier rejects a missing school,
+observation true only after looking in game. The r11 form explicitly records the floor, scale,
+hall width, monument runes, mid-spoke rune banners, focused sign lighting, welcome camp, and
+Quest grid readability. The final verifier rejects a missing school,
 catalog event, coalescing witness, lifecycle operation, human decision, mixed-machine evidence,
 or same-action double completion:
 
