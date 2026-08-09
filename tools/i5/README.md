@@ -352,7 +352,7 @@ rebuild, without one-off console entry:
 The visual choice is deliberately not inferred from a build receipt. Copy
 `tools/component-packets/samples/questlab-gallery-acceptance.sample.json` into the ignored
 capture directory, name the human and comparison request, choose the profile, and turn each
-observation true only after looking in game. The r21 form explicitly records the dark,
+observation true only after looking in game. The r22 form explicitly records the dark,
 snow-free floor, scale, hall width, marble canopy, hanging braziers, monument runes,
 mid-spoke rune banners, focused sign lighting, welcome camp, and Quest grid readability. The
 final verifier rejects a missing school,
@@ -370,7 +370,7 @@ python tools/component-packets/verify_questlab_release.py `
   --gallery-request <rebuild-request.json> `
   --gallery-acceptance <gallery-acceptance.json> `
   --expected-version 0.2.0 `
-  --expected-release questlab-v0.2.0-20260809-r21 `
+  --expected-release questlab-v0.2.0-20260809-r22 `
   --write captures/questlab/omen/release-verification.json
 ```
 

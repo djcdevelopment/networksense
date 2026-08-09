@@ -47,6 +47,7 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestViewLoader.cs" Link="QuestViewLoader.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestTriggerEvaluator.cs" Link="QuestTriggerEvaluator.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestEventCatalog.g.cs" Link="QuestEventCatalog.g.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\QuestAuthoring.cs" Link="QuestAuthoring.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSet.cs" Link="LabQuestSet.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestAdvisor.cs" Link="LabQuestAdvisor.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSeed.cs" Link="LabQuestSeed.cs" />
