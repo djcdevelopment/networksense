@@ -64,6 +64,7 @@
          seed can be asserted against the gallery the seed is meant to be practised in. It names
          its categories from LabEvents, which is Unity-free for the same reason. -->
     <Compile Include="..\ComfyQuestLab\Core\LabEvents.cs" Link="LabEvents.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabEventArchive.cs" Link="LabEventArchive.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabGalleryPlan.g.cs" Link="LabGalleryPlan.g.cs" />
   </ItemGroup>
 
