@@ -42,6 +42,7 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\GameplayEventClassifier.cs" Link="GameplayEventClassifier.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\LivePlayerTargetPolicy.cs" Link="LivePlayerTargetPolicy.cs" />
     <Compile Include="..\ComfyQuestLab\Core\BlueprintFile.cs" Link="BlueprintFile.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabCaptureContract.cs" Link="LabCaptureContract.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Models\TrackedQuest.cs" Link="TrackedQuest.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Models\QuestEvent.cs" Link="QuestEvent.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestViewLoader.cs" Link="QuestViewLoader.cs" />
