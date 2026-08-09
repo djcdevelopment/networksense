@@ -100,13 +100,15 @@ public class LabBatchContractTests {
 
   [Fact]
   public void RemotePolicyIsAClosedAllowlistWithNoConsoleOrKeystrokeLane() {
-    Assert.Equal(10, LabBatchRequestPolicy.Operations.Length);
+    Assert.Equal(11, LabBatchRequestPolicy.Operations.Length);
     Assert.True(LabBatchRequestPolicy.Validate(
         "prepare", "all-schools", null, null, null, out string _));
     Assert.True(LabBatchRequestPolicy.Validate(
         "gallery_compare", null, "marble-wide", "marble-grand", null, out _));
     Assert.True(LabBatchRequestPolicy.Validate(
         "gallery_clear", null, null, null, "compare-20260808T120000Z-01", out _));
+    Assert.True(LabBatchRequestPolicy.Validate(
+        "gallery_evidence", null, null, null, "marble-grand", out _));
 
     Assert.False(LabBatchRequestPolicy.Validate(
         "console", null, null, null, null, out string consoleError));
@@ -120,6 +122,13 @@ public class LabBatchContractTests {
     Assert.False(LabBatchRequestPolicy.Validate(
         "gallery_build", null, "not-a-profile", null, null, out string profileError));
     Assert.Equal("gallery_profile_not_allowlisted", profileError);
+    Assert.False(LabBatchRequestPolicy.Validate(
+        "gallery_evidence", null, null, null, "../../outside", out string selectorError));
+    Assert.Equal("gallery_selector_invalid", selectorError);
+    Assert.False(LabBatchRequestPolicy.Validate(
+        "gallery_evidence", null, "unexpected-profile-field", null, "all",
+        out string evidenceExtraError));
+    Assert.Equal("request_argument_not_allowed", evidenceExtraError);
   }
 
   [Fact]

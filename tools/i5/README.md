@@ -293,7 +293,10 @@ so excluded `bin`, `obj`, or other build-output folders do not land remotely.
 
 `Invoke-I5QuestLabBatch.ps1` composes that verified config deploy with one fixed request
 mailbox. Requests expire within 30 minutes and accept only prepare/run/reset/report/export
-or Gallery v2 build/compare/identify/clear/rebuild, with allowlisted suites and profiles.
+or Gallery v2 build/compare/identify/evidence/clear/rebuild, with allowlisted suites,
+profiles, and safe profile/build selectors. `gallery_evidence` is read-only: it writes one
+fixed-directory `comfy-questlab-gallery-truth/v1` receipt and the helper retrieves it after
+checking both its path boundary and schema.
 The plugin consumes each request once on Unity's main thread and writes a request receipt;
 the helper retrieves it, any exported suite receipt, and a filtered Quest Lab log tail into
 ignored `captures/questlab/<lane>/` (`i5` or `omen`). A timeout reports that the request was delivered but not
@@ -311,6 +314,7 @@ With the final DLL/config already SHA-verified and Valheim loaded into a private
 # One setup request safely clears marked old builds, raises the compact default course,
 # and installs eight ordinary quests. Targets and supplies are staged at point of use.
 .\Invoke-I5QuestLabBatch.ps1 prepare -Suite all-schools
+.\Invoke-I5QuestLabBatch.ps1 gallery_evidence -Selector marble-grand
 .\Invoke-I5QuestLabBatch.ps1 run -Suite all-schools
 ```
 
