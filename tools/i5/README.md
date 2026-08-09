@@ -316,7 +316,7 @@ With the final DLL/config already SHA-verified and Valheim loaded into a private
 
 The human arrives at a ground welcome camp: take food from the picnic-table item stands if
 desired, pick up the bronze axe, and strike the Birch; then take the ascent portal to the
-canopy-clear deck. Pick up the bow and arrows on the player side of
+6 m sheltered marble deck. Pick up the bow and arrows on the player side of
 Combat and kill the Greyling at its rune; pick up the hammer and wood at Building and place any
 piece; put the coal waiting directly in front of Crafting's smelter into it; and write the hub
 sign labelled `sign here`. Picking up any staged item witnesses Inventory, the portal witnesses
@@ -333,7 +333,9 @@ Gallery clear and rebuild now return a player standing on a selected raised floo
 natural terrain at the same X/Z before removing marked objects. If Valheim does not accept or
 complete that movement, deletion fails closed and the request receipt says why. These requests
 also wait a bounded five seconds for queued marked ZDO destroys to disappear before claiming
-success. `prepare all-schools` uses the same clear-all-then-build lifecycle, so it is the normal
+success. A normal clear then restores matching write-ahead-ledgered natural trees; setup and
+rebuild keep that recovery ledger active beneath the replacement. `prepare all-schools` uses
+the same clear-all-then-build lifecycle, so it is the normal
 one-command reset between human passes. The bounded operations give the operator identify →
 safe clear → one-command comparison → selected
 rebuild, without one-off console entry:
@@ -350,9 +352,10 @@ rebuild, without one-off console entry:
 The visual choice is deliberately not inferred from a build receipt. Copy
 `tools/component-packets/samples/questlab-gallery-acceptance.sample.json` into the ignored
 capture directory, name the human and comparison request, choose the profile, and turn each
-observation true only after looking in game. The r13 form explicitly records the floor, scale,
-hall width, monument runes, mid-spoke rune banners, focused sign lighting, welcome camp, and
-Quest grid readability. The final verifier rejects a missing school,
+observation true only after looking in game. The r18 form explicitly records the dark,
+snow-free floor, scale, hall width, marble canopy, hanging braziers, monument runes,
+mid-spoke rune banners, focused sign lighting, welcome camp, and Quest grid readability. The
+final verifier rejects a missing school,
 catalog event, coalescing witness, lifecycle operation, human decision, mixed-machine evidence,
 or same-action double completion:
 
@@ -367,7 +370,7 @@ python tools/component-packets/verify_questlab_release.py `
   --gallery-request <rebuild-request.json> `
   --gallery-acceptance <gallery-acceptance.json> `
   --expected-version 0.2.0 `
-  --expected-release questlab-v0.2.0-20260808-r13 `
+  --expected-release questlab-v0.2.0-20260809-r18 `
   --write captures/questlab/omen/release-verification.json
 ```
 
