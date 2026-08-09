@@ -24,7 +24,7 @@ public sealed class LabEventArchiveTests {
 
       string path = Directory.GetFiles(dir, "*.jsonl").Single();
       Assert.EndsWith(
-          "questlab-events-20260809T123456789Z-r24-extended.jsonl", path,
+          "questlab-events-20260809T123456789Z-r24-startup-extended.jsonl", path,
           StringComparison.OrdinalIgnoreCase);
       string[] lines = File.ReadAllLines(path);
       Assert.Equal(3, lines.Length);
@@ -33,6 +33,9 @@ public sealed class LabEventArchiveTests {
       Assert.Equal(LabEventArchive.Schema, header.RootElement.GetProperty("schema").GetString());
       Assert.Equal("session", header.RootElement.GetProperty("recordType").GetString());
       Assert.Equal("r24", archive.SessionId.Split('-')[1]);
+      Assert.Equal(
+          "startup-default",
+          header.RootElement.GetProperty("runtimeProfileSemantics").GetString());
       Assert.False(header.RootElement.GetProperty("fields").GetProperty("details").GetBoolean());
       Assert.Equal(1, header.RootElement.GetProperty("segment").GetInt32());
 
@@ -134,8 +137,8 @@ public sealed class LabEventArchiveTests {
       LabEventArchive second = NewArchive(dir, csvSeconds: 0, sessionOverride: null);
       second.Dispose();
 
-      Assert.Equal("20260809T123456789Z-r24-extended", first.SessionId);
-      Assert.Equal("20260809T123456789Z-r24-extended-02", second.SessionId);
+      Assert.Equal("20260809T123456789Z-r24-startup-extended", first.SessionId);
+      Assert.Equal("20260809T123456789Z-r24-startup-extended-02", second.SessionId);
       Assert.Equal(2, Directory.GetFiles(dir, "*.jsonl").Length);
     } finally {
       Directory.Delete(dir, true);
@@ -246,7 +249,7 @@ public sealed class LabEventArchiveTests {
       bool diagnostic = false,
       int maxSegmentBytes = 1024 * 1024,
       int maxSegments = 24,
-      string sessionOverride = "20260809T123456789Z-r24-extended",
+      string sessionOverride = "20260809T123456789Z-r24-startup-extended",
       int queueCapacity = 4096,
       Action beforeWriterStart = null) {
     return new LabEventArchive(new LabEventArchiveOptions {
