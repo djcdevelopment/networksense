@@ -66,6 +66,11 @@ Host i5
 .\Invoke-I5QuestLabBatch.ps1 report
 .\Invoke-I5QuestLabBatch.ps1 export
 
+# Rehearse one canonical event through the exact shared evaluator. Prepare writes
+# only its Lab-owned editable draft + manifest; it never arms or edits creator quests.
+.\Invoke-I5QuestLabBatch.ps1 prepare -Suite scenario-sign_written
+.\Invoke-I5QuestLabBatch.ps1 run -Suite scenario-sign_written
+
 # Raise one visual comparison in a single request and collect its identify/log receipt
 .\Invoke-I5QuestLabBatch.ps1 gallery_compare -Profile marble-wide -CompareProfile marble-grand
 
@@ -293,8 +298,12 @@ so excluded `bin`, `obj`, or other build-output folders do not land remotely.
 
 `Invoke-I5QuestLabBatch.ps1` composes that verified config deploy with one fixed request
 mailbox. Requests expire within 30 minutes and accept only prepare/run/reset/report/export
-or Gallery v2 build/compare/identify/evidence/clear/rebuild, with allowlisted suites,
-profiles, and safe profile/build selectors. `gallery_evidence` is read-only: it writes one
+or Gallery v2 build/compare/identify/evidence/clear/rebuild, with two release suites, all
+34 exact `scenario-<event>` IDs, three profiles, and safe profile/build selectors explicitly
+allowlisted. A scenario prepare writes one editable schema-1 draft plus deterministic manifest
+under its fixed Quest Lab config folder and refuses to overwrite changed output. Its run receipt
+says `synthetic-scenario`; it cannot claim a Valheim gameplay witness. `gallery_evidence` is
+read-only: it writes one
 fixed-directory `comfy-questlab-gallery-truth/v1` receipt and the helper retrieves it after
 checking both its path boundary and schema.
 The plugin consumes each request once on Unity's main thread and writes a request receipt;
@@ -310,6 +319,10 @@ With the final DLL/config already SHA-verified and Valheim loaded into a private
 ```powershell
 # Headless-in-game proof of all 34 source-shared evaluator events
 .\Invoke-I5QuestLabBatch.ps1 run -Suite creator-events
+
+# Optional one-event creator rehearsal and editable draft export
+.\Invoke-I5QuestLabBatch.ps1 prepare -Suite scenario-station_fuel_added
+.\Invoke-I5QuestLabBatch.ps1 run -Suite scenario-station_fuel_added
 
 # One setup request safely clears marked old builds, raises the compact default course,
 # and installs eight ordinary quests. Targets and supplies are staged at point of use.
