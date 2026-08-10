@@ -13,6 +13,13 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\ComfyQuestRuntime\LiveTest\manifest.json" Link="LiveTest\manifest.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\ComfyQuestRuntime\LiveTest\experiences\omen-inscription.json" Link="LiveTest\experiences\omen-inscription.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ComfyQuestContracts\ComfyQuestContracts.csproj" />
+  </ItemGroup>
 
   <!-- LINKED, not ProjectReference, and that is the whole design. ComfyNetworkSense targets net48
        against Valheim's own assemblies, so referencing it would drag Unity into this project and put
