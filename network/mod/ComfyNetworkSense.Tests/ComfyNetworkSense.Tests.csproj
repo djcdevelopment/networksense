@@ -42,22 +42,29 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\GameplayEventClassifier.cs" Link="GameplayEventClassifier.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\LivePlayerTargetPolicy.cs" Link="LivePlayerTargetPolicy.cs" />
     <Compile Include="..\ComfyQuestLab\Core\BlueprintFile.cs" Link="BlueprintFile.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabCaptureContract.cs" Link="LabCaptureContract.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabPanelLayout.cs" Link="LabPanelLayout.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabDemoReadiness.cs" Link="LabDemoReadiness.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Models\TrackedQuest.cs" Link="TrackedQuest.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Models\QuestEvent.cs" Link="QuestEvent.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestViewLoader.cs" Link="QuestViewLoader.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestTriggerEvaluator.cs" Link="QuestTriggerEvaluator.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\QuestEventCatalog.g.cs" Link="QuestEventCatalog.g.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\QuestAuthoring.cs" Link="QuestAuthoring.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSet.cs" Link="LabQuestSet.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestAdvisor.cs" Link="LabQuestAdvisor.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSeed.cs" Link="LabQuestSeed.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabCreatureNaming.cs" Link="LabCreatureNaming.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabActionDedupe.cs" Link="LabActionDedupe.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabBatchContract.cs" Link="LabBatchContract.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabScenarioContract.cs" Link="LabScenarioContract.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabRuntimeProfile.cs" Link="LabRuntimeProfile.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabTreeRecoveryContract.cs" Link="LabTreeRecoveryContract.cs" />
     <!-- Generated, and Unity-free by construction (plain floats and strings) — linked so the
          seed can be asserted against the gallery the seed is meant to be practised in. It names
          its categories from LabEvents, which is Unity-free for the same reason. -->
     <Compile Include="..\ComfyQuestLab\Core\LabEvents.cs" Link="LabEvents.cs" />
+    <Compile Include="..\ComfyQuestLab\Core\LabEventArchive.cs" Link="LabEventArchive.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabGalleryPlan.g.cs" Link="LabGalleryPlan.g.cs" />
   </ItemGroup>
 

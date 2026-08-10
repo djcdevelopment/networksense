@@ -54,6 +54,67 @@ public class LabBatchContractTests {
   }
 
   [Fact]
+  public void ScenarioCatalogMirrorsEveryAuthoringEventAndSchool() {
+    Assert.Equal(QuestEventCatalog.Count, LabScenarioCatalog.All.Count);
+    Assert.Equal(34, LabScenarioCatalog.All.Select(x => x.EventName).Distinct().Count());
+    Assert.Equal(
+        LabCategory.All.OrderBy(x => x),
+        LabScenarioCatalog.All.Select(x => x.School).Distinct().OrderBy(x => x));
+
+    foreach (LabScenarioDefinition scenario in LabScenarioCatalog.All) {
+      Assert.Equal("scenario-" + scenario.EventName, scenario.Id);
+      Assert.Same(scenario.Suite, LabBatchContract.FindSuite(scenario.Id));
+      Assert.Equal("synthetic-scenario", scenario.Suite.EvidenceKind);
+      Assert.Single(scenario.Suite.Expectations);
+      Assert.False(string.IsNullOrWhiteSpace(scenario.LiveAction));
+      Assert.True(QuestEventCatalog.TryGet(
+          scenario.EventName, out QuestEventCatalog.Definition metadata));
+      Assert.Equal(metadata.Category, scenario.School);
+      Assert.Equal(metadata.Profile, scenario.Profile);
+      Assert.Equal(metadata.TargetKind, scenario.TargetKind);
+      Assert.Equal(metadata.ExampleTarget, scenario.ExampleTarget);
+    }
+  }
+
+  [Fact]
+  public void EveryScenarioDraftAndRunUsesTheSharedLoaderAndEvaluator() {
+    foreach (LabScenarioDefinition scenario in LabScenarioCatalog.All) {
+      string questView = scenario.BuildQuestView();
+      List<TrackedQuest> parsed = QuestViewLoader.Parse(questView, out string _);
+      TrackedQuest quest = Assert.Single(parsed);
+      Assert.Equal(scenario.EventName, quest.TriggerEvent);
+
+      LabBatchSession run = LabScenarioCatalog.Run(scenario, "test-" + scenario.Id, "now");
+      Assert.Equal("complete", run.State);
+      Assert.Equal("pass", run.Verdict);
+      Assert.Equal(1, run.WitnessedCount);
+      Assert.Equal(1, run.CompletedQuestCount);
+      Assert.Equal(0, run.DoubleCompletionCount);
+      Assert.Equal("synthetic-scenario", Assert.Single(run.Witnesses).Source);
+    }
+  }
+
+  [Fact]
+  public void ScenarioPreparationManifestIsDeterministicAndHonest() {
+    LabScenarioDefinition scenario = LabScenarioCatalog.Find("scenario-station_fuel_added");
+    string questView = scenario.BuildQuestView();
+    string first = scenario.BuildManifest(questView);
+    string second = scenario.BuildManifest(questView);
+
+    Assert.Equal(first, second);
+    using JsonDocument parsed = JsonDocument.Parse(first);
+    JsonElement root = parsed.RootElement;
+    Assert.Equal(LabScenarioCatalog.ManifestSchema, root.GetProperty("schema").GetString());
+    Assert.Equal("synthetic-scenario", root.GetProperty("evidence_kind").GetString());
+    Assert.Contains("not a live gameplay witness", root.GetProperty("claim").GetString());
+    Assert.Equal("Coal", root.GetProperty("example").GetProperty("target").GetString());
+    Assert.Equal(
+        "smelter",
+        root.GetProperty("example").GetProperty("where").GetProperty("station").GetString());
+    Assert.Matches("^[0-9a-f]{64}$", root.GetProperty("quest_view_sha256").GetString());
+  }
+
+  [Fact]
   public void AlternativeWitnessesCollapseToOneCanonicalAction() {
     LabBatchSuite suite = LabBatchContract.FindSuite("all-schools");
     var run = new LabBatchSession(suite, "dedupe-test", "start");
@@ -100,15 +161,17 @@ public class LabBatchContractTests {
 
   [Fact]
   public void RemotePolicyIsAClosedAllowlistWithNoConsoleOrKeystrokeLane() {
-    Assert.Equal(12, LabBatchRequestPolicy.Operations.Length);
-    Assert.True(LabBatchRequestPolicy.Validate(
-        "reload", null, null, null, null, out _));
+    Assert.Equal(11, LabBatchRequestPolicy.Operations.Length);
     Assert.True(LabBatchRequestPolicy.Validate(
         "prepare", "all-schools", null, null, null, out string _));
+    Assert.True(LabBatchRequestPolicy.Validate(
+        "run", "scenario-sign_written", null, null, null, out _));
     Assert.True(LabBatchRequestPolicy.Validate(
         "gallery_compare", null, "marble-wide", "marble-grand", null, out _));
     Assert.True(LabBatchRequestPolicy.Validate(
         "gallery_clear", null, null, null, "compare-20260808T120000Z-01", out _));
+    Assert.True(LabBatchRequestPolicy.Validate(
+        "gallery_evidence", null, null, null, "marble-grand", out _));
 
     Assert.False(LabBatchRequestPolicy.Validate(
         "console", null, null, null, null, out string consoleError));
@@ -120,8 +183,18 @@ public class LabBatchContractTests {
         "run", "all-schools", "arbitrary-extra", null, null, out string extraError));
     Assert.Equal("request_argument_not_allowed", extraError);
     Assert.False(LabBatchRequestPolicy.Validate(
+        "run", "scenario-not_real", null, null, null, out string scenarioError));
+    Assert.Equal("suite_not_allowlisted", scenarioError);
+    Assert.False(LabBatchRequestPolicy.Validate(
         "gallery_build", null, "not-a-profile", null, null, out string profileError));
     Assert.Equal("gallery_profile_not_allowlisted", profileError);
+    Assert.False(LabBatchRequestPolicy.Validate(
+        "gallery_evidence", null, null, null, "../../outside", out string selectorError));
+    Assert.Equal("gallery_selector_invalid", selectorError);
+    Assert.False(LabBatchRequestPolicy.Validate(
+        "gallery_evidence", null, "unexpected-profile-field", null, "all",
+        out string evidenceExtraError));
+    Assert.Equal("request_argument_not_allowed", evidenceExtraError);
   }
 
   [Fact]

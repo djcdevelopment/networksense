@@ -12,54 +12,97 @@ using System.Collections.Generic;
 public static class QuestEventCatalog {
   public const string Schema = "comfy-quest-event/v1";
 
+  /// <summary>One event-specific scalar accepted by trigger.where.</summary>
+  public readonly struct FieldDefinition {
+    public string Name { get; }
+    public string Description { get; }
+    public string Example { get; }
+    public bool DraftByDefault { get; }
+
+    public FieldDefinition(
+        string name, string description, string example, bool draftByDefault) {
+      Name = name;
+      Description = description;
+      Example = example;
+      DraftByDefault = draftByDefault;
+    }
+  }
+
   public readonly struct Definition {
     public string Name { get; }
     public string Category { get; }
     public string Profile { get; }
+    public string TargetKind { get; }
+    public string TargetDescription { get; }
+    public string ExampleTarget { get; }
+    public bool SupportsWeaponSkill { get; }
+    public bool SupportsProjectile { get; }
+    public IReadOnlyList<FieldDefinition> Fields { get; }
 
     public Definition(string name, string category, string profile) {
       Name = name;
       Category = category;
       Profile = profile;
+      TargetKind = "subject";
+      TargetDescription = "the event subject";
+      ExampleTarget = "any";
+      SupportsWeaponSkill = false;
+      SupportsProjectile = false;
+      Fields = new FieldDefinition[0];
+    }
+
+    public Definition(
+        string name, string category, string profile, string targetKind,
+        string targetDescription, string exampleTarget, bool supportsWeaponSkill,
+        bool supportsProjectile, FieldDefinition[] fields) {
+      Name = name;
+      Category = category;
+      Profile = profile;
+      TargetKind = targetKind;
+      TargetDescription = targetDescription;
+      ExampleTarget = exampleTarget;
+      SupportsWeaponSkill = supportsWeaponSkill;
+      SupportsProjectile = supportsProjectile;
+      Fields = fields ?? new FieldDefinition[0];
     }
   }
 
   static readonly Dictionary<string, Definition> _events =
       new Dictionary<string, Definition>(StringComparer.OrdinalIgnoreCase) {
-    { "attack_blocked", new Definition("attack_blocked", "combat", "core") },
-    { "character_healed", new Definition("character_healed", "combat", "core") },
-    { "character_staggered", new Definition("character_staggered", "combat", "core") },
-    { "chat_sent", new Definition("chat_sent", "social", "core") },
-    { "container_emptied", new Definition("container_emptied", "inventory", "core") },
-    { "damage_dealt", new Definition("damage_dealt", "combat", "extended") },
-    { "global_key_removed", new Definition("global_key_removed", "world", "core") },
-    { "global_key_set", new Definition("global_key_set", "world", "core") },
-    { "item_consumed", new Definition("item_consumed", "inventory", "core") },
-    { "item_crafted", new Definition("item_crafted", "crafting", "core") },
-    { "item_dropped", new Definition("item_dropped", "inventory", "core") },
-    { "item_equipped", new Definition("item_equipped", "inventory", "core") },
-    { "item_picked_up", new Definition("item_picked_up", "inventory", "core") },
-    { "item_unequipped", new Definition("item_unequipped", "inventory", "core") },
-    { "kill", new Definition("kill", "combat", "core") },
-    { "max_health_changed", new Definition("max_health_changed", "progression", "extended") },
-    { "piece_damaged", new Definition("piece_damaged", "building", "extended") },
-    { "piece_destroyed", new Definition("piece_destroyed", "building", "core") },
-    { "piece_placed", new Definition("piece_placed", "building", "core") },
-    { "piece_removed", new Definition("piece_removed", "building", "core") },
-    { "piece_repaired", new Definition("piece_repaired", "building", "core") },
-    { "player_died", new Definition("player_died", "progression", "core") },
-    { "player_teleported", new Definition("player_teleported", "world", "core") },
-    { "resource_damaged", new Definition("resource_damaged", "harvest", "extended") },
-    { "resource_picked", new Definition("resource_picked", "harvest", "core") },
-    { "sign_written", new Definition("sign_written", "social", "core") },
-    { "skill_raised", new Definition("skill_raised", "progression", "core") },
-    { "skills_lowered", new Definition("skills_lowered", "progression", "core") },
-    { "stamina_gained", new Definition("stamina_gained", "progression", "extended") },
-    { "stamina_spent", new Definition("stamina_spent", "progression", "extended") },
-    { "station_fuel_added", new Definition("station_fuel_added", "crafting", "core") },
-    { "station_input_added", new Definition("station_input_added", "crafting", "core") },
-    { "station_output_collected", new Definition("station_output_collected", "crafting", "core") },
-    { "station_output_produced", new Definition("station_output_produced", "crafting", "core") },
+    { "attack_blocked", new Definition("attack_blocked", "combat", "core", "creature", "the attacker name seen by the matcher", "$enemy_greyling", true, true, new FieldDefinition[0]) },
+    { "character_healed", new Definition("character_healed", "combat", "core", "character", "the healed character; the current safe route emits the local player as you", "you", false, false, new[] { new FieldDefinition("amount", "health restored by this action", "25", false) }) },
+    { "character_staggered", new Definition("character_staggered", "combat", "core", "creature", "the staggered creature name seen by the matcher", "$enemy_greyling", true, true, new FieldDefinition[0]) },
+    { "chat_sent", new Definition("chat_sent", "social", "core", "chat-mode", "the Valheim chat mode, not the redacted message text", "Normal", false, false, new FieldDefinition[0]) },
+    { "container_emptied", new Definition("container_emptied", "inventory", "core", "prefab", "the emptied container prefab", "piece_chest_wood", false, false, new FieldDefinition[0]) },
+    { "damage_dealt", new Definition("damage_dealt", "combat", "extended", "creature", "the damaged creature name seen by the matcher", "$enemy_greyling", true, true, new FieldDefinition[0]) },
+    { "global_key_removed", new Definition("global_key_removed", "world", "core", "global-key", "the exact Valheim world flag removed", "defeated_eikthyr", false, false, new FieldDefinition[0]) },
+    { "global_key_set", new Definition("global_key_set", "world", "core", "global-key", "the exact Valheim world flag set", "defeated_eikthyr", false, false, new FieldDefinition[0]) },
+    { "item_consumed", new Definition("item_consumed", "inventory", "core", "item-prefab", "the consumed item's stable prefab name", "CookedMeat", false, false, new FieldDefinition[0]) },
+    { "item_crafted", new Definition("item_crafted", "crafting", "core", "station", "the current producer's crafting subject; it does not yet expose the crafted item", "crafting bench", false, false, new FieldDefinition[0]) },
+    { "item_dropped", new Definition("item_dropped", "inventory", "core", "item-prefab", "the dropped item's stable prefab name", "Wood", false, false, new FieldDefinition[0]) },
+    { "item_equipped", new Definition("item_equipped", "inventory", "core", "item-prefab", "the equipped item's stable prefab name", "AxeBronze", false, false, new FieldDefinition[0]) },
+    { "item_picked_up", new Definition("item_picked_up", "inventory", "core", "item-prefab", "the picked-up object's stable prefab name", "Wood", false, false, new FieldDefinition[0]) },
+    { "item_unequipped", new Definition("item_unequipped", "inventory", "core", "item-prefab", "the unequipped item's stable prefab name", "AxeBronze", false, false, new FieldDefinition[0]) },
+    { "kill", new Definition("kill", "combat", "core", "creature", "the killed creature name seen by the matcher", "$enemy_greyling", true, true, new FieldDefinition[0]) },
+    { "max_health_changed", new Definition("max_health_changed", "progression", "extended", "attribute", "the changed player attribute", "health", false, false, new[] { new FieldDefinition("subject", "the changed attribute", "health", true), new FieldDefinition("amount", "the resulting maximum health", "100", false) }) },
+    { "piece_damaged", new Definition("piece_damaged", "building", "extended", "piece-prefab", "the damaged structure prefab", "wood_wall", true, true, new FieldDefinition[0]) },
+    { "piece_destroyed", new Definition("piece_destroyed", "building", "core", "piece-prefab", "the destroyed structure prefab", "wood_wall", false, false, new FieldDefinition[0]) },
+    { "piece_placed", new Definition("piece_placed", "building", "core", "piece-prefab", "the placed structure prefab", "wood_wall", false, false, new FieldDefinition[0]) },
+    { "piece_removed", new Definition("piece_removed", "building", "core", "piece", "the removed subject; the attributed player route currently emits the generic value piece", "piece", false, false, new FieldDefinition[0]) },
+    { "piece_repaired", new Definition("piece_repaired", "building", "core", "piece-prefab", "the repaired structure prefab", "wood_wall", false, false, new FieldDefinition[0]) },
+    { "player_died", new Definition("player_died", "progression", "core", "player", "the local player", "you", false, false, new FieldDefinition[0]) },
+    { "player_teleported", new Definition("player_teleported", "world", "core", "travel", "the teleport mechanism; the current route emits portal", "portal", false, false, new FieldDefinition[0]) },
+    { "resource_damaged", new Definition("resource_damaged", "harvest", "extended", "resource-prefab", "the damaged tree, log, rock, bush, or destructible prefab", "Beech1", true, true, new FieldDefinition[0]) },
+    { "resource_picked", new Definition("resource_picked", "harvest", "core", "pickable-prefab", "the picked resource prefab", "RaspberryBush", false, false, new FieldDefinition[0]) },
+    { "sign_written", new Definition("sign_written", "social", "core", "sign-prefab", "the edited sign prefab; message text is deliberately redacted and is not a filter", "sign", false, false, new FieldDefinition[0]) },
+    { "skill_raised", new Definition("skill_raised", "progression", "core", "skill", "the exact Valheim skill name", "Axes", false, false, new[] { new FieldDefinition("subject", "the exact skill name", "Axes", true), new FieldDefinition("amount", "skill progress added by this action", "1", false) }) },
+    { "skills_lowered", new Definition("skills_lowered", "progression", "core", "skill-set", "the affected skill set", "all skills", false, false, new[] { new FieldDefinition("subject", "the affected skill set", "all", true), new FieldDefinition("amount", "the applied loss fraction", "0.05", false) }) },
+    { "stamina_gained", new Definition("stamina_gained", "progression", "extended", "attribute", "the changed player attribute", "stamina", false, false, new[] { new FieldDefinition("subject", "the changed attribute", "stamina", true), new FieldDefinition("amount", "stamina restored by this action", "10", false) }) },
+    { "stamina_spent", new Definition("stamina_spent", "progression", "extended", "attribute", "the changed player attribute", "stamina", false, false, new[] { new FieldDefinition("subject", "the changed attribute", "stamina", true), new FieldDefinition("amount", "stamina spent by this action", "10", false) }) },
+    { "station_fuel_added", new Definition("station_fuel_added", "crafting", "core", "item-prefab", "the fuel item or the stable value fuel", "Coal", false, false, new[] { new FieldDefinition("station", "the receiving station prefab", "smelter", true), new FieldDefinition("item", "the inserted fuel item", "Coal", true), new FieldDefinition("quantity", "items inserted by this action", "1", false) }) },
+    { "station_input_added", new Definition("station_input_added", "crafting", "core", "item-prefab", "the ore, food, or fermentable item inserted", "CopperOre", false, false, new[] { new FieldDefinition("station", "the receiving station prefab", "smelter", true), new FieldDefinition("item", "the inserted input item", "CopperOre", true), new FieldDefinition("quantity", "items inserted by this action", "1", false) }) },
+    { "station_output_collected", new Definition("station_output_collected", "crafting", "core", "station-output", "the collected station output; cooking currently emits cooking output", "cooking output", false, false, new[] { new FieldDefinition("station", "the station prefab", "piece_cookingstation", true), new FieldDefinition("item", "the collected output description", "cooking output", true), new FieldDefinition("quantity", "the collected slot or quantity", "1", false) }) },
+    { "station_output_produced", new Definition("station_output_produced", "crafting", "core", "item-prefab", "the output item produced by the station", "Copper", false, false, new[] { new FieldDefinition("station", "the producing station prefab", "smelter", true), new FieldDefinition("item", "the produced output item", "Copper", true), new FieldDefinition("quantity", "items produced by this action", "1", false) }) },
   };
 
   static readonly Dictionary<string, string[]> _triggerAliases =
