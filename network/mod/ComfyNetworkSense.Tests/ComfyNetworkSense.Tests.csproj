@@ -13,14 +13,6 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2" />
   </ItemGroup>
-  <ItemGroup>
-    <None Include="..\ComfyQuestRuntime\LiveTest\manifest.json" Link="LiveTest\manifest.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\ComfyQuestRuntime\LiveTest\experiences\omen-inscription.json" Link="LiveTest\experiences\omen-inscription.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\ComfyQuestContracts\ComfyQuestContracts.csproj" />
-  </ItemGroup>
-
   <!-- ValheimRoutedRpcAdmissions.cs and the 4 Zdo/vehicle relevance policies moved to
        Lumberjacks/src/Comfy.Transport.Contracts/ and now arrive as contentFiles (source) from the
        Comfy.Transport.Contracts package — no assembly reference, so the transport/policy tests below
@@ -52,31 +44,6 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\ValheimMotionCodec.cs" Link="ValheimMotionCodec.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\GameplayEventClassifier.cs" Link="GameplayEventClassifier.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\LivePlayerTargetPolicy.cs" Link="LivePlayerTargetPolicy.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\BlueprintFile.cs" Link="BlueprintFile.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabCaptureContract.cs" Link="LabCaptureContract.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabPanelLayout.cs" Link="LabPanelLayout.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabDemoReadiness.cs" Link="LabDemoReadiness.cs" />
-    <Compile Include="..\ComfyQuestContracts\ModGlue\TrackedQuest.cs" Link="TrackedQuest.cs" />
-    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestEvent.cs" Link="QuestEvent.cs" />
-    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestViewLoader.cs" Link="QuestViewLoader.cs" />
-    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestTriggerEvaluator.cs" Link="QuestTriggerEvaluator.cs" />
-    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestEventCatalog.g.cs" Link="QuestEventCatalog.g.cs" />
-    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestAuthoring.cs" Link="QuestAuthoring.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabQuestSet.cs" Link="LabQuestSet.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabQuestAdvisor.cs" Link="LabQuestAdvisor.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabQuestSeed.cs" Link="LabQuestSeed.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabCreatureNaming.cs" Link="LabCreatureNaming.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabActionDedupe.cs" Link="LabActionDedupe.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabBatchContract.cs" Link="LabBatchContract.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabScenarioContract.cs" Link="LabScenarioContract.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabRuntimeProfile.cs" Link="LabRuntimeProfile.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabTreeRecoveryContract.cs" Link="LabTreeRecoveryContract.cs" />
-    <!-- Generated, and Unity-free by construction (plain floats and strings) — linked so the
-         seed can be asserted against the gallery the seed is meant to be practised in. It names
-         its categories from LabEvents, which is Unity-free for the same reason. -->
-    <Compile Include="..\ComfyQuestLab\Core\LabEvents.cs" Link="LabEvents.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabEventArchive.cs" Link="LabEventArchive.cs" />
-    <Compile Include="..\ComfyQuestLab\Core\LabGalleryPlan.g.cs" Link="LabGalleryPlan.g.cs" />
   </ItemGroup>
 
   <ItemGroup>
