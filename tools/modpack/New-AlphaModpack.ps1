@@ -19,11 +19,15 @@ param(
     [string] $ReleaseId
 )
 
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
+
 $ErrorActionPreference = 'Stop'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 function Resolve-LocalPath([string] $Path) {
     if ([IO.Path]::IsPathRooted($Path)) { return [IO.Path]::GetFullPath($Path) }
-    return [IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
+    return [IO.Path]::GetFullPath((Join-Path $repoRoot $Path))
 }
 
 function Add-PayloadFile([string] $RelativePath, [string] $SourceOverride = '') {

@@ -1,0 +1,2 @@
+# Disabled negative fixture; tools/Test-BoundaryGuards.ps1 proves G1 rejects it.
+$source = 'C:\work\baseline\network\mod\ComfyNetworkSense'

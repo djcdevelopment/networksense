@@ -1,8 +1,9 @@
 # Network Research
 
-This directory is a research fork inside the repo.
+This directory holds the repository's networking research and implementation.
 
-It exists to hold the networking ideas, historical references, design notes, and performance principles that sit behind the game-facing work elsewhere in `comfy`.
+It holds the ideas, historical references, design notes, and performance
+principles behind the game-facing NetworkSense work.
 
 The tone here is deliberately more shareable than the rest of the repo. These files are meant to be passed to other developers, friends, or collaborators who want to understand the networking thesis without first reading the full Comfy history.
 

@@ -16,6 +16,9 @@ param(
     [string]$SshAlias = 'i5'
 )
 
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
+
 $ErrorActionPreference = 'Stop'
 $sshArgs = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', $SshAlias)
 

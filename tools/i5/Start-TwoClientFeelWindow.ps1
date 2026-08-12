@@ -47,10 +47,18 @@ param(
 
     [switch]$CollectPhaseSummaries,
 
+    [string]$PhaseAnalyzerPath = '',
+
+    [ValidatePattern('^[0-9a-fA-F]{64}$')]
+    [string]$PhaseAnalyzerSha256 = '',
+
     [switch]$DryRun,
 
     [string]$OutputJson
 )
+
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -65,11 +73,14 @@ if ($CaptureDurationSeconds -eq 0) {
 if ($RoleReversal -and $ApplyClient -eq 'none') {
     throw '-RoleReversal requires -ApplyClient omen or -ApplyClient i5.'
 }
+if ($CollectPhaseSummaries -and -not $DryRun -and
+    ([string]::IsNullOrWhiteSpace($PhaseAnalyzerPath) -or
+     [string]::IsNullOrWhiteSpace($PhaseAnalyzerSha256))) {
+    throw '-CollectPhaseSummaries requires a versioned -PhaseAnalyzerPath and -PhaseAnalyzerSha256.'
+}
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-# Test-Wave0Readiness.ps1 relocated to Lumberjacks/tools/companion/ (companion lane split); it
-# no longer lives beside this script, so it is resolved from repo root instead of $PSScriptRoot.
-$readinessScript = Join-Path $repoRoot 'Lumberjacks\tools\companion\Test-Wave0Readiness.ps1'
+$readinessScript = Join-Path $PSScriptRoot 'Test-AlphaReleaseAlignment.ps1'
 $captureScript = Join-Path $PSScriptRoot 'Start-TwoClientCapture.ps1'
 $motionScript = Join-Path $PSScriptRoot 'Start-TwoClientMotionTest.ps1'
 $rolesScript = Join-Path $PSScriptRoot 'Set-TwoClientApplyRoles.ps1'
@@ -285,7 +296,11 @@ foreach ($windowApplyClient in $sequence) {
         $captureArguments += @('-BundleDirectory', $bundlePath)
     }
     if ($CollectPhaseSummaries) {
-        $captureArguments += '-CollectPhaseSummaries'
+        $captureArguments += @(
+            '-CollectPhaseSummaries',
+            '-PhaseAnalyzerPath', $PhaseAnalyzerPath,
+            '-PhaseAnalyzerSha256', $PhaseAnalyzerSha256
+        )
     }
     $captureProcess = $null
     $captureRun = $null

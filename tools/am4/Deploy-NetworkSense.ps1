@@ -29,6 +29,9 @@ param(
     [string] $OutputPath = ''
 )
 
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
+
 $ErrorActionPreference = 'Stop'
 $sshOptions = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8')
 

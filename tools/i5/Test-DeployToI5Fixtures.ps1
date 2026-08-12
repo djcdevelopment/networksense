@@ -20,8 +20,11 @@ that the fixture really sits in the overflow regime.
 [CmdletBinding()]
 param(
     [string]$OutputDirectory = 'captures/i5-deploy-fixtures',
-    [string]$RemoteRoot = 'C:/deploy/baseline/deploy-fixtures'
+    [string]$RemoteRoot = 'C:/deploy/networksense/deploy-fixtures'
 )
+
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'

@@ -30,11 +30,14 @@ Maximum seconds to wait for the Docker Linux engine after each recovery action.
 #>
 [CmdletBinding()]
 param(
-    [string]$RemoteRoot = 'C:\deploy\baseline\i5-companion',
+    [string]$RemoteRoot = 'C:\deploy\lumberjacks-platform\i5-companion',
     [switch]$NoCompanionStart,
     [ValidateRange(30,600)]
     [int]$WaitSeconds = 240
 )
+
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
 
 $ErrorActionPreference = 'Stop'
 $sshOptions = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8')
@@ -283,7 +286,7 @@ $escaped = $remote.
     Replace('__NO_COMPANION_START__', $NoCompanionStart.IsPresent.ToString()).
     Replace('__WAIT_SECONDS__', $WaitSeconds.ToString([Globalization.CultureInfo]::InvariantCulture))
 
-$remoteScriptDir = 'C:/deploy/baseline'
+$remoteScriptDir = 'C:/deploy/networksense'
 $remoteScript = "$remoteScriptDir/Repair-I5DockerDesktop.remote.ps1"
 $mkRemoteScriptDir = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("New-Item -ItemType Directory -Force -Path '$remoteScriptDir' | Out-Null"))
 ssh @sshArgs "powershell.exe -NoProfile -EncodedCommand $mkRemoteScriptDir"

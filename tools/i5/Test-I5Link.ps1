@@ -79,7 +79,7 @@ Write-Step "ssh key auth via alias '$SshAlias'" $authOk $authDetail
 #    -ValheimPlugins deploys).
 if ($authOk) {
     $remote = @'
-$staging = Test-Path -LiteralPath 'C:\deploy\baseline'
+$staging = Test-Path -LiteralPath 'C:\deploy\networksense'
 $plugins = Test-Path -LiteralPath 'C:\Program Files (x86)\Steam\steamapps\common\Valheim\BepInEx\plugins'
 $free = [math]::Round((Get-PSDrive C).Free / 1GB, 1)
 Write-Output ("{0}|{1}|{2}" -f $staging, $plugins, $free)
@@ -88,7 +88,7 @@ Write-Output ("{0}|{1}|{2}" -f $staging, $plugins, $free)
     $facts = ssh -o BatchMode=yes -o ConnectTimeout=8 $SshAlias "powershell.exe -NoProfile -EncodedCommand $b64" 2>$null
     if ($LASTEXITCODE -eq 0 -and $facts) {
         $parts = ($facts | Select-Object -Last 1).Split('|')
-        Write-Host ("[INFO] staging root C:\deploy\baseline present: {0} (auto-created on first deploy)" -f $parts[0])
+        Write-Host ("[INFO] staging root C:\deploy\networksense present: {0} (auto-created on first deploy)" -f $parts[0])
         Write-Host ("[INFO] Valheim BepInEx plugins dir present: {0}" -f $parts[1])
         Write-Host ("[INFO] free disk on C:: {0} GB" -f $parts[2])
     } else {

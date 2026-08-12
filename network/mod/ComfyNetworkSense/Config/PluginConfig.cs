@@ -216,7 +216,7 @@ public static class PluginConfig {
         config.Bind(
             "HUD",
             "dashboardSetupUrl",
-            "https://github.com/djcdevelopment/baseline/tree/main/Lumberjacks/tools/omen-dashboard",
+            "https://github.com/djcdevelopment/lumberjacks-platform/tree/main/Lumberjacks/tools/omen-dashboard",
             "Repository setup instructions opened by the transport strip when the local dashboard is not installed.");
 
     ToggleHudShortcut =

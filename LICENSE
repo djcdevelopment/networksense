@@ -1,0 +1,158 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor: DJC Development
+
+Licensed Work: The NetworkSense repository and the software and software
+documentation distributed with it, excluding material identified in
+THIRD_PARTY_NOTICES.md or governed by a more specific license notice. Each
+version of the Licensed Work is licensed separately.
+
+Additional Use Grant:
+
+You may make production use of the Licensed Work for a Community Deployment
+only while all of the following conditions are satisfied:
+
+1. The operator is an Eligible Community Steward.
+
+2. The deployment serves no more than 100 Active Members.
+
+3. Aggregate Community Revenue for all Community Deployments under common
+   control does not exceed USD 25,000 during any rolling 12-month period.
+
+4. For the entire time the deployment is available, and for at least 12
+   months afterward, you make the Complete Community Source publicly
+   available without charge or access controls under this License. You must
+   prominently offer every user of an interactive deployment a working link
+   to that source.
+
+5. You clearly disclose prices and paid benefits before purchase, do not sell
+   or license player personal data, and comply with applicable law and the
+   applicable game and platform terms.
+
+6. You preserve all copyright, license, source-offer, attribution, and
+   unofficial-project notices included with the Licensed Work.
+
+An Eligible Community Steward may charge for access, subscriptions,
+sponsorship, advertising, items, services, or other benefits and may retain
+all Community Revenue, including profit, while every condition above remains
+satisfied. No royalty or separate commercial agreement is required for use
+within this Additional Use Grant.
+
+For this Additional Use Grant:
+
+- "Active Member" means a unique user who connected to or interacted with the
+  deployment during the preceding rolling 30-day period.
+
+- "Community Revenue" means all money and the fair market value of non-cash
+  consideration received in connection with any Community Deployment,
+  including access fees, subscriptions, donations, sponsorship, advertising,
+  sales of items or currency, paid support, hosting, consulting, and affiliate
+  revenue. Refunds, chargebacks, and sales or use taxes collected for a
+  government are excluded.
+
+- "Community Deployment" means a deployment operated primarily to sustain a
+  player community rather than to provide a product, platform, or service for
+  the benefit of a Large Organization.
+
+- "Complete Community Source" means the complete source code for the exact
+  version in production, including all modifications to the Licensed Work and
+  the preferred form for making those modifications, together with the build,
+  installation, configuration, and deployment material reasonably necessary
+  for another person to reproduce that version. It does not include
+  credentials, personal data, private keys, or third-party software that the
+  operator is not authorized to redistribute.
+
+- "Eligible Community Steward" means an individual, volunteer group, or small
+  organization that is not a Large Organization and is not controlled by or
+  operating primarily for the benefit of a Large Organization.
+
+- "Large Organization" means any publicly traded entity or an organization
+  that, together with entities it controls, is controlled by, or is under
+  common control with, had more than USD 1,000,000 in gross revenue during its
+  most recently completed fiscal year or averaged more than 10 full-time-
+  equivalent workers, including employees and individual contractors, during
+  that year.
+
+- "Control" means direct or indirect ownership of more than 50 percent of an
+  entity, the power to direct its management or policies, or practical
+  operation for the primary benefit of that entity. Deployments under common
+  Control are aggregated when applying the limits of this Additional Use
+  Grant.
+
+Change Date: 2030-07-24
+
+Change License: GNU Affero General Public License version 3 only
+(AGPL-3.0-only)
+
+Notice
+
+The Business Source License (this document, or the "License") is not an Open
+Source license. However, the Licensed Work will eventually be made available
+under an Open Source License, as stated in this License.
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited
+production use.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, whichever comes first, the Licensor hereby grants you rights under
+the terms of the Change License, and the rights granted in the paragraph above
+terminate.
+
+If your use of the Licensed Work does not comply with the requirements
+currently in effect as described in this License, you must purchase a
+commercial license from the Licensor, its affiliated entities, or authorized
+resellers, or you must refrain from using the Licensed Work.
+
+All copies of the original and modified Licensed Work, and derivative works of
+the Licensed Work, are subject to this License. This License applies
+separately for each version of the Licensed Work and the Change Date may vary
+for each version of the Licensed Work released by Licensor.
+
+You must conspicuously display this License on each original or modified copy
+of the Licensed Work. If you receive the Licensed Work in original or modified
+form from a third party, the terms and conditions set forth in this License
+apply to your use of that work.
+
+Any use of the Licensed Work in violation of this License will automatically
+terminate your rights under this License for the current and all other
+versions of the Licensed Work.
+
+This License does not grant you any right in any trademark or logo of Licensor
+or its affiliates (provided that you may use a trademark or logo of Licensor
+as expressly required by this License).
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED ON AN
+"AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS,
+EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND
+TITLE.
+
+MariaDB hereby grants you permission to use this License's text to license
+your works, and to refer to it using the trademark "Business Source License",
+as long as you comply with the Covenants of Licensor below.
+
+Covenants of Licensor
+
+In consideration of the right to use this License's text and the "Business
+Source License" name and trademark, Licensor covenants to MariaDB, and to all
+other recipients of the licensed work to be provided by Licensor:
+
+1. To specify as the Change License the GPL Version 2.0 or any later version,
+   or a license that is compatible with GPL Version 2.0 or a later version,
+   where "compatible" means that software provided under the Change License
+   can be included in a program with software provided under GPL Version 2.0
+   or a later version. Licensor may specify additional Change Licenses without
+   limitation.
+
+2. To either: (a) specify an additional grant of rights to use that does not
+   impose any additional restriction on the right granted in this License; or
+   (b) insert the text "None" to specify a Change Date.
+
+3. To not modify this License in any other way.

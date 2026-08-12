@@ -26,7 +26,9 @@ remain in each Companion and can be downloaded from that machine's dashboard.
 
 .PARAMETER CollectPhaseSummaries
 Collect both evidence bundles and run the bounded motion-phase analyzer against each machine's
-samples.jsonl. If BundleDirectory is omitted, a timestamped directory under captures is used.
+samples.jsonl. The analyzer is a versioned platform artifact supplied with
+-PhaseAnalyzerPath and verified by -PhaseAnalyzerSha256. If BundleDirectory is
+omitted, a timestamped directory under captures is used.
 
 .PARAMETER SummaryOnly
 Print only the compact operator summary. By default the command prints the summary followed by the
@@ -53,10 +55,18 @@ param(
 
     [switch]$CollectPhaseSummaries,
 
+    [string]$PhaseAnalyzerPath = '',
+
+    [ValidatePattern('^[0-9a-fA-F]{64}$')]
+    [string]$PhaseAnalyzerSha256 = '',
+
     [switch]$SummaryOnly,
 
     [string]$OutputJson
 )
+
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -66,7 +76,18 @@ $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
 $safeLabel = ($Label -replace '[^A-Za-z0-9._-]', '-').Trim('-')
 if ([string]::IsNullOrWhiteSpace($safeLabel)) { $safeLabel = 'two-client' }
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$phaseBundleScript = Join-Path $repoRoot 'fieldlab\scripts\Summarize-TwoClientMotionPhaseBundles.ps1'
+$phaseBundleScript = $null
+if ($CollectPhaseSummaries) {
+    if ([string]::IsNullOrWhiteSpace($PhaseAnalyzerPath) -or
+        [string]::IsNullOrWhiteSpace($PhaseAnalyzerSha256)) {
+        throw '-CollectPhaseSummaries requires a versioned -PhaseAnalyzerPath and -PhaseAnalyzerSha256.'
+    }
+    $phaseBundleScript = (Resolve-Path -LiteralPath $PhaseAnalyzerPath -ErrorAction Stop).Path
+    $phaseAnalyzerActualHash = (Get-FileHash -LiteralPath $phaseBundleScript -Algorithm SHA256).Hash
+    if ($phaseAnalyzerActualHash -ne $PhaseAnalyzerSha256) {
+        throw "phase analyzer SHA256 mismatch: expected=$PhaseAnalyzerSha256 actual=$phaseAnalyzerActualHash"
+    }
+}
 if ($CollectPhaseSummaries -and [string]::IsNullOrWhiteSpace($BundleDirectory)) {
     $BundleDirectory = Join-Path $repoRoot "captures\motion-phase\$stamp-$safeLabel"
 }
@@ -277,11 +298,11 @@ if ($BundleDirectory) {
     }
 
     if ($remote -and $remote.run_id) {
-        $remoteTemp = "C:\deploy\baseline\capture-bundles\i5-$($remote.run_id).zip"
+        $remoteTemp = "C:\deploy\networksense\capture-bundles\i5-$($remote.run_id).zip"
         $remoteFetch = @"
 `$ErrorActionPreference = 'Stop'
 `$ProgressPreference = 'SilentlyContinue'
-New-Item -ItemType Directory -Force -Path 'C:\deploy\baseline\capture-bundles' | Out-Null
+New-Item -ItemType Directory -Force -Path 'C:\deploy\networksense\capture-bundles' | Out-Null
 Invoke-WebRequest -TimeoutSec 60 -Uri 'http://127.0.0.1:8080/api/v0/companion/transport-capture/$($remote.run_id)/bundle.zip' -OutFile '$remoteTemp'
 Get-Item -LiteralPath '$remoteTemp' | Select-Object -ExpandProperty Length
 "@

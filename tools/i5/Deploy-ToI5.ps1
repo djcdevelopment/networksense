@@ -5,7 +5,7 @@ with end-to-end SHA256 verification.
 
 .DESCRIPTION
 Copies each -Path item (file or directory, recursively) into -Dest on the i5.
-Default destination is the staging root C:/deploy/baseline. After the copy,
+Default destination is the staging root C:/deploy/networksense. After the copy,
 every deployed file is re-hashed on BOTH ends and compared; any mismatch or
 missing file fails the run with exit 1. Nothing about this script prompts --
 it is safe for unattended agent use (BatchMode ssh, no password fallback).
@@ -20,7 +20,7 @@ recursively and land as <Dest>/<dirname>/...
 
 .PARAMETER Dest
 Remote destination directory (Windows path on the i5, forward or back slashes).
-Default: C:/deploy/baseline (the staging root -- auto-created).
+Default: C:/deploy/networksense (the staging root -- auto-created).
 
 .PARAMETER ValheimPlugins
 Shortcut: target the i5's live BepInEx plugins directory
@@ -38,14 +38,14 @@ as bin and obj; exact leaf-name match only.
 .\Deploy-ToI5.ps1 -Path .\ComfyNetworkSense.dll -ValheimPlugins
 
 .EXAMPLE
-.\Deploy-ToI5.ps1 -Path .\bundle\ -Dest C:/deploy/baseline/run-042
+.\Deploy-ToI5.ps1 -Path .\bundle\ -Dest C:/deploy/networksense/run-042
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string[]]$Path,
 
-    [string]$Dest = 'C:/deploy/baseline',
+    [string]$Dest = 'C:/deploy/networksense',
 
     [switch]$ValheimPlugins,
 
@@ -58,6 +58,9 @@ param(
 
     [string[]]$ExcludeDirectoryName = @()
 )
+
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
 
 $SshAlias = 'i5'
 $SshOpts  = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8')

@@ -13,11 +13,11 @@ blocked in a syscall will not - so the trigger firing or not firing is itself
 evidence, before any dump is even opened.
 
 .EXAMPLE
-  powershell -NoProfile -ExecutionPolicy Bypass -File C:\deploy\baseline\Install-I5ProcDump.ps1
+  powershell -NoProfile -ExecutionPolicy Bypass -File C:\deploy\networksense\Install-I5ProcDump.ps1
 #>
 [CmdletBinding()]
 param(
-    [string] $Root = 'C:\deploy\baseline\procdump',
+    [string] $Root = 'C:\deploy\networksense\procdump',
     [string] $Uri = 'https://download.sysinternals.com/files/Procdump.zip'
 )
 

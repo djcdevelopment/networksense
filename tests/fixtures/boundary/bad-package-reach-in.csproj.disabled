@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Disabled negative fixture; G5 must reject the former sibling source path. -->
+  <ItemGroup>
+    <Compile Include="..\..\..\..\Lumberjacks\src\Game.Contracts\Policy.cs" />
+  </ItemGroup>
+</Project>

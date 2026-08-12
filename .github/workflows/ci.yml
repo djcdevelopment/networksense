@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  boundary:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify repository identity and boundary guards
+        shell: powershell
+        run: tools\Test-BoundaryGuards.ps1
+
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Prove package-only clean-cache restore and exact test count
+        shell: powershell
+        run: |
+          if (Test-Path -LiteralPath Lumberjacks) { throw 'G5 failure: former platform source tree is present.' }
+          $env:NUGET_PACKAGES = Join-Path $env:RUNNER_TEMP 'networksense-nuget-cache'
+          dotnet test network\mod\ComfyNetworkSense.Tests\ComfyNetworkSense.Tests.csproj -c Release --logger "trx;LogFileName=network-tests.trx" --results-directory TestResults
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          [xml]$trx = Get-Content -Raw -LiteralPath TestResults\network-tests.trx
+          $counters = $trx.TestRun.ResultSummary.Counters
+          if ([int]$counters.total -ne 166 -or [int]$counters.passed -ne 166 -or [int]$counters.failed -ne 0) {
+            throw "expected 166/166 tests; got total=$($counters.total) passed=$($counters.passed) failed=$($counters.failed)"
+          }

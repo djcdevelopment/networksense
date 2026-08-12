@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -16,6 +17,8 @@ namespace SyntheticBaselineExtractor
     {
         static void Main(string[] args)
         {
+            EnsureRepoIdentity();
+
             string assemblyPath = args.Length > 0
                 ? args[0]
                 : @"C:\Program Files (x86)\Steam\steamapps\common\Valheim\valheim_Data\Managed\assembly_valheim.dll";
@@ -171,6 +174,58 @@ namespace SyntheticBaselineExtractor
             Console.WriteLine($"Found {output.Counts.Components} Components using ZNetView");
             Console.WriteLine($"Found {output.Counts.Unresolved} unresolved registrations (name not statically resolvable)");
             Console.WriteLine($"Saved to {outputPath}");
+        }
+
+        static void EnsureRepoIdentity()
+        {
+            const string expected = "djcdevelopment/networksense";
+            var starts = new[]
+            {
+                Directory.GetCurrentDirectory(),
+                AppContext.BaseDirectory,
+                GetToolDirectory()
+            };
+
+            foreach (var start in starts.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var current = new DirectoryInfo(Path.GetFullPath(start));
+                while (current != null)
+                {
+                    string gitMarker = Path.Combine(current.FullName, ".git");
+                    if (Directory.Exists(gitMarker) || File.Exists(gitMarker))
+                    {
+                        var processInfo = new ProcessStartInfo
+                        {
+                            FileName = "git",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            CreateNoWindow = true
+                        };
+                        processInfo.ArgumentList.Add("-C");
+                        processInfo.ArgumentList.Add(current.FullName);
+                        processInfo.ArgumentList.Add("remote");
+                        processInfo.ArgumentList.Add("get-url");
+                        processInfo.ArgumentList.Add("origin");
+
+                        using var process = Process.Start(processInfo)
+                            ?? throw new InvalidOperationException("REPO IDENTITY FAILURE: git did not start.");
+                        string origin = process.StandardOutput.ReadToEnd().Trim();
+                        process.WaitForExit();
+                        if (process.ExitCode != 0 ||
+                            origin.IndexOf(expected, StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            throw new InvalidOperationException(
+                                $"REPO IDENTITY FAILURE: origin is '{origin}', expected '*{expected}*'. Refusing to write.");
+                        }
+                        return;
+                    }
+                    current = current.Parent;
+                }
+            }
+
+            throw new InvalidOperationException(
+                "REPO IDENTITY FAILURE: no Git checkout could be resolved. Refusing to write.");
         }
 
         static SortedDictionary<string, RpcEntry> ToOrderedDict(Dictionary<string, RpcAccumulator> src)

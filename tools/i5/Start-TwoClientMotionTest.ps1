@@ -17,6 +17,9 @@ param(
     [string]$OutputJson = ''
 )
 
+. (Join-Path $PSScriptRoot '..\Assert-RepoIdentity.ps1') -DefineOnly
+Assert-RepoIdentity | Out-Null
+
 $ErrorActionPreference = 'Stop'
 $localUrl = 'http://127.0.0.1:8080/api/v0/companion/motion-test'
 $httpTimeoutSeconds = [Math]::Max(15, $DurationSeconds + 15)
