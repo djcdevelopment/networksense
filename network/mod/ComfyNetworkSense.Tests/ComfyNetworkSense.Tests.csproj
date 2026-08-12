@@ -21,6 +21,15 @@
     <ProjectReference Include="..\ComfyQuestContracts\ComfyQuestContracts.csproj" />
   </ItemGroup>
 
+  <!-- ValheimRoutedRpcAdmissions.cs and the 4 Zdo/vehicle relevance policies moved to
+       Lumberjacks/src/Comfy.Transport.Contracts/ and now arrive as contentFiles (source) from the
+       Comfy.Transport.Contracts package — no assembly reference, so the transport/policy tests below
+       keep exercising the exact compiled-in source rather than a separately-compiled DLL. -->
+  <ItemGroup>
+    <PackageReference Include="Comfy.Transport.Contracts" Version="0.1.0-local"
+                       IncludeAssets="contentFiles" ExcludeAssets="compile;runtime" />
+  </ItemGroup>
+
   <!-- LINKED, not ProjectReference, and that is the whole design. ComfyNetworkSense targets net48
        against Valheim's own assemblies, so referencing it would drag Unity into this project and put
        us back where we started: bounds nobody can drive without a game install. BoundedRawHttp.cs is
@@ -28,7 +37,6 @@
        with no Valheim, no BepInEx, no net48 targeting pack. If this ever needs a second linked file,
        that file must be Unity-free too - otherwise fix the design, not this csproj. -->
   <ItemGroup>
-    <Compile Include="..\..\..\Lumberjacks\src\Game.Contracts\Valheim\ValheimRoutedRpcAdmissions.cs" Link="ValheimRoutedRpcAdmissions.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Parsing\WireParsers.cs" Link="WireParsers.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\BoundedRawHttp.cs" Link="BoundedRawHttp.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ReliableAckBarrier.cs" Link="ReliableAckBarrier.cs" />
@@ -37,27 +45,23 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\ShipCutoverModePolicy.cs" Link="ShipCutoverModePolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ContainerTransactionPolicy.cs" Link="ContainerTransactionPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\CreatureAiProofPolicy.cs" Link="CreatureAiProofPolicy.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Services\VehicleSnapshotRelevanceSet.cs" Link="VehicleSnapshotRelevanceSet.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoJournalInterestPolicy.cs" Link="ZdoJournalInterestPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\SessionSendGuard.cs" Link="SessionSendGuard.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ResumeReattachPolicy.cs" Link="ResumeReattachPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\AlphaTransportSwitches.cs" Link="AlphaTransportSwitches.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\ValheimMotionCodec.cs" Link="ValheimMotionCodec.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoIntegrationContract.cs" Link="ZdoIntegrationContract.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoBandPolicy.cs" Link="ZdoBandPolicy.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Services\ZdoFanoutPolicy.cs" Link="ZdoFanoutPolicy.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\GameplayEventClassifier.cs" Link="GameplayEventClassifier.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\LivePlayerTargetPolicy.cs" Link="LivePlayerTargetPolicy.cs" />
     <Compile Include="..\ComfyQuestLab\Core\BlueprintFile.cs" Link="BlueprintFile.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabCaptureContract.cs" Link="LabCaptureContract.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabPanelLayout.cs" Link="LabPanelLayout.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabDemoReadiness.cs" Link="LabDemoReadiness.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Models\TrackedQuest.cs" Link="TrackedQuest.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Models\QuestEvent.cs" Link="QuestEvent.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Services\QuestViewLoader.cs" Link="QuestViewLoader.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Services\QuestTriggerEvaluator.cs" Link="QuestTriggerEvaluator.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Services\QuestEventCatalog.g.cs" Link="QuestEventCatalog.g.cs" />
-    <Compile Include="..\ComfyNetworkSense\Core\Services\QuestAuthoring.cs" Link="QuestAuthoring.cs" />
+    <Compile Include="..\ComfyQuestContracts\ModGlue\TrackedQuest.cs" Link="TrackedQuest.cs" />
+    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestEvent.cs" Link="QuestEvent.cs" />
+    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestViewLoader.cs" Link="QuestViewLoader.cs" />
+    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestTriggerEvaluator.cs" Link="QuestTriggerEvaluator.cs" />
+    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestEventCatalog.g.cs" Link="QuestEventCatalog.g.cs" />
+    <Compile Include="..\ComfyQuestContracts\ModGlue\QuestAuthoring.cs" Link="QuestAuthoring.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSet.cs" Link="LabQuestSet.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestAdvisor.cs" Link="LabQuestAdvisor.cs" />
     <Compile Include="..\ComfyQuestLab\Core\LabQuestSeed.cs" Link="LabQuestSeed.cs" />
