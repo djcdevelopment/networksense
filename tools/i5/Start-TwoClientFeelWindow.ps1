@@ -67,7 +67,9 @@ if ($RoleReversal -and $ApplyClient -eq 'none') {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$readinessScript = Join-Path $PSScriptRoot 'Test-Wave0Readiness.ps1'
+# Test-Wave0Readiness.ps1 relocated to Lumberjacks/tools/companion/ (companion lane split); it
+# no longer lives beside this script, so it is resolved from repo root instead of $PSScriptRoot.
+$readinessScript = Join-Path $repoRoot 'Lumberjacks\tools\companion\Test-Wave0Readiness.ps1'
 $captureScript = Join-Path $PSScriptRoot 'Start-TwoClientCapture.ps1'
 $motionScript = Join-Path $PSScriptRoot 'Start-TwoClientMotionTest.ps1'
 $rolesScript = Join-Path $PSScriptRoot 'Set-TwoClientApplyRoles.ps1'

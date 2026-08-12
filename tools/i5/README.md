@@ -5,6 +5,24 @@ so an agent working in this repo can ship file updates (mod DLLs, configs,
 test bundles) to the second Valheim test client without anyone at the keyboard
 on either end.
 
+## Companion lane split (2026-08-11)
+
+`Sync-I5Companion.ps1`, `Start-I5Companion.ps1`, and `Test-Wave0Readiness.ps1` moved to
+[`Lumberjacks/tools/companion/`](../../Lumberjacks/tools/companion/README.md) — they are the
+Lumberjacks Companion's i5 lane, not the mod deploy lane, and that is where the platform repo
+split lands them. Everything else in this directory (`Deploy-ToI5.ps1`, `Test-I5Link.ps1`,
+`Invoke-I5QuestLabBatch.ps1`, the two-client capture/motion/feel-window scripts, and the rest)
+stays here. `Invoke-I5QuestLabBatch.ps1` is scheduled to land in `comfy-quest` at extraction
+(it already parameterizes its `Deploy-ToI5.ps1` reference via `-DeployScriptPath` so a future
+cross-repo caller can point it at wherever that script ends up). Run the moved scripts from
+their new home:
+
+```powershell
+..\..\Lumberjacks\tools\companion\Start-I5Companion.ps1
+..\..\Lumberjacks\tools\companion\Sync-I5Companion.ps1
+..\..\Lumberjacks\tools\companion\Test-Wave0Readiness.ps1 -SummaryOnly
+```
+
 ## The lane
 
 - **Transport:** ssh, via the `i5` alias in `~/.ssh/config` on OMEN.
@@ -80,14 +98,14 @@ Host i5
 # Use the same fixed mailbox on local OMEN when it is the explicitly selected live lane
 .\Invoke-I5QuestLabBatch.ps1 run -Suite creator-events -Lane omen
 
-# Start/rebuild the i5 Companion with the Valheim directory mounted
-.\Start-I5Companion.ps1
+# Start/rebuild the i5 Companion with the Valheim directory mounted (moved to Lumberjacks/tools/companion/)
+..\..\Lumberjacks\tools\companion\Start-I5Companion.ps1
 
 # Sync the current Companion source/runtime inputs, then start/rebuild it
-.\Sync-I5Companion.ps1
+..\..\Lumberjacks\tools\companion\Sync-I5Companion.ps1
 
 # Keep the client-only i5 Companion lane on Explore while using OMEN's local-Lab Gateway
-.\Sync-I5Companion.ps1 -GatewayUrl http://100.124.12.37:4000
+..\..\Lumberjacks\tools\companion\Sync-I5Companion.ps1 -GatewayUrl http://100.124.12.37:4000
 
 # Recover Docker Desktop and recreate i5 Companion if Docker CLI/engine gets stuck
 .\Repair-I5DockerDesktop.ps1
@@ -108,7 +126,7 @@ Host i5
 .\Start-TwoClientCapture.ps1 -DurationSeconds 30 -IntervalSeconds 1 -Label sprint-stutter -SummaryOnly -OutputJson .\captures\sprint-stutter\result.json
 
 # Compact Wave 0 receipt plus the remaining real-client test list
-.\Test-Wave0Readiness.ps1 -SummaryOnly -OutputJson .\captures\wave0-readiness.json
+..\..\Lumberjacks\tools\companion\Test-Wave0Readiness.ps1 -SummaryOnly -OutputJson .\captures\wave0-readiness.json
 
 # Gateway motion relay seam, no clients required
 ..\wave0\Test-Wave0SyntheticMotion.ps1 -OutputJson .\captures\wave0-synthetic-motion.json
