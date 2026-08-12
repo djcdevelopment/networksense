@@ -1,7 +1,7 @@
 {
   "name": "ComfyNetworkSense",
-  "version_number": "0.5.42",
-  "website_url": "https://github.com/djcdevelopment/comfy",
+  "version_number": "0.5.80",
+  "website_url": "https://github.com/djcdevelopment/networksense",
   "author": "djcdevelopment",
   "description": "Telemetry and HUD scaffold for multiplayer network research in Valheim.",
   "dependencies": [ "denikson-BepInExPack_Valheim-5.4.2202" ]

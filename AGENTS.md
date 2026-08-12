@@ -31,14 +31,24 @@ and retry. Never bypass hooks or push protection.
 ## Local verification
 
 ```powershell
-dotnet build network/mod/ComfyNetworkSense/ComfyNetworkSense.csproj -c Release
-dotnet test network/mod/ComfyNetworkSense.Tests/ComfyNetworkSense.Tests.csproj -c Release
+dotnet build network/mod/ComfyNetworkSense/ComfyNetworkSense.csproj -c Release -p:ComfyDependencyProfile=interim
+dotnet test network/mod/ComfyNetworkSense.Tests/ComfyNetworkSense.Tests.csproj -c Release -p:ComfyDependencyProfile=interim
 powershell -NoProfile -File tools/Test-BoundaryGuards.ps1
 ```
 
 The mod build requires a local Valheim+BepInEx installation and must not set
 `ComfyCopyToPlugins`; build output is not deployed implicitly. The test suite
 must report exactly 166 passed tests.
+
+`public` is the publication-ready default dependency profile and carries exact
+`[0.1.0]` pins. The public packages do not exist yet, so use the explicitly
+selected `interim` profile above; it is the only profile allowed to read
+`packages-local`.
+
+The current release candidate is `mod-v0.5.80-split-proof`. Prepare and verify it locally with
+`network/tools/New-ModReleaseCut.ps1`; the runbook is
+`network/tools/README.md`. Do not tag, publish a GitHub release, or publish
+NuGet packages until the operator explicitly starts that publication step.
 
 ## Evidence standard
 

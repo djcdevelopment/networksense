@@ -11,6 +11,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 using Xunit;
 
@@ -49,11 +50,15 @@ public class BoundedRawHttpTests {
   // Delete the ResponseDeadlineMs check from the read loop and this test FAILS on the Assert.Throws,
   // which is exactly the regression it exists to catch.
   [Fact]
-  public void ResponseDeadline_FiresBeforeSocketTimeout() {
+  public async Task ResponseDeadline_FiresBeforeSocketTimeout() {
+    using ManualResetEventSlim responseStarted = new(false);
     using TestServer server = new((stream, ct) => {
       byte[] head = Encoding.UTF8.GetBytes("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
       stream.Write(head, 0, head.Length);
-      // One byte every 25ms - well under the 2000ms ReceiveTimeout, so that timeout is permanently
+      stream.WriteByte((byte) 'a');
+      stream.Flush();
+      responseStarted.Set();
+      // One byte every 25ms - well under the 10-second ReceiveTimeout, so that timeout is permanently
       // reset and can never fire. The trickle STOPS after TrickleLifetimeMs on purpose: an endless
       // one would make a deleted deadline HANG this test instead of failing it, and a test that
       // hangs on regression is worse than no test. Stopping lets the client complete normally, so a
@@ -66,16 +71,20 @@ public class BoundedRawHttpTests {
       }
     });
 
-    Stopwatch elapsed = Stopwatch.StartNew();
-    TimeoutException thrown = Assert.Throws<TimeoutException>(() =>
-        BoundedRawHttp.PostForBody(server.Url, "{}", 2000, 300, 64 * 1024));
-    elapsed.Stop();
+    // Run the synchronous client separately so the test can establish that the peer has begun its
+    // response before judging the outcome. Loaded shared runners may pause either thread for over a
+    // second; elapsed wall time therefore says nothing reliable about which bound fired.
+    Task<Exception> request = Task.Run(() => Record.Exception(() =>
+        BoundedRawHttp.PostForBody(server.Url, "{}", 10_000, 300, 64 * 1024)));
 
-    Assert.Contains("ms total", thrown.Message);
-    // Proves the DEADLINE ended it, not the 2000ms socket timeout: a pass here at ~2000ms+ would
-    // mean the deadline never fired and we were rescued by the socket, which the trickle defeats.
-    Assert.True(elapsed.ElapsedMilliseconds < 1500,
-        "expected the 300ms deadline to end the read, but it took " + elapsed.ElapsedMilliseconds + "ms");
+    Assert.True(responseStarted.Wait(TimeSpan.FromSeconds(10)),
+        "loopback peer never began the synchronized trickle response");
+    TimeoutException thrown = Assert.IsType<TimeoutException>(await request);
+
+    // This exact exception is emitted only by the total-response deadline. A socket ReceiveTimeout
+    // would surface as an IOException after the deliberately much larger 10-second timeout, while
+    // deleting the deadline lets the finite trickle close normally and produces no exception.
+    Assert.Equal("response exceeded 300 ms total", thrown.Message);
   }
 
   [Fact]

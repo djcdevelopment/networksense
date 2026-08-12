@@ -45,6 +45,42 @@ foreach ($package in 'Comfy.Quest.Contracts', 'Comfy.Transport.Contracts') {
     }
 }
 
+$publicPropsPath = Join-Path $repoRoot 'eng/dependencies.public.props'
+$interimPropsPath = Join-Path $repoRoot 'eng/dependencies.interim.props'
+$publicConfigPath = Join-Path $repoRoot 'nuget.config'
+$interimConfigPath = Join-Path $repoRoot 'nuget.interim.config'
+foreach ($required in @($publicPropsPath, $interimPropsPath, $publicConfigPath, $interimConfigPath)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+        $violations.Add("dependency profile input missing: $required")
+    }
+}
+
+if ($violations.Count -eq 0) {
+    [xml]$publicProps = [IO.File]::ReadAllText($publicPropsPath)
+    [xml]$interimProps = [IO.File]::ReadAllText($interimPropsPath)
+    foreach ($property in 'ComfyQuestContractsVersion', 'ComfyTransportContractsVersion') {
+        if ([string]$publicProps.Project.PropertyGroup.$property -ne '[0.1.0]') {
+            $violations.Add("public dependency pin is not exact [0.1.0]: $property")
+        }
+        if ([string]$interimProps.Project.PropertyGroup.$property -ne '0.1.0-local') {
+            $violations.Add("interim dependency pin is not 0.1.0-local: $property")
+        }
+    }
+
+    $publicConfig = [IO.File]::ReadAllText($publicConfigPath)
+    $interimConfig = [IO.File]::ReadAllText($interimConfigPath)
+    if ($publicConfig -match '(?i)packages-local') {
+        $violations.Add('public NuGet config includes the interim local feed')
+    }
+    if ($interimConfig -notmatch '(?i)packages-local') {
+        $violations.Add('interim NuGet config does not include packages-local')
+    }
+    if ($modProject -notmatch 'Version="\$\(ComfyQuestContractsVersion\)"' -or
+        $modProject -notmatch 'Version="\$\(ComfyTransportContractsVersion\)"') {
+        $violations.Add('mod PackageReferences do not flow through the declared dependency profiles')
+    }
+}
+
 if ($violations.Count -gt 0) {
     foreach ($violation in $violations) { Write-Error $violation }
     throw ("G5 package-only guard rejected {0} violation(s)." -f $violations.Count)

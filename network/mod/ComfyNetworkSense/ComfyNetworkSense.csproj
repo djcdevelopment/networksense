@@ -8,6 +8,11 @@
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <!-- Keep release bytes dependent on source and declared compile inputs, not
+         on whichever Git commit happened to precede the local release build. -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <EmbedUntrackedSources>false</EmbedUntrackedSources>
+    <ComfyDependencyProfile Condition="'$(ComfyDependencyProfile)' == ''">public</ComfyDependencyProfile>
     <!-- The quest contract now arrives via contentFiles from the NuGet global-packages cache
          (a per-machine path under the user profile, not a repo-relative one). Map it too, so the
          SHA-verified single-DLL lane stays deterministic across machines/profiles, not just across
@@ -18,6 +23,16 @@
     <ValheimDir Condition="'$(ValheimDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Valheim</ValheimDir>
     <PluginOutputPath Condition="'$(PluginOutputPath)' == ''">$(ValheimDir)\BepInEx\plugins</PluginOutputPath>
   </PropertyGroup>
+
+  <Import Project="..\..\..\eng\dependencies.public.props"
+          Condition="'$(ComfyDependencyProfile)' == 'public'" />
+  <Import Project="..\..\..\eng\dependencies.interim.props"
+          Condition="'$(ComfyDependencyProfile)' == 'interim'" />
+
+  <Target Name="ValidateComfyDependencyProfile" BeforeTargets="CollectPackageReferences">
+    <Error Condition="'$(ComfyDependencyProfile)' != 'public' And '$(ComfyDependencyProfile)' != 'interim'"
+           Text="ComfyDependencyProfile must be public or interim." />
+  </Target>
 
   <ItemGroup>
     <Reference Include="0Harmony">
@@ -82,7 +97,7 @@
        ships as the Comfy.Quest.Contracts NuGet package. contentFiles-only keeps this a single
        BepInEx DLL: the identical source compiles straight in, no separate assembly reference. -->
   <ItemGroup>
-    <PackageReference Include="Comfy.Quest.Contracts" Version="0.1.0-local"
+    <PackageReference Include="Comfy.Quest.Contracts" Version="$(ComfyQuestContractsVersion)"
                        IncludeAssets="contentFiles" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 
@@ -92,7 +107,7 @@
        the Comfy.Transport.Contracts NuGet package. contentFiles-only for the same single-DLL reason
        as Comfy.Quest.Contracts above. -->
   <ItemGroup>
-    <PackageReference Include="Comfy.Transport.Contracts" Version="0.1.0-local"
+    <PackageReference Include="Comfy.Transport.Contracts" Version="$(ComfyTransportContractsVersion)"
                        IncludeAssets="contentFiles" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 

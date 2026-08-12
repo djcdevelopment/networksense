@@ -26,7 +26,7 @@ jobs:
         run: |
           if (Test-Path -LiteralPath Lumberjacks) { throw 'G5 failure: former platform source tree is present.' }
           $env:NUGET_PACKAGES = Join-Path $env:RUNNER_TEMP 'networksense-nuget-cache'
-          dotnet test network\mod\ComfyNetworkSense.Tests\ComfyNetworkSense.Tests.csproj -c Release --logger "trx;LogFileName=network-tests.trx" --results-directory TestResults
+          dotnet test network\mod\ComfyNetworkSense.Tests\ComfyNetworkSense.Tests.csproj -c Release -p:ComfyDependencyProfile=interim --logger "trx;LogFileName=network-tests.trx" --results-directory TestResults
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           [xml]$trx = Get-Content -Raw -LiteralPath TestResults\network-tests.trx
           $counters = $trx.TestRun.ResultSummary.Counters

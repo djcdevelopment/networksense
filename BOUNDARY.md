@@ -33,8 +33,8 @@ build, package, and deploy that mod.
 
 | Artifact | Producer | Pin |
 | --- | --- | --- |
-| `Comfy.Quest.Contracts` | `comfy-quest` | `0.1.0-local` during extraction; exact public version after publication |
-| `Comfy.Transport.Contracts` | `lumberjacks-platform` | `0.1.0-local` during extraction; exact public version after publication |
+| `Comfy.Quest.Contracts` | `comfy-quest` | exact public `[0.1.0]`; explicitly selected interim `0.1.0-local` until publication |
+| `Comfy.Transport.Contracts` | `lumberjacks-platform` | exact public `[0.1.0]`; explicitly selected interim `0.1.0-local` until publication |
 | Companion/Gateway HTTP surfaces | `lumberjacks-platform` | Versioned API and identity response |
 | Dev MCP HTTP surface | `isolate` | Loopback endpoint; no source checkout dependency |
 | Motion-phase analyzer | `lumberjacks-platform` | Explicit artifact path plus required SHA-256 |
@@ -46,6 +46,10 @@ build, package, and deploy that mod.
   roots. Its disabled bad fixture is exercised by `tools/Test-BoundaryGuards.ps1`.
 - G2: `tools/Assert-RepoIdentity.ps1` verifies the Git origin before every
   state-changing host entrypoint.
-- G5: clean-checkout and empty-package-cache builds consume only tracked local
-  packages during the extraction phase; public exact pins replace them at the
-  package-publication commitment point.
+- G5: the publication profile has exact `[0.1.0]` pins and no local feed. Until
+  those public packages exist, clean-checkout and empty-cache builds explicitly
+  select the isolated interim profile and consume only tracked local packages.
+- The mod release cutter is identity-guarded, forces a copy-disabled Release
+  rebuild, and emits source-aware DLL, dependency, SDK, and Valheim+BepInEx
+  evidence. The release workflow verifies those assets without cloud-building
+  the licensed assembly graph.

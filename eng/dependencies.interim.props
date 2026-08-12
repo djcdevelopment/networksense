@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <ComfyQuestContractsVersion>0.1.0-local</ComfyQuestContractsVersion>
+    <ComfyTransportContractsVersion>0.1.0-local</ComfyTransportContractsVersion>
+    <RestoreConfigFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\nuget.interim.config'))</RestoreConfigFile>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,8 @@
+{
+  "schema": "comfy-mod-release-tamper-fixture/v1",
+  "description": "A post-build DLL byte invalidates both the declared asset hash and checksum.",
+  "asset": "ComfyNetworkSense.dll",
+  "mutation": "append-byte",
+  "byte": 90,
+  "expected_failure": "ComfyNetworkSense.dll SHA-256 mismatch"
+}

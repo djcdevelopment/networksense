@@ -1,0 +1,65 @@
+name: verify-mod-release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing mod-v* release tag to verify
+        required: true
+        default: mod-v0.5.80-split-proof
+
+permissions:
+  contents: read
+
+jobs:
+  verify-assets:
+    runs-on: windows-latest
+    steps:
+      - name: Resolve release tag
+        id: release
+        shell: powershell
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'release') {
+            '${{ github.event.release.tag_name }}'
+          } else {
+            '${{ inputs.tag }}'
+          }
+          if ($tag -notmatch '^mod-v\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+            throw "invalid NetworkSense release tag: $tag"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Download published release assets
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path artifacts\published-release | Out-Null
+          gh release download '${{ steps.release.outputs.tag }}' `
+            --repo '${{ github.repository }}' `
+            --dir artifacts\published-release `
+            --pattern ComfyNetworkSense.dll `
+            --pattern release-manifest.json `
+            --pattern boundary-receipt.json `
+            --pattern SHA256SUMS
+
+      - name: Verify published assets without licensed game assemblies
+        shell: powershell
+        run: |
+          network\tools\Test-ModReleaseBundle.ps1 `
+            -ArtifactDirectory artifacts\published-release `
+            -ExpectedTag '${{ steps.release.outputs.tag }}' `
+            -ExpectedDependencyProfile public `
+            -SkipExternalBuildInputVerification
+          # This job intentionally never builds ComfyNetworkSense.csproj. Valheim and
+          # BepInEx compile inputs are verified against the signed boundary receipt shape.

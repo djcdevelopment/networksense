@@ -15,7 +15,10 @@ $entrypoints = @(
     'tools/i5/Start-TwoClientMotionTest.ps1',
     'tools/i5/Test-AlphaReleaseAlignment.ps1',
     'tools/i5/Test-DeployToI5Fixtures.ps1',
-    'tools/modpack/New-AlphaModpack.ps1'
+    'tools/modpack/New-AlphaModpack.ps1',
+    'network/tools/New-ModReleaseCut.ps1',
+    'network/tools/Test-ModReleaseBundle.ps1',
+    'network/tools/Test-ModReleaseTamperFixtures.ps1'
 )
 
 $failures = New-Object Collections.Generic.List[string]

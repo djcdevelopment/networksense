@@ -6,7 +6,18 @@
     <Nullable>disable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <ComfyDependencyProfile Condition="'$(ComfyDependencyProfile)' == ''">public</ComfyDependencyProfile>
   </PropertyGroup>
+
+  <Import Project="..\..\..\eng\dependencies.public.props"
+          Condition="'$(ComfyDependencyProfile)' == 'public'" />
+  <Import Project="..\..\..\eng\dependencies.interim.props"
+          Condition="'$(ComfyDependencyProfile)' == 'interim'" />
+
+  <Target Name="ValidateComfyDependencyProfile" BeforeTargets="CollectPackageReferences">
+    <Error Condition="'$(ComfyDependencyProfile)' != 'public' And '$(ComfyDependencyProfile)' != 'interim'"
+           Text="ComfyDependencyProfile must be public or interim." />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
@@ -18,7 +29,7 @@
        Comfy.Transport.Contracts package — no assembly reference, so the transport/policy tests below
        keep exercising the exact compiled-in source rather than a separately-compiled DLL. -->
   <ItemGroup>
-    <PackageReference Include="Comfy.Transport.Contracts" Version="0.1.0-local"
+    <PackageReference Include="Comfy.Transport.Contracts" Version="$(ComfyTransportContractsVersion)"
                        IncludeAssets="contentFiles" ExcludeAssets="compile;runtime" />
   </ItemGroup>
 

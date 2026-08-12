@@ -11,7 +11,7 @@ The project targets `net48` and references the operator's local Valheim and
 BepInEx assemblies. From the repository root:
 
 ```powershell
-dotnet build network/mod/ComfyNetworkSense/ComfyNetworkSense.csproj -c Release
+dotnet build network/mod/ComfyNetworkSense/ComfyNetworkSense.csproj -c Release -p:ComfyDependencyProfile=interim
 ```
 
 If Valheim is elsewhere, pass `-p:ValheimDir="D:\path\to\Valheim"`. Normal
@@ -33,8 +33,9 @@ The required result is exactly 166 passed tests.
 Quest glue and transport admission/policy source arrive through
 `Comfy.Quest.Contracts` and `Comfy.Transport.Contracts`. They are compiled into
 the single mod DLL through NuGet `contentFiles`; no sibling repository source is
-linked. The extraction phase uses the tracked `packages-local` feed, which is
-replaced by exact public `0.1.0` pins after package publication.
+linked. The publication profile carries exact `[0.1.0]` pins and uses only
+NuGet.org. Until those packages are public, builds explicitly select the
+`interim` profile shown above, which retains `0.1.0-local` in `packages-local`.
 
 ## Runtime integrations
 
