@@ -27,15 +27,6 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 
-if ($Mode -eq 'Verify') {
-    & (Join-Path $PSScriptRoot 'Test-ModReleaseBundle.ps1') `
-        -ArtifactDirectory $OutputDirectory `
-        -ExpectedTag $ReleaseTag `
-        -ExpectedDependencyProfile $DependencyProfile `
-        -ValheimDirectory $ValheimDirectory
-    return
-}
-
 $tagVersion = Get-ReleaseTagVersion -ReleaseTag $ReleaseTag
 $identity = Get-ModSourceIdentity -RepositoryRoot $repoRoot
 if ($identity.plugin_version -ne $ExpectedPluginVersion) {
@@ -43,6 +34,15 @@ if ($identity.plugin_version -ne $ExpectedPluginVersion) {
 }
 if ($tagVersion -ne $identity.plugin_version) {
     throw "release tag version $tagVersion does not match source PluginVersion $($identity.plugin_version)"
+}
+
+if ($Mode -eq 'Verify') {
+    & (Join-Path $PSScriptRoot 'Test-ModReleaseBundle.ps1') `
+        -ArtifactDirectory $OutputDirectory `
+        -ExpectedTag $ReleaseTag `
+        -ExpectedDependencyProfile $DependencyProfile `
+        -ValheimDirectory $ValheimDirectory
+    return
 }
 
 $expectedWebsite = 'https://github.com/djcdevelopment/networksense'
