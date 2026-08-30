@@ -2,6 +2,7 @@ namespace ComfyNetworkSense;
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading.Tasks;
 using Lumberjacks.Contracts.Valheim;
 using UnityEngine;
@@ -290,12 +291,24 @@ public sealed class GameplayEventProducer : IDisposable {
       payload["guild"] = questGuild;
       payload["category"] = questCategory;
       payload["bot_command"] = questCommand;
+      QuestReleaseLineage lineage = QuestReleaseLineageLoader.Current;
+      if (lineage != null) {
+        payload["release_id"] = lineage.ReleaseId;
+        payload["campaign_id"] = lineage.CampaignId;
+        payload["campaign_revision"] = lineage.CampaignRevision;
+        payload["composition_hash"] = lineage.CompositionHash;
+        payload["pack_content_hash"] = lineage.PackContentHash;
+        payload["venue_id"] = lineage.VenueId;
+        payload["venue_revision"] = lineage.VenueRevision;
+        payload["venue_sha256"] = lineage.VenueSha256;
+        payload["experience_id"] = lineage.ExperienceIdFor(questId);
+      }
     }
 
     Dictionary<string, object> body = new() {
         ["event_type"] = eventType,
         ["occurred_at_utc"] = DateTime.UtcNow.ToString("o"),
-        ["world_id"] = "valheim-era16",
+        ["world_id"] = CurrentWorldId(),
         ["region_id"] = null,
         ["actor_id"] = playerId == 0L ? null : playerId.ToString(),
         ["detail"] = detail,
@@ -310,6 +323,13 @@ public sealed class GameplayEventProducer : IDisposable {
     }
 
     _ = Task.Run(() => Post(url + "/valheim/events", body));
+  }
+
+  static string CurrentWorldId() {
+    try {
+      long uid = ZNet.instance?.GetWorldUID() ?? 0L;
+      return uid == 0L ? "unknown" : uid.ToString(CultureInfo.InvariantCulture);
+    } catch { return "unknown"; }
   }
 
   void Post(string url, Dictionary<string, object> body) {

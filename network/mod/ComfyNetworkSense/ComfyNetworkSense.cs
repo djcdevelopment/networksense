@@ -187,10 +187,19 @@ public sealed class ComfyNetworkSense : BaseUnityPlugin {
 
   void LoadQuestView() {
     string path = QuestViewPath;
+    bool lineageLoaded = QuestReleaseLineageLoader.Load(path);
+    if (!lineageLoaded) {
+      LogWarning("Quest release lineage failed to load (" + QuestReleaseLineageLoader.LastError
+          + "); quest matching remains available but completion rows will carry no release lineage. File: " + path);
+    }
     if (QuestViewLoader.Load(path)) {
       if (QuestViewLoader.Quests.Count > 0) {
         LogInfo("Quest view loaded: " + QuestViewLoader.Quests.Count + " tracked quest(s)"
             + (string.IsNullOrEmpty(QuestViewLoader.PlayerName) ? "" : " for " + QuestViewLoader.PlayerName)
+            + (QuestReleaseLineageLoader.Current == null ? "" : " · release "
+                + QuestReleaseLineageLoader.Current.ReleaseId + " · campaign "
+                + QuestReleaseLineageLoader.Current.CampaignId + " · content "
+                + QuestReleaseLineageLoader.Current.PackContentHash.Substring(0, 12))
             + " from " + path);
       }
     } else {

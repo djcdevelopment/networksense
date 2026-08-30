@@ -1,4 +1,5 @@
 using ComfyNetworkSense;
+using System;
 using Xunit;
 
 namespace ComfyNetworkSense.Tests;
@@ -69,5 +70,38 @@ public class GameplayEventClassifierTests {
     Assert.Equal(GameplayEventKind.FirstHit, classifier.RegisterHit(7, 10.0));
     Assert.Equal(GameplayEventKind.None, classifier.RegisterHit(7, 10.5));  // more hits
     Assert.Equal(GameplayEventKind.KillingBlow, classifier.RegisterDeath(7, 11.0));
+
+    const string hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const string hashB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const string hashC = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    var lineage = QuestReleaseLineageLoader.Parse("""
+      {
+        "schema_version": 1,
+        "release_lineage": {
+          "schema": "creatoros-quest-view-lineage/v1",
+          "release_id": "creatoros-beta1",
+          "campaign_id": "slayers-signature-hunt",
+          "campaign_revision": 1,
+          "composition_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "pack_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "venue_id": "slayers-field-lodge",
+          "venue_revision": 1,
+          "venue_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "experience_ids": {
+            "air_drop": "slayers-air-drop",
+            "cold_shot": "slayers-cold-shot"
+          }
+        }
+      }
+      """);
+    Assert.Equal("creatoros-beta1", lineage.ReleaseId);
+    Assert.Equal(hashA, lineage.CompositionHash);
+    Assert.Equal(hashB, lineage.PackContentHash);
+    Assert.Equal(hashC, lineage.VenueSha256);
+    Assert.Equal("slayers-cold-shot", lineage.ExperienceIdFor("cold_shot"));
+    Assert.Null(lineage.ExperienceIdFor("unknown"));
+    Assert.Null(QuestReleaseLineageLoader.Parse("{\"schema_version\":1}"));
+    Assert.Throws<InvalidOperationException>(() => QuestReleaseLineageLoader.Parse(
+        "{\"release_lineage\":{\"schema\":\"creatoros-quest-view-lineage/v1\"}}"));
   }
 }

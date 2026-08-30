@@ -55,6 +55,7 @@
     <Compile Include="..\ComfyNetworkSense\Core\Services\ValheimMotionCodec.cs" Link="ValheimMotionCodec.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\GameplayEventClassifier.cs" Link="GameplayEventClassifier.cs" />
     <Compile Include="..\ComfyNetworkSense\Core\Services\LivePlayerTargetPolicy.cs" Link="LivePlayerTargetPolicy.cs" />
+    <Compile Include="..\ComfyNetworkSense\Core\Services\QuestReleaseLineage.cs" Link="QuestReleaseLineage.cs" />
   </ItemGroup>
 
   <ItemGroup>
